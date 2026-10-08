@@ -1,0 +1,15 @@
+# Postgres local para desarrollo. En Vercel se usa Supabase (DATABASE_URL de .env).
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: decles
+      POSTGRES_PASSWORD: decles
+      POSTGRES_DB: decles_stock
+    ports:
+      - "5433:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+volumes:
+  db-data:

@@ -1,0 +1,284 @@
+@import "tailwindcss";
+
+/*
+ * Klavdia — sistema monocromo (negro y blanco), tema oscuro por defecto.
+ *
+ * Los valores crudos viven en variables `--cl-*` por tema (`data-theme` en
+ * <html>) y el `@theme inline` de abajo los expone como utilidades de
+ * Tailwind. Los ramps neutral/accent están INVERTIDOS entre temas a
+ * propósito: el mismo nombre sirve en los dos (900 = fondo tenue / hover,
+ * 800 = bordes, 400 = texto secundario, 300/200 = texto sobre tintes).
+ *
+ * La única excepción al monocromo es la esfera del dictado (ver `.cl-orb`).
+ */
+
+:root,
+:root[data-theme="dark"],
+.cl-force-dark {
+  color-scheme: dark;
+  --cl-bg: #0a0a0a;
+  --cl-surface: #141414;
+  --cl-canvas: #000000;
+  --cl-header: #000000;
+  --cl-fg: #f2f2f2;
+  --cl-accent: #f2f2f2;
+  --cl-divider: rgba(242, 242, 242, 0.14);
+  --cl-n100: #f5f5f5;
+  --cl-n200: #e6e6e6;
+  --cl-n300: #cccccc;
+  --cl-n400: #a8a8a8;
+  --cl-n500: #8a8a8a;
+  --cl-n600: #6b6b6b;
+  --cl-n700: #4a4a4a;
+  --cl-n800: #2a2a2a;
+  --cl-n900: #1a1a1a;
+  --cl-a100: #f5f5f5;
+  --cl-a200: #ebebeb;
+  --cl-a300: #e0e0e0;
+  --cl-a400: #cfcfcf;
+  --cl-a500: #bdbdbd;
+  --cl-a600: #8a8a8a;
+  --cl-a700: #4a4a4a;
+  --cl-a800: #2e2e2e;
+  --cl-a900: #1c1c1c;
+  --cl-shadow-sm: 0 0 0 1px #2a2a2a;
+  --cl-shadow-md: 0 0 0 1px #2e2e2e, 0 8px 24px rgba(0, 0, 0, 0.6);
+  --cl-shadow-lg: 0 0 0 1px #3a3a3a, 0 16px 40px rgba(0, 0, 0, 0.7);
+  --cl-ring: rgba(242, 242, 242, 0.45);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --cl-bg: #fafafa;
+  --cl-surface: #ffffff;
+  --cl-canvas: #ececec;
+  --cl-header: #fafafa;
+  --cl-fg: #0a0a0a;
+  --cl-accent: #0a0a0a;
+  --cl-divider: rgba(10, 10, 10, 0.12);
+  --cl-n100: #0f0f0f;
+  --cl-n200: #1f1f1f;
+  --cl-n300: #333333;
+  --cl-n400: #5c5c5c;
+  --cl-n500: #737373;
+  --cl-n600: #8f8f8f;
+  --cl-n700: #bdbdbd;
+  --cl-n800: #e3e3e3;
+  --cl-n900: #f0f0f0;
+  --cl-a100: #0a0a0a;
+  --cl-a200: #141414;
+  --cl-a300: #1f1f1f;
+  --cl-a400: #333333;
+  --cl-a500: #444444;
+  --cl-a600: #737373;
+  --cl-a700: #bdbdbd;
+  --cl-a800: #e0e0e0;
+  --cl-a900: #f0f0f0;
+  --cl-shadow-sm: 0 0 0 1px #e3e3e3;
+  --cl-shadow-md: 0 0 0 1px #e3e3e3, 0 8px 24px rgba(0, 0, 0, 0.06);
+  --cl-shadow-lg: 0 0 0 1px #dcdcdc, 0 16px 40px rgba(0, 0, 0, 0.08);
+  --cl-ring: rgba(10, 10, 10, 0.35);
+}
+
+@theme inline {
+  --color-bg: var(--cl-bg);
+  --color-surface: var(--cl-surface);
+  --color-canvas-out: var(--cl-canvas);
+  --color-header: var(--cl-header);
+  --color-fg: var(--cl-fg);
+  --color-accent: var(--cl-accent);
+  --color-divider: var(--cl-divider);
+
+  --color-neutral-100: var(--cl-n100);
+  --color-neutral-200: var(--cl-n200);
+  --color-neutral-300: var(--cl-n300);
+  --color-neutral-400: var(--cl-n400);
+  --color-neutral-500: var(--cl-n500);
+  --color-neutral-600: var(--cl-n600);
+  --color-neutral-700: var(--cl-n700);
+  --color-neutral-800: var(--cl-n800);
+  --color-neutral-900: var(--cl-n900);
+
+  --color-accent-100: var(--cl-a100);
+  --color-accent-200: var(--cl-a200);
+  --color-accent-300: var(--cl-a300);
+  --color-accent-400: var(--cl-a400);
+  --color-accent-500: var(--cl-a500);
+  --color-accent-600: var(--cl-a600);
+  --color-accent-700: var(--cl-a700);
+  --color-accent-800: var(--cl-a800);
+  --color-accent-900: var(--cl-a900);
+
+  /* Alias de los tokens anteriores, para las pantallas de la vista Sistema. */
+  --color-ink: var(--cl-fg);
+  --color-ink-hover: var(--cl-n300);
+  --color-on-ink: var(--cl-bg);
+  --color-muted: var(--cl-n400);
+  --color-canvas: var(--cl-bg);
+  --color-hairline: var(--cl-n800);
+  --color-hairline-strong: var(--cl-n700);
+
+  --shadow-sm: var(--cl-shadow-sm);
+  --shadow-md: var(--cl-shadow-md);
+  --shadow-lg: var(--cl-shadow-lg);
+  --shadow-card: var(--cl-shadow-sm);
+}
+
+@theme {
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 14px;
+  --radius-pill: 9999px;
+
+  --font-sans: var(--font-inter), "Inter", system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, Menlo, monospace;
+  --font-display: var(--font-unbounded), "Unbounded", var(--font-sans);
+
+  --default-transition-duration: 200ms;
+  --default-transition-timing-function: ease;
+
+  --animate-cl-in: cl-in 0.32s ease both;
+  --animate-cl-spin: cl-spin 0.8s linear infinite;
+  --animate-cl-blink: cl-blink 1s steps(2) infinite;
+  --animate-cl-ring: cl-ring 1.4s ease-out infinite;
+  --animate-cl-shimmer: cl-shimmer 1.8s linear infinite;
+}
+
+@keyframes cl-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes cl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes cl-blink {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes cl-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+@keyframes cl-ring {
+  0% {
+    box-shadow: 0 0 0 0 var(--cl-ring);
+  }
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+@keyframes cl-shimmer {
+  0% {
+    background-position: -240px 0;
+  }
+  100% {
+    background-position: 240px 0;
+  }
+}
+@keyframes cl-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.035);
+  }
+}
+
+@layer base {
+  html {
+    background: var(--cl-bg);
+  }
+
+  body {
+    background: var(--cl-bg);
+    color: var(--cl-fg);
+    font-family: var(--font-sans);
+    font-weight: 400;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    transition:
+      background 0.3s,
+      color 0.3s;
+  }
+
+  ::selection {
+    background: var(--cl-a800);
+  }
+
+  input,
+  textarea,
+  button,
+  select {
+    font: inherit;
+    letter-spacing: inherit;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--cl-n600);
+  }
+
+  select option {
+    background: var(--cl-surface);
+    color: var(--cl-fg);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--cl-accent);
+    outline-offset: 2px;
+  }
+
+  /* Scrollbars discretos en los dos temas. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--cl-n800) transparent;
+  }
+}
+
+/* ── Esfera del dictado: la única pieza con color de la UI ──────────────── */
+.cl-orb {
+  --orb-bg: #07101f;
+  --orb-conic: conic-gradient(from 0deg, #cfe3ff, #1d4fa8, #7fb2ff, #061733, #4d8ef0, #cfe3ff);
+  --orb-shade: radial-gradient(circle at 70% 78%, rgba(2, 8, 20, 0.7), transparent 60%);
+  --orb-edge: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  --orb-glow-idle: 0 0 40px -16px rgba(80, 150, 255, 0.35), inset 0 0 24px rgba(160, 200, 255, 0.08);
+  --orb-glow-rec: 0 0 70px -10px rgba(80, 150, 255, 0.55), inset 0 0 24px rgba(160, 200, 255, 0.12);
+}
+:root[data-theme="light"] .cl-orb {
+  --orb-bg: #e8f0fb;
+  --orb-conic: conic-gradient(from 0deg, #ffffff, #6fa3f0, #dbe9ff, #1f5fc4, #a9c8f5, #ffffff);
+  --orb-shade: radial-gradient(circle at 70% 78%, rgba(20, 60, 140, 0.22), transparent 60%);
+  --orb-edge: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  --orb-glow-idle: 0 10px 30px -14px rgba(40, 100, 200, 0.3), inset 0 0 0 1px rgba(40, 90, 180, 0.1);
+  --orb-glow-rec: 0 18px 50px -14px rgba(40, 100, 200, 0.45), inset 0 0 0 1px rgba(40, 90, 180, 0.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

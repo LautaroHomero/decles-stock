@@ -1,0 +1,19 @@
+@AGENTS.md
+
+# Klavdia · Stock (Decles) — guía para trabajar en este repo
+
+Recorte de **Clavdia** para el stock del consultorio Decles. Se va a integrar a Clavdia:
+**no cambies nombres de tablas/columnas ni la forma de las funciones copiadas** de allá
+(`stock.ts`, `billing.ts`, `stock-repo.ts`, `billing-repo.ts`, `repo.ts`, auth). Si algo
+nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
+"Integración con Clavdia" del README.
+
+- Autorización siempre en el servidor (`src/lib/domain/*`), scoping por `organization_id`.
+- Vender (`recordSale`) no requiere permiso de stock; cargar/corregir inventario sí (solo admin).
+- Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada.
+- Fechas: `realNowIso()` (zona `America/Argentina/Buenos_Aires`), timestamps TEXT.
+
+```bash
+npm run db:up && npm run db:migrate && npm run db:seed && npm run dev
+npm run lint && npm run build
+```
