@@ -1,15 +1,39 @@
-# Postgres local para desarrollo. En Vercel se usa Supabase (DATABASE_URL de .env).
+# Desarrollo:  docker compose up -d db          (solo Postgres, la app con `npm run dev`)
+# Consultorio: docker compose up -d --build     (Postgres + la app en http://localhost:3000)
 services:
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: decles
       POSTGRES_PASSWORD: decles
       POSTGRES_DB: decles_stock
     ports:
-      - "54329:5432"
+      - "127.0.0.1:54329:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U decles -d decles_stock"]
+      interval: 3s
+      retries: 20
+
+  app:
+    build: .
+    restart: unless-stopped
+    profiles: ["app"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://decles:decles@db:5432/decles_stock
+      # Obligatorio: cambialo por un valor propio (openssl rand -base64 48) en un archivo .env junto a este.
+      AUTH_SECRET: ${AUTH_SECRET:?Falta AUTH_SECRET en .env (openssl rand -base64 48)}
+      CRON_SECRET: ${CRON_SECRET:-}
+      APP_TZ: America/Argentina/Buenos_Aires
+      # Se entra por http (esta PC o la red del consultorio). Detrás de HTTPS, poné "true".
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    ports:
+      - "3000:3000"
 
 volumes:
   db-data:

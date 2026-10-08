@@ -10,12 +10,12 @@ export async function GET(req: Request) {
   return respond(await salesList(actor, q.get("from") ?? undefined, q.get("to") ?? undefined, Number(q.get("limit")) || 200));
 }
 
-/** Registra una venta al precio vigente: `{ itemId, quantity?, expiresOn?, note? }`. Descuenta stock. */
+/** Registra una venta al precio vigente: `{ itemId, quantity, providerId, expiresOn?, note? }`. Descuenta stock. */
 export async function POST(req: Request) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
-  const b = await bodyOf<{ itemId: string; quantity: number; expiresOn: string; note: string }>(req);
-  const r = await recordSale(actor, { itemId: b.itemId ?? "", quantity: b.quantity, expiresOn: b.expiresOn, note: b.note });
+  const b = await bodyOf<{ itemId: string; quantity: number; providerId: string; expiresOn: string; note: string }>(req);
+  const r = await recordSale(actor, { itemId: b.itemId ?? "", quantity: b.quantity, providerId: b.providerId, expiresOn: b.expiresOn, note: b.note });
   if (r.ok) await refreshAfterChange(actor);
   return respond(r);
 }

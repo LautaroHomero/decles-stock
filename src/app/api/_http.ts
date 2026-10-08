@@ -6,7 +6,11 @@ export type Result<T> = ({ ok: true } & T) | { ok: false; error: string; status:
 
 export async function actorOr401(req: Request): Promise<Actor | Response> {
   const actor = await actorFromRequest(req);
-  return actor ?? Response.json({ ok: false, error: "No autenticado." }, { status: 401 });
+  if (!actor) return Response.json({ ok: false, error: "No autenticado." }, { status: 401 });
+  // Con contraseña temporal solo se puede cambiarla (api/auth/password no pasa por acá).
+  if (actor.mustChangePassword)
+    return Response.json({ ok: false, error: "Primero cambiá tu contraseña." }, { status: 403 });
+  return actor;
 }
 
 export function respond<T extends object>(r: Result<T>): Response {

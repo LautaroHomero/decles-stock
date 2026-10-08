@@ -8,12 +8,12 @@ config({ path: ".env.local", override: true, quiet: true });
 const url = process.env.DATABASE_URL ?? "";
 const { isLocalDb, getSql } = await import("../src/lib/db/connection");
 if (!isLocalDb(url)) {
-  console.error("db:seed es solo para la base local (DATABASE_URL en localhost). Para producción: npm run user:create.");
+  console.error("db:seed es solo para la base local (DATABASE_URL en localhost). En producción el admin se crea en la pantalla de primer arranque.");
   process.exit(1);
 }
 
 const repo = await import("../src/lib/db/repo");
-const { hashPin } = await import("../src/lib/auth/pin");
+const { hashPassword } = await import("../src/lib/auth/password");
 const { hydrateActor } = await import("../src/lib/auth/actor");
 const { createProduct } = await import("../src/lib/domain/products");
 const { addStock } = await import("../src/lib/domain/stock");
@@ -28,21 +28,22 @@ if (await repo.getOrganizationByName(ORG)) {
 }
 const org = await repo.createOrganization({ name: ORG, city: "Buenos Aires" });
 
-async function person(name: string, dni: string, pin: string, role: "recepcion" | "medico", admin = false) {
-  const { hash, salt } = hashPin(pin);
-  const u = await repo.createUser({ name, dni, email: `${dni}@decles.local`, role, pinHash: hash, pinSalt: salt });
+async function person(name: string, username: string, role: "recepcion" | "medico", opts: { admin?: boolean; commission?: number } = {}) {
+  const u = await repo.createUser({ name, username, role, password: hashPassword("decles123"), mustChangePassword: false });
   const providerId = role === "medico" ? (await repo.createProvider(org.id, name, "Dermatología")).id : undefined;
+  if (providerId && opts.commission) await repo.setProviderCommission(providerId, opts.commission);
   await repo.addMembership({ userId: u.id, organizationId: org.id, role, providerId });
-  if (admin) await repo.setOrgAdmin(org.id, u.id, true);
-  return u;
+  if (opts.admin) await repo.setOrgAdmin(org.id, u.id, true);
+  return { ...u, providerId };
 }
 
-const admin = await person("Admin Decles", "11111111", "1111", "recepcion", true);
-const secretaria = await person("Sofía Gómez", "22222222", "2222", "recepcion");
-await person("Dra. Laura Decles", "33333333", "3333", "medico");
+const admin = await person("Admin Decles", "admin", "recepcion", { admin: true });
+const secretaria = await person("Sofía Gómez", "sofia", "recepcion");
+const laura = await person("Dra. Laura Decles", "laura", "medico", { commission: 10 });
+await person("Dra. Paula Ríos", "paula", "medico", { commission: 8 });
 
-const adminActor = (await hydrateActor({ userId: admin.id, role: "recepcion", activeOrgId: org.id }))!;
-const secActor = (await hydrateActor({ userId: secretaria.id, role: "recepcion", activeOrgId: org.id }))!;
+const adminActor = (await hydrateActor({ userId: admin.id, role: "recepcion", activeOrgId: org.id, sv: 0 }))!;
+const secActor = (await hydrateActor({ userId: secretaria.id, role: "recepcion", activeOrgId: org.id, sv: 0 }))!;
 
 const day = (n: number) => {
   const d = new Date(`${todayYmd()}T12:00:00Z`);
@@ -73,17 +74,19 @@ await getSql()`
   VALUES ('stl_seedexp', ${org.id}, ${gel.stockItemId}, 'GL-0225', 2, 4, ${day(-5)}, ${day(-200) + "T10:00:00"}, ${admin.id})`;
 
 // Un par de ventas de hoy.
-must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1 }), "venta 1");
-must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, expiresOn: day(240) }), "venta 2");
+must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, providerId: laura.providerId }), "venta 1");
+must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, providerId: laura.providerId, expiresOn: day(240) }), "venta 2");
 
 const created = await refreshStockAlerts(org.id);
 
 console.log(`
-Listo: ${ORG} con 6 productos, 2 ventas y ${created} avisos para la médica.
+Listo: ${ORG} con 6 productos, 2 ventas y ${created} avisos para las médicas.
+Todas las contraseñas de la demo: decles123
 
-  Rol            DNI        PIN
-  Admin          11111111   1111
-  Secretaria     22222222   2222
-  Médica         33333333   3333
+  Usuario   Rol
+  admin     Admin (secretaría)
+  sofia     Secretaría
+  laura     Médica (10% comisión)
+  paula     Médica (8% comisión)
 `);
 process.exit(0);

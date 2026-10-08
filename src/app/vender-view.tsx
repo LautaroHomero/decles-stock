@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MagnifyingGlassIcon, MinusIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { parseQuickSale } from "@/lib/domain/quick-sale";
@@ -29,6 +29,10 @@ export function VenderView({ actor }: { actor: Actor }) {
   const [toast, showToast] = useToast();
 
   const sellable = useMemo(() => (data?.products ?? []).filter((p) => p.price !== null && p.priceItemId), [data]);
+  const isMedico = actor.role === "medico";
+  const [seller, setSeller] = useSeller(!isMedico);
+  // La médica que registra vende a su nombre; si registra otra persona, tiene que elegir la médica.
+  const sellerReady = isMedico || !!seller;
 
   function onSold(msg: string) {
     showToast(msg);
@@ -45,9 +49,11 @@ export function VenderView({ actor }: { actor: Actor }) {
         {greeting()}, {firstName(actor.name)}
       </h1>
 
-      <Hoja products={sellable} onSold={onSold} onError={showToast} />
+      {!isMedico && <SellerPicker seller={seller} setSeller={setSeller} />}
 
-      <ProductList products={sellable} loading={!data} onSold={onSold} onError={showToast} />
+      <Hoja products={sellable} providerId={seller} sellerReady={sellerReady} onSold={onSold} onError={showToast} />
+
+      <ProductList products={sellable} providerId={seller} sellerReady={sellerReady} loading={!data} onSold={onSold} onError={showToast} />
 
       {today.length > 0 && (
         <section className="flex flex-col gap-1">
@@ -76,10 +82,14 @@ type Sellable = CatalogProduct & { id: string };
 
 function Hoja({
   products,
+  providerId,
+  sellerReady,
   onSold,
   onError,
 }: {
   products: CatalogProduct[];
+  providerId: string | null;
+  sellerReady: boolean;
   onSold: (m: string) => void;
   onError: (m: string) => void;
 }) {
@@ -104,7 +114,7 @@ function Hoja({
     setBusy(true);
     const done: string[] = [];
     for (const l of lines) {
-      const r = await call("/api/sales", "POST", { itemId: l.match!.priceItemId, quantity: l.quantity });
+      const r = await call("/api/sales", "POST", { itemId: l.match!.priceItemId, quantity: l.quantity, providerId });
       if (!r.ok) {
         setBusy(false);
         onError(`${l.match!.name}: ${r.error ?? "no se pudo registrar"}${done.length ? ` (lo anterior sí quedó registrado)` : ""}`);
@@ -183,8 +193,8 @@ function Hoja({
       )}
 
       {lines.length > 0 && (
-        <button onClick={registrar} disabled={!ready || busy} className={BTN_BIG}>
-          {busy ? "Registrando…" : ready ? `Registrar · ${money(total)}` : "Elegí los productos marcados"}
+        <button onClick={registrar} disabled={!ready || !sellerReady || busy} className={BTN_BIG}>
+          {busy ? "Registrando…" : !sellerReady ? "Elegí quién vendió (arriba)" : ready ? `Registrar · ${money(total)}` : "Elegí los productos marcados"}
         </button>
       )}
     </section>
@@ -199,11 +209,15 @@ const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,
 
 function ProductList({
   products,
+  providerId,
+  sellerReady,
   loading,
   onSold,
   onError,
 }: {
   products: CatalogProduct[];
+  providerId: string | null;
+  sellerReady: boolean;
   loading: boolean;
   onSold: (m: string) => void;
   onError: (m: string) => void;
@@ -231,6 +245,8 @@ function ProductList({
         <ProductRow
           key={p.stockItemId}
           p={p}
+          providerId={providerId}
+          sellerReady={sellerReady}
           open={open === p.stockItemId}
           onToggle={() => setOpen(open === p.stockItemId ? null : p.stockItemId)}
           onSold={(m) => {
@@ -247,12 +263,16 @@ function ProductList({
 
 function ProductRow({
   p,
+  providerId,
+  sellerReady,
   open,
   onToggle,
   onSold,
   onError,
 }: {
   p: CatalogProduct;
+  providerId: string | null;
+  sellerReady: boolean;
   open: boolean;
   onToggle: () => void;
   onSold: (m: string) => void;
@@ -264,7 +284,7 @@ function ProductRow({
 
   async function sell() {
     setBusy(true);
-    const r = await call("/api/sales", "POST", { itemId: p.priceItemId, quantity: qty });
+    const r = await call("/api/sales", "POST", { itemId: p.priceItemId, quantity: qty, providerId });
     setBusy(false);
     if (!r.ok) return onError(r.error ?? "No se pudo registrar la venta.");
     setQty(1);
@@ -291,8 +311,8 @@ function ProductRow({
           <button onClick={() => setQty((n) => Math.min(p.available, n + 1))} aria-label="Uno más" className={STEP} disabled={qty >= p.available}>
             <PlusIcon size={18} />
           </button>
-          <button onClick={sell} disabled={busy} className={`${BTN_BIG} !h-11 flex-1`}>
-            {busy ? "…" : `Registrar · ${money((p.price ?? 0) * qty)}`}
+          <button onClick={sell} disabled={busy || !sellerReady} className={`${BTN_BIG} !h-11 flex-1`}>
+            {busy ? "…" : !sellerReady ? "Elegí quién vendió" : `Registrar · ${money((p.price ?? 0) * qty)}`}
           </button>
         </div>
       )}
@@ -302,3 +322,68 @@ function ProductRow({
 
 const STEP =
   "flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-neutral-800 text-neutral-200 transition-colors hover:border-accent-700 hover:bg-accent-900 disabled:opacity-30";
+
+// ---------------------------------------------------------------------------
+// Quién vendió (cobra comisión)
+// ---------------------------------------------------------------------------
+
+const SELLER_KEY = "decles_seller";
+
+/** Médica elegida; se recuerda en este navegador para no elegirla en cada venta. */
+function useSeller(enabled: boolean): [string | null, (id: string | null) => void] {
+  const [seller, setSellerState] = useState<string | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    try {
+      const saved = localStorage.getItem(SELLER_KEY);
+      if (saved) setTimeout(() => setSellerState(saved), 0);
+    } catch {
+      /* sin storage: se elige cada vez */
+    }
+  }, [enabled]);
+  function setSeller(id: string | null) {
+    setSellerState(id);
+    try {
+      if (id) localStorage.setItem(SELLER_KEY, id);
+      else localStorage.removeItem(SELLER_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+  return [seller, setSeller];
+}
+
+function SellerPicker({ seller, setSeller }: { seller: string | null; setSeller: (id: string | null) => void }) {
+  const [data] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string }[] }>("/api/sellers", 60_000);
+  const sellers = useMemo(() => data?.sellers ?? [], [data]);
+
+  // Si la elegida ya no está (baja) se limpia; si hay una sola médica, queda elegida sola.
+  useEffect(() => {
+    if (!data) return;
+    if (seller && !sellers.some((s) => s.providerId === seller)) setSeller(null);
+    else if (!seller && sellers.length === 1) setSeller(sellers[0].providerId);
+  }, [data, sellers, seller, setSeller]);
+
+  if (!data) return null;
+  if (!sellers.length) return <p className="text-[13px] text-neutral-400">No hay médicas activas: el admin las da de alta en Equipo.</p>;
+
+  return (
+    <section className="flex flex-col gap-2">
+      <span className="text-[13px] text-neutral-400">¿Quién vendió?</span>
+      <div className="flex flex-wrap gap-2">
+        {sellers.map((s) => (
+          <button
+            key={s.providerId}
+            onClick={() => setSeller(s.providerId)}
+            aria-pressed={seller === s.providerId}
+            className={`rounded-pill border px-4 py-2 text-[14px] transition-colors ${
+              seller === s.providerId ? "border-accent bg-accent text-bg" : "border-neutral-700 text-neutral-200 hover:border-accent-600"
+            }`}
+          >
+            {s.name}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}

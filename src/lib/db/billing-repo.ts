@@ -54,6 +54,9 @@ export interface Sale {
   source: BillingSource;
   createdAt: string;
   voidReason: string | null;
+  /** % y monto de comisión congelados al vender (0 si no hubo médica). */
+  commissionPct: number;
+  commissionAmount: number;
 }
 
 export interface BillingWho {
@@ -176,6 +179,8 @@ const toSale = (r: Row): Sale => ({
   source: r.source as BillingSource,
   createdAt: r.created_at as string,
   voidReason: (r.void_reason as string) ?? null,
+  commissionPct: Number(r.commission_pct ?? 0),
+  commissionAmount: Number(r.commission_amount ?? 0),
 });
 
 export async function insertSale(
@@ -186,16 +191,51 @@ export async function insertSale(
     providerId: string | null;
     patientId: string | null;
     note: string;
+    /** % de comisión de la médica que vendió (0 = sin comisión). */
+    commissionPct?: number;
   },
   who: BillingWho,
-): Promise<{ id: string; total: number }> {
+): Promise<{ id: string; total: number; commissionAmount: number }> {
   const id = uid("sal");
   const total = v.item.amount * v.quantity;
+  const pct = v.commissionPct ?? 0;
+  const commissionAmount = Math.round((total * pct) / 100);
   await getSql()`
-    INSERT INTO sales (id, organization_id, item_id, item_name, kind, quantity, unit_price, total, provider_id, patient_id, note, created_by, created_by_name, source, created_at)
+    INSERT INTO sales (id, organization_id, item_id, item_name, kind, quantity, unit_price, total, provider_id, patient_id, note,
+                       created_by, created_by_name, source, created_at, commission_pct, commission_amount)
     VALUES (${id}, ${orgId}, ${v.item.id}, ${v.item.name}, ${v.item.kind}, ${v.quantity}, ${v.item.amount}, ${total},
-            ${v.providerId}, ${v.patientId}, ${v.note}, ${who.id}, ${who.name}, ${who.source}, ${realNowIso()})`;
-  return { id, total };
+            ${v.providerId}, ${v.patientId}, ${v.note}, ${who.id}, ${who.name}, ${who.source}, ${realNowIso()}, ${pct}, ${commissionAmount})`;
+  return { id, total, commissionAmount };
+}
+
+export interface CommissionRow {
+  providerId: string | null;
+  providerName: string;
+  sales: number;
+  units: number;
+  total: number;
+  commission: number;
+}
+
+/** Ventas pagas del período agrupadas por médica (las anuladas no cuentan). */
+export async function commissionSummary(orgId: string, from: string, to: string): Promise<CommissionRow[]> {
+  const rows = (await getSql()`
+    SELECT s.provider_id, COALESCE(p.name, 'Sin médica') AS provider_name,
+           count(*)::int AS sales, sum(s.quantity)::int AS units,
+           sum(s.total)::bigint AS total, sum(s.commission_amount)::bigint AS commission
+    FROM sales s LEFT JOIN providers p ON p.id = s.provider_id
+    WHERE s.organization_id = ${orgId} AND s.status = 'paid'
+      AND substr(s.created_at, 1, 10) BETWEEN ${from} AND ${to}
+    GROUP BY s.provider_id, p.name
+    ORDER BY sum(s.total) DESC`) as unknown as Row[];
+  return rows.map((r) => ({
+    providerId: (r.provider_id as string) ?? null,
+    providerName: r.provider_name as string,
+    sales: Number(r.sales),
+    units: Number(r.units),
+    total: Number(r.total),
+    commission: Number(r.commission),
+  }));
 }
 
 export async function getSale(orgId: string, id: string): Promise<Sale | undefined> {

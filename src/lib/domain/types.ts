@@ -48,6 +48,8 @@ export interface Actor {
   patientId?: string;
   activeOrg?: StaffOrg;
   orgs: OrgRef[];
+  /** Entró con una contraseña temporal: hasta cambiarla no puede hacer nada más. */
+  mustChangePassword?: boolean;
 }
 
 export interface Provider {
@@ -58,6 +60,8 @@ export interface Provider {
   roomLabel: string;
   defaultFee: number;
   active: boolean;
+  /** % de comisión sobre las ventas de productos (Decles). */
+  commissionPct: number;
 }
 
 export interface Patient {

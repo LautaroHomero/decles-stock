@@ -36,7 +36,7 @@ function addDays(ymd: string, days: number): string {
 
 export async function refreshStockAlerts(orgId: string): Promise<number> {
   const [items, settings, members] = await Promise.all([listStockItems(orgId), getStockSettings(orgId), listOrgMembers(orgId)]);
-  const recipients = members.filter((m) => m.role === "medico").map((m) => m.userId);
+  const recipients = members.filter((m) => m.role === "medico" && m.active).map((m) => m.userId);
 
   const today = todayYmd();
   const limit = addDays(today, settings.expiryDays);

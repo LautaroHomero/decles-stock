@@ -12,6 +12,8 @@ export interface SessionClaims {
   patientId?: string;
   /** For staff: the organization chosen at login. */
   activeOrgId?: string;
+  /** users.session_version al loguearse: si cambia (baja, reset de contraseña), la sesión muere. */
+  sv?: number;
 }
 
 const DEV_FALLBACK_SECRET = "dev-only-insecure-secret-change-me";
@@ -63,6 +65,7 @@ export function verifySession(token: string | undefined | null): SessionClaims |
       role: parsed.role,
       patientId: parsed.patientId,
       activeOrgId: parsed.activeOrgId,
+      sv: parsed.sv,
     };
   } catch {
     return null;
@@ -75,8 +78,12 @@ export function claimsFromRequest(req: Request): SessionClaims | null {
   return verifySession(match?.[1] ? decodeURIComponent(match[1]) : null);
 }
 
-/** `Secure` only in production so local dev over plain http still works. */
-const SECURE = IS_PROD ? "; Secure" : "";
+/**
+ * `Secure` en producción con HTTPS (Vercel). Instalado en la PC del consultorio se entra
+ * por http (localhost o la IP de la red): ahí COOKIE_SECURE=false, si no el navegador
+ * descarta la cookie y nadie puede iniciar sesión.
+ */
+const SECURE = (process.env.COOKIE_SECURE ?? (IS_PROD ? "true" : "false")) === "true" ? "; Secure" : "";
 
 export function sessionSetCookie(token: string): string {
   return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${SECURE}; Max-Age=${MAX_AGE_SECONDS}`;

@@ -141,6 +141,9 @@ export interface SaleRow {
   createdByName: string;
   createdAt: string;
   voidReason: string | null;
+  providerName: string | null;
+  commissionPct: number;
+  commissionAmount: number;
 }
 
 export const unitsLabel = (n: number, unit: string) =>

@@ -10,8 +10,8 @@
     "db:up": "docker compose up -d db",
     "db:migrate": "tsx scripts/migrate.mts",
     "db:seed": "tsx scripts/seed.mts",
-    "user:create": "tsx scripts/create-user.mts",
-    "user:set-pin": "tsx scripts/set-pin.mts"
+    "user:reset-password": "tsx scripts/reset-password.mts",
+    "app:up": "docker compose --profile app up -d --build"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

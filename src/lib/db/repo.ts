@@ -73,7 +73,7 @@ export async function setOrgAdmin(orgId: string, userId: string, isAdmin: boolea
 }
 
 // ---------------------------------------------------------------------------
-// Users, memberships
+// Users, memberships, cuentas
 // ---------------------------------------------------------------------------
 
 const toUser = (r: Row): User => ({
@@ -86,8 +86,29 @@ const toUser = (r: Row): User => ({
   patientId: (r.patient_id as string) ?? undefined,
 });
 
-type UserWithPin = User & { pinHash: string; pinSalt: string };
-const withPin = (r: Row): UserWithPin => ({ ...toUser(r), pinHash: r.pin_hash as string, pinSalt: r.pin_salt as string });
+/** Lo que hace falta para autenticar (nunca sale del servidor). */
+export interface Account extends User {
+  username: string;
+  passwordHash: string;
+  passwordSalt: string;
+  mustChangePassword: boolean;
+  active: boolean;
+  sessionVersion: number;
+  failedLogins: number;
+  lockedUntil: string | null;
+}
+
+const toAccount = (r: Row): Account => ({
+  ...toUser(r),
+  username: (r.username as string) ?? "",
+  passwordHash: (r.password_hash as string) ?? "",
+  passwordSalt: (r.password_salt as string) ?? "",
+  mustChangePassword: Boolean(r.must_change_password),
+  active: Boolean(r.active),
+  sessionVersion: Number(r.session_version ?? 0),
+  failedLogins: Number(r.failed_logins ?? 0),
+  lockedUntil: (r.locked_until as string) ?? null,
+});
 
 export interface Membership {
   organizationId: string;
@@ -122,25 +143,36 @@ export async function membershipsForUser(userId: string): Promise<Membership[]> 
 export interface OrgMember {
   userId: string;
   name: string;
-  email: string;
+  username: string;
   role: StaffRole;
   isAdmin: boolean;
+  active: boolean;
+  mustChangePassword: boolean;
+  providerId: string | null;
+  commissionPct: number;
 }
 
+/** El equipo del consultorio (activos e inactivos), con admin y comisión. */
 export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
   const org = await getOrganization(orgId);
   const adminIds = new Set(org?.adminIds ?? []);
   const rows = (await getSql()`
-    SELECT u.id AS user_id, u.name, u.email, m.role
-    FROM memberships m JOIN users u ON u.id = m.user_id
+    SELECT u.id AS user_id, u.name, u.username, u.active, u.must_change_password, m.role, m.provider_id, p.commission_pct
+    FROM memberships m
+    JOIN users u ON u.id = m.user_id
+    LEFT JOIN providers p ON p.id = m.provider_id
     WHERE m.organization_id = ${orgId}
-    ORDER BY u.name`) as unknown as Row[];
+    ORDER BY u.active DESC, u.name`) as unknown as Row[];
   return rows.map((r) => ({
     userId: r.user_id as string,
     name: r.name as string,
-    email: (r.email as string) ?? "",
+    username: (r.username as string) ?? "",
     role: r.role as StaffRole,
     isAdmin: adminIds.has(r.user_id as string),
+    active: Boolean(r.active),
+    mustChangePassword: Boolean(r.must_change_password),
+    providerId: (r.provider_id as string) ?? null,
+    commissionPct: Number(r.commission_pct ?? 0),
   }));
 }
 
@@ -150,59 +182,79 @@ export async function patientOrgs(patientId: string): Promise<OrgRef[]> {
   return [];
 }
 
-export const normEmail = (s: string): string => s.trim().toLowerCase();
-const bareDni = (s: string) => s.replace(/\D/g, "");
-
 export async function getUser(id: string): Promise<User | undefined> {
   const [r] = (await getSql()`SELECT * FROM users WHERE id = ${id}`) as unknown as Row[];
   return r ? toUser(r) : undefined;
 }
 
-export async function getUserByEmail(email: string): Promise<UserWithPin | undefined> {
-  const target = normEmail(email);
-  if (!target) return undefined;
-  const [r] = (await getSql()`SELECT * FROM users WHERE lower(trim(email)) = ${target}`) as unknown as Row[];
-  return r ? withPin(r) : undefined;
+export async function getAccount(id: string): Promise<Account | undefined> {
+  const [r] = (await getSql()`SELECT * FROM users WHERE id = ${id}`) as unknown as Row[];
+  return r ? toAccount(r) : undefined;
 }
 
-export async function getUserByDni(dni: string): Promise<UserWithPin | undefined> {
-  const target = bareDni(dni);
-  if (!target) return undefined;
-  const rows = (await getSql()`SELECT * FROM users WHERE trim(dni) <> ''`) as unknown as Row[];
-  const r = rows.find((row) => bareDni(row.dni as string) === target);
-  return r ? withPin(r) : undefined;
+export async function getAccountByUsername(username: string): Promise<Account | undefined> {
+  const [r] = (await getSql()`SELECT * FROM users WHERE lower(username) = ${username.toLowerCase()} AND username <> ''`) as unknown as Row[];
+  return r ? toAccount(r) : undefined;
+}
+
+export async function countAccounts(): Promise<number> {
+  const [r] = (await getSql()`SELECT count(*)::int AS n FROM users WHERE username <> ''`) as unknown as Row[];
+  return Number(r?.n ?? 0);
 }
 
 export async function createUser(args: {
   name: string;
-  email: string;
+  username: string;
   role: Role;
-  pinHash: string;
-  pinSalt: string;
-  dni?: string;
-  phone?: string;
+  password: { hash: string; salt: string };
+  mustChangePassword: boolean;
 }): Promise<User> {
   const id = uid("u");
-  const email = normEmail(args.email);
-  const dni = (args.dni ?? "").trim();
-  const phone = (args.phone ?? "").trim();
   await getSql()`
-    INSERT INTO users (id, name, email, dni, phone, role, pin_hash, pin_salt)
-    VALUES (${id}, ${args.name.trim()}, ${email}, ${dni}, ${phone}, ${args.role}, ${args.pinHash}, ${args.pinSalt})`;
-  return { id, name: args.name.trim(), email, dni, phone, role: args.role };
+    INSERT INTO users (id, name, email, role, pin_hash, pin_salt, username, password_hash, password_salt, must_change_password)
+    VALUES (${id}, ${args.name.trim()}, '', ${args.role}, '', '', ${args.username}, ${args.password.hash}, ${args.password.salt}, ${args.mustChangePassword})`;
+  return { id, name: args.name.trim(), email: "", dni: "", phone: "", role: args.role };
 }
 
-export async function updateUserPin(userId: string, pin: { hash: string; salt: string }): Promise<void> {
-  await getSql()`UPDATE users SET pin_hash = ${pin.hash}, pin_salt = ${pin.salt} WHERE id = ${userId}`;
+/** Nueva contraseña; `bumpSessions` cierra todas las sesiones abiertas de esa persona. */
+export async function setPassword(
+  userId: string,
+  pw: { hash: string; salt: string },
+  opts: { mustChange: boolean; bumpSessions: boolean },
+): Promise<void> {
+  await getSql()`
+    UPDATE users SET password_hash = ${pw.hash}, password_salt = ${pw.salt},
+      must_change_password = ${opts.mustChange}, failed_logins = 0, locked_until = NULL,
+      session_version = session_version + ${opts.bumpSessions ? 1 : 0}
+    WHERE id = ${userId}`;
 }
 
-/** Resolve a login from an email or a DNI. */
-export async function findLogin(args: { email?: string; dni?: string }): Promise<User | undefined> {
-  const raw = (args.email ?? args.dni ?? "").trim();
-  if (!raw) return undefined;
-  const hit = raw.includes("@") ? await getUserByEmail(raw) : await getUserByDni(raw);
-  if (!hit) return undefined;
-  return { id: hit.id, name: hit.name, email: hit.email, dni: hit.dni, phone: hit.phone, role: hit.role };
+export async function recordLoginFailure(userId: string, maxAttempts: number, lockedUntil: string): Promise<void> {
+  await getSql()`
+    UPDATE users SET failed_logins = failed_logins + 1,
+      locked_until = CASE WHEN failed_logins + 1 >= ${maxAttempts} THEN ${lockedUntil} ELSE locked_until END
+    WHERE id = ${userId}`;
+}
+
+export async function clearLoginFailures(userId: string): Promise<void> {
+  await getSql()`UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ${userId}`;
+}
+
+/** Baja / reactivación. La baja cierra sus sesiones. */
+export async function setUserActive(userId: string, active: boolean): Promise<void> {
+  await getSql()`
+    UPDATE users SET active = ${active}, session_version = session_version + ${active ? 0 : 1}
+    WHERE id = ${userId}`;
+}
+
+export async function renameUser(userId: string, name: string): Promise<void> {
+  await getSql()`UPDATE users SET name = ${name.trim()} WHERE id = ${userId}`;
+}
+
+export async function nameTaken(name: string, exceptUserId?: string): Promise<boolean> {
+  const [r] = (await getSql()`
+    SELECT 1 FROM users WHERE lower(trim(name)) = ${name.trim().toLowerCase()} AND id <> ${exceptUserId ?? ""}`) as unknown as Row[];
+  return !!r;
 }
 
 export async function addMembership(args: {
@@ -230,6 +282,7 @@ const toProvider = (r: Row): Provider => ({
   roomLabel: r.room_label as string,
   defaultFee: Number(r.default_fee ?? 0),
   active: Boolean(r.active ?? true),
+  commissionPct: Number(r.commission_pct ?? 0),
 });
 
 export async function getProvider(id: string): Promise<Provider | undefined> {
@@ -246,77 +299,21 @@ export async function createProvider(orgId: string, name: string, specialty: str
   return (await getProvider(id))!;
 }
 
+export async function setProviderCommission(providerId: string, pct: number): Promise<void> {
+  await getSql()`UPDATE providers SET commission_pct = ${pct} WHERE id = ${providerId}`;
+}
+
+export async function setProviderActive(providerId: string, active: boolean): Promise<void> {
+  await getSql()`UPDATE providers SET active = ${active ? 1 : 0} WHERE id = ${providerId}`;
+}
+
+export async function renameProvider(providerId: string, name: string): Promise<void> {
+  await getSql()`UPDATE providers SET name = ${name.trim()} WHERE id = ${providerId}`;
+}
+
 export async function getPatient(id: string): Promise<Patient | undefined> {
   const [r] = (await getSql()`SELECT * FROM patients WHERE id = ${id}`) as unknown as Row[];
   return r
     ? { id: r.id as string, fullName: r.full_name as string, dni: r.dni as string, phone: r.phone as string, email: r.email as string }
     : undefined;
-}
-
-// ---------------------------------------------------------------------------
-// One-time PIN-recovery codes
-// ---------------------------------------------------------------------------
-
-export type PinResetCode = {
-  id: string;
-  userId: string;
-  codeHash: string;
-  codeSalt: string;
-  channel: string;
-  sentTo: string;
-  attempts: number;
-  createdAt: string;
-  expiresAt: string;
-  consumedAt: string | null;
-};
-
-const toPinResetCode = (r: Row): PinResetCode => ({
-  id: r.id as string,
-  userId: r.user_id as string,
-  codeHash: r.code_hash as string,
-  codeSalt: r.code_salt as string,
-  channel: r.channel as string,
-  sentTo: r.sent_to as string,
-  attempts: Number(r.attempts),
-  createdAt: r.created_at as string,
-  expiresAt: r.expires_at as string,
-  consumedAt: (r.consumed_at as string) ?? null,
-});
-
-export async function createPinResetCode(args: {
-  userId: string;
-  codeHash: string;
-  codeSalt: string;
-  channel: string;
-  sentTo: string;
-  ttlMinutes: number;
-}): Promise<PinResetCode> {
-  const sql = getSql();
-  const now = new Date();
-  await sql`UPDATE pin_reset_codes SET consumed_at = ${now.toISOString()} WHERE user_id = ${args.userId} AND consumed_at IS NULL`;
-  const id = uid("prc");
-  const expires = new Date(now.getTime() + args.ttlMinutes * 60_000);
-  await sql`
-    INSERT INTO pin_reset_codes (id, user_id, code_hash, code_salt, channel, sent_to, attempts, created_at, expires_at)
-    VALUES (${id}, ${args.userId}, ${args.codeHash}, ${args.codeSalt}, ${args.channel}, ${args.sentTo}, 0, ${now.toISOString()}, ${expires.toISOString()})`;
-  const [r] = (await sql`SELECT * FROM pin_reset_codes WHERE id = ${id}`) as unknown as Row[];
-  return toPinResetCode(r);
-}
-
-export async function activePinResetCode(userId: string): Promise<PinResetCode | undefined> {
-  const [r] = (await getSql()`
-    SELECT * FROM pin_reset_codes
-    WHERE user_id = ${userId} AND consumed_at IS NULL AND expires_at > ${new Date().toISOString()}
-    ORDER BY created_at DESC LIMIT 1`) as unknown as Row[];
-  return r ? toPinResetCode(r) : undefined;
-}
-
-export async function bumpPinResetAttempts(id: string): Promise<number> {
-  const [r] = (await getSql()`
-    UPDATE pin_reset_codes SET attempts = attempts + 1 WHERE id = ${id} RETURNING attempts`) as unknown as Row[];
-  return Number(r?.attempts ?? 0);
-}
-
-export async function consumePinResetCode(id: string): Promise<void> {
-  await getSql()`UPDATE pin_reset_codes SET consumed_at = ${new Date().toISOString()} WHERE id = ${id}`;
 }

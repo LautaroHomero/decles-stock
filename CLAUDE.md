@@ -10,6 +10,9 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
 
 - Autorización siempre en el servidor (`src/lib/domain/*`), scoping por `organization_id`.
 - Vender (`recordSale`) no requiere permiso de stock; cargar/corregir inventario sí (solo admin).
+- Cuentas: usuario + contraseña (`domain/accounts.ts`). Toda baja o reset sube `users.session_version`
+  (revoca sesiones). Con `must_change_password` la API solo permite `/api/auth/password`.
+- Venta de producto exige médica (`providerId`); la comisión se congela en `sales.commission_*`.
 - Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada.
 - Fechas: `realNowIso()` (zona `America/Argentina/Buenos_Aires`), timestamps TEXT.
 

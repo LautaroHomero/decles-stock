@@ -1,20 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { SignOutIcon } from "@phosphor-icons/react";
+import { KeyIcon, SignOutIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { ThemeToggle, Wordmark, initials } from "./ui";
 import { Bell } from "./bell";
 import { VenderView } from "./vender-view";
 import { InventarioView } from "./inventario-view";
 import { VentasView } from "./ventas-view";
+import { EquipoView } from "./equipo-view";
+import { ChangePasswordForm } from "./auth-ui";
 
-type Section = "vender" | "inventario" | "ventas";
+type Section = "vender" | "inventario" | "ventas" | "equipo";
 
 const TABS: { id: Section; label: string }[] = [
   { id: "vender", label: "Vender" },
   { id: "inventario", label: "Stock" },
   { id: "ventas", label: "Ventas" },
+  { id: "equipo", label: "Equipo" },
 ];
 
 const ROLE_LABEL = { medico: "Médica/o", recepcion: "Secretaría", paciente: "Paciente" } as const;
@@ -26,7 +29,8 @@ export function StockApp({ actor }: { actor: Actor }) {
   // El admin arranca en el inventario (es quien carga); el resto, vendiendo.
   const [section, setSection] = useState<Section>(isAdmin ? "inventario" : "vender");
   // La secretaría solo vende: el inventario (vencimientos, lotes) es del admin y la médica.
-  const tabs = TABS.filter((t) => t.id !== "inventario" || isAdmin || isMedico);
+  // El equipo, solo el admin.
+  const tabs = TABS.filter((t) => (t.id !== "inventario" || isAdmin || isMedico) && (t.id !== "equipo" || isAdmin));
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-bg">
@@ -60,6 +64,7 @@ export function StockApp({ actor }: { actor: Actor }) {
         {section === "vender" && <VenderView actor={actor} />}
         {section === "inventario" && (isAdmin || isMedico) && <InventarioView />}
         {section === "ventas" && <VentasView actor={actor} />}
+        {section === "equipo" && isAdmin && <EquipoView actor={actor} />}
       </main>
     </div>
   );
@@ -67,6 +72,7 @@ export function StockApp({ actor }: { actor: Actor }) {
 
 function AvatarMenu({ actor }: { actor: Actor }) {
   const [open, setOpen] = useState(false);
+  const [pw, setPw] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -82,6 +88,14 @@ function AvatarMenu({ actor }: { actor: Actor }) {
 
   return (
     <div ref={ref} className="relative">
+      {pw && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onMouseDown={(e) => e.target === e.currentTarget && setPw(false)}>
+          <div className="w-full max-w-[400px] animate-cl-in rounded-2xl bg-surface p-5 text-fg shadow-lg">
+            <p className="mb-3 text-[15px] font-medium">Cambiar contraseña</p>
+            <ChangePasswordForm onDone={() => setPw(false)} />
+          </div>
+        </div>
+      )}
       <button
         onClick={() => setOpen((o) => !o)}
         aria-label="Tu cuenta"
@@ -99,8 +113,17 @@ function AvatarMenu({ actor }: { actor: Actor }) {
           <div className="my-3 h-px bg-neutral-800" />
           <ThemeToggle />
           <button
-            onClick={logout}
+            onClick={() => {
+              setOpen(false);
+              setPw(true);
+            }}
             className="mt-3 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-neutral-300 transition-colors hover:bg-accent-900"
+          >
+            <KeyIcon size={15} /> Cambiar contraseña
+          </button>
+          <button
+            onClick={logout}
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-neutral-300 transition-colors hover:bg-accent-900"
           >
             <SignOutIcon size={15} /> Salir
           </button>

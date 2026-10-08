@@ -1,23 +1,16 @@
-import { getUser, membershipsForUser, patientOrgs } from "@/lib/db/repo";
+import { getAccount, membershipsForUser } from "@/lib/db/repo";
 import type { Actor } from "@/lib/domain/types";
 import { claimsFromRequest, type SessionClaims } from "./session";
 
-/** Turns the signed session claims into the full Actor (memberships, org names…). */
+/**
+ * Cookie firmada → Actor completo. Se rehidrata en cada request, así una baja o un
+ * reset de contraseña (que suben `session_version`) cortan la sesión en el acto.
+ */
 export async function hydrateActor(claims: SessionClaims | null): Promise<Actor | null> {
   if (!claims) return null;
-  const user = await getUser(claims.userId);
-  if (!user) return null;
-
-  if (user.role === "paciente") {
-    if (!user.patientId) return null;
-    return {
-      userId: user.id,
-      name: user.name,
-      role: "paciente",
-      patientId: user.patientId,
-      orgs: await patientOrgs(user.patientId),
-    };
-  }
+  const user = await getAccount(claims.userId);
+  if (!user || !user.active || user.role === "paciente") return null;
+  if ((claims.sv ?? 0) !== user.sessionVersion) return null;
 
   const mems = await membershipsForUser(user.id);
   if (mems.length === 0) return null;
@@ -35,6 +28,7 @@ export async function hydrateActor(claims: SessionClaims | null): Promise<Actor 
       canAdmin: active.canAdmin,
     },
     orgs: mems.map((m) => ({ id: m.organizationId, name: m.organizationName })),
+    mustChangePassword: user.mustChangePassword,
   };
 }
 

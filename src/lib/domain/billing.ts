@@ -10,6 +10,8 @@ import {
   markSaleVoided,
   setPricingRoles,
   updatePriceItem as persistPriceItem,
+  commissionSummary,
+  type CommissionRow,
   type BillingSource,
   type BillingWho,
   type PriceItem,
@@ -35,7 +37,7 @@ import type { Actor, StaffRole } from "@/lib/domain/types";
 export type Result<T> = ({ ok: true } & T) | { ok: false; error: string; status: number };
 const fail = (error: string, status = 400): { ok: false; error: string; status: number } => ({ ok: false, error, status });
 
-export type { PriceItem, PriceKind, Sale };
+export type { CommissionRow, PriceItem, PriceKind, Sale };
 
 const KINDS: PriceKind[] = ["consulta", "tratamiento", "producto"];
 const cleanName = (s: unknown) => (typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "");
@@ -222,11 +224,17 @@ export async function recordSale(
     const p = await getPatient(v.patientId);
     if (!p) return fail("Paciente no encontrado.", 404);
   }
-  let providerId = v.providerId ?? item.providerId ?? (actor.role === "medico" ? actor.activeOrg?.providerId ?? null : null);
+  // Quién vendió (cobra comisión): la médica que registra es siempre ella misma; si registra
+  // la secretaría o un admin no-médico, tiene que indicar la médica (Decles).
+  let providerId = actor.role === "medico" ? actor.activeOrg?.providerId ?? null : v.providerId ?? item.providerId ?? null;
+  let commissionPct = 0;
+  if (!providerId && item.kind === "producto") return fail("Elegí qué médica hizo la venta.");
   if (providerId) {
     const p = await getProvider(providerId);
     if (!p || p.organizationId !== ctx.orgId) return fail("Profesional no encontrado en este consultorio.", 404);
+    if (!p.active) return fail(`${p.name} está dada de baja.`, 409);
     providerId = p.id;
+    commissionPct = p.commissionPct;
   }
 
   if (item.stockItemId) {
@@ -238,7 +246,7 @@ export async function recordSale(
 
   const { id, total } = await insertSale(
     ctx.orgId,
-    { item, quantity, providerId, patientId: v.patientId ?? null, note: cleanName(v.note) },
+    { item, quantity, providerId, patientId: v.patientId ?? null, note: cleanName(v.note), commissionPct },
     ctx.who,
   );
 
@@ -284,4 +292,23 @@ export async function salesList(actor: Actor, from?: string, to?: string, limit 
   const all = await listSales(ctx.orgId, f, t, Math.min(Math.max(limit, 1), 500));
   const mine = actor.role === "medico" ? actor.activeOrg?.providerId : undefined;
   return { ok: true, sales: mine ? all.filter((s) => s.providerId === mine || s.createdByName === actor.name) : all };
+}
+
+// ---------------------------------------------------------------------------
+// Comisiones (Decles): el admin ve todas; la médica, las suyas.
+// ---------------------------------------------------------------------------
+
+export async function commissions(actor: Actor, from?: string, to?: string): Promise<Result<{ from: string; to: string; rows: CommissionRow[] }>> {
+  const ctx = staffCtx(actor, "manual");
+  if (!ctx) return fail("No autorizado.", 403);
+  const isAdmin = !!actor.activeOrg?.canAdmin;
+  if (!isAdmin && actor.role !== "medico") return fail("Las comisiones las ve el admin.", 403);
+  const today = realNowIso().slice(0, 10);
+  const f = from === undefined ? `${today.slice(0, 7)}-01` : ymd(from);
+  const t = to === undefined ? today : ymd(to);
+  if (!f || !t) return fail("Fechas inválidas: usá AAAA-MM-DD.");
+  if (f > t) return fail("La fecha 'desde' es posterior a 'hasta'.");
+  const rows = await commissionSummary(ctx.orgId, f, t);
+  const mine = actor.activeOrg?.providerId;
+  return { ok: true, from: f, to: t, rows: isAdmin ? rows : rows.filter((r) => r.providerId === mine) };
 }
