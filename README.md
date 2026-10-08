@@ -21,7 +21,7 @@ Requisitos: Node 20+ y Docker.
 ```bash
 npm install
 cp .env.example .env.local
-npm run db:up         # Postgres 16 en localhost:5433 (docker compose)
+npm run db:up         # Postgres 16 en localhost:54329 (docker compose)
 npm run db:migrate
 npm run db:seed       # datos de demo — solo corre contra una base local
 npm run dev           # http://localhost:3000

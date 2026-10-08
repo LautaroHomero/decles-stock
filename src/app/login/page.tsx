@@ -143,7 +143,7 @@ function EmailLogin({ onDone, onForgot }: { onDone: () => void; onForgot: () => 
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ identifier: ident.trim(), pin: pinValue, organizationId }),
       });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({ ok: false, error: "Error del servidor. Revisá la consola de `npm run dev`." }));
       if (!r.ok || !d.ok) {
         setError(d.error ?? "No se pudo iniciar sesión.");
         setPin("");

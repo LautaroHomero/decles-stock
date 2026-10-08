@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: decles
       POSTGRES_DB: decles_stock
     ports:
-      - "5433:5432"
+      - "54329:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
 
