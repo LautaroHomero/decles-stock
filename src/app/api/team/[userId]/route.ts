@@ -1,10 +1,10 @@
 import { updateMember } from "@/lib/domain/accounts";
 import { actorOr401, bodyOf, respond } from "../../_http";
 
-/** Editar (admin): `{ name?, isAdmin?, commissionPct?, active?, aliases? }`. `active: false` = baja. */
+/** Editar (admin): `{ name?, isAdmin?, commissionPct?, active? }`. `active: false` = baja. */
 export async function PATCH(req: Request, ctx: { params: Promise<{ userId: string }> }) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
-  const b = await bodyOf<{ name: string; isAdmin: boolean; commissionPct: number; active: boolean; aliases: string }>(req);
+  const b = await bodyOf<{ name: string; isAdmin: boolean; commissionPct: number; active: boolean }>(req);
   return respond(await updateMember(actor, (await ctx.params).userId, b));
 }

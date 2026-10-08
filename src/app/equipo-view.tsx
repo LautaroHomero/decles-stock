@@ -15,7 +15,6 @@ interface Member {
   active: boolean;
   mustChangePassword: boolean;
   commissionPct: number;
-  aliases: string[];
 }
 
 const ROLE = { medico: "Médica/o", recepcion: "Secretaría" } as const;
@@ -137,7 +136,6 @@ function MemberRow({
 }) {
   const [name, setName] = useState(m.name);
   const [pct, setPct] = useState(String(m.commissionPct));
-  const [aliases, setAliases] = useState(m.aliases.join(", "));
   const [admin, setAdmin] = useState(m.isAdmin);
   const [confirmOff, setConfirmOff] = useState(false);
 
@@ -172,13 +170,6 @@ function MemberRow({
                 <input value={pct} onChange={(e) => setPct(e.target.value.replace(/[^\d.,]/g, ""))} inputMode="decimal" className={FIELD} />
               </label>
             )}
-            {m.role === "medico" && (
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span className="text-[12px] text-neutral-400">Apodos (para la hoja de ventas, separados por coma)</span>
-                <input value={aliases} onChange={(e) => setAliases(e.target.value)} placeholder="Ej. pili, pilu" className={FIELD} />
-                <span className="text-[11.5px] text-neutral-500">Los diminutivos comunes («lau», «laurita») ya se entienden solos.</span>
-              </label>
-            )}
           </div>
           <label className={`flex items-center gap-2 text-[13px] ${self ? "opacity-50" : ""}`}>
             <input type="checkbox" checked={admin} disabled={self} onChange={(e) => setAdmin(e.target.checked)} />
@@ -191,7 +182,7 @@ function MemberRow({
                 onSave({
                   name,
                   isAdmin: admin,
-                  ...(m.role === "medico" ? { commissionPct: Number(pct.replace(",", ".")), aliases } : {}),
+                  ...(m.role === "medico" ? { commissionPct: Number(pct.replace(",", ".")) } : {}),
                 })
               }
             >

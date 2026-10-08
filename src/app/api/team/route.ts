@@ -13,8 +13,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
-  const b = await bodyOf<{ name: string; username: string; role: StaffRole; isAdmin: boolean; commissionPct: number; aliases: string }>(req);
+  const b = await bodyOf<{ name: string; username: string; role: StaffRole; isAdmin: boolean; commissionPct: number }>(req);
   return respond(
-    await createMember(actor, { name: b.name ?? "", username: b.username ?? "", role: b.role as StaffRole, isAdmin: b.isAdmin, commissionPct: b.commissionPct, aliases: b.aliases }),
+    await createMember(actor, { name: b.name ?? "", username: b.username ?? "", role: b.role as StaffRole, isAdmin: b.isAdmin, commissionPct: b.commissionPct }),
   );
 }

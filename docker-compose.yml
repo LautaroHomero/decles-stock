@@ -26,8 +26,8 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://decles:decles@db:5432/decles_stock
-      # Obligatorio para la app (sin esto no arranca): AUTH_SECRET=... en un archivo .env junto a este (openssl rand -base64 48).
-      AUTH_SECRET: ${AUTH_SECRET:-}
+      # Obligatorio: cambialo por un valor propio (openssl rand -base64 48) en un archivo .env junto a este.
+      AUTH_SECRET: ${AUTH_SECRET:?Falta AUTH_SECRET en .env (openssl rand -base64 48)}
       CRON_SECRET: ${CRON_SECRET:-}
       APP_TZ: America/Argentina/Buenos_Aires
       # Se entra por http (esta PC o la red del consultorio). Detrás de HTTPS, poné "true".
