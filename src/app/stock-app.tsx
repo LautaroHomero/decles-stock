@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { KeyIcon, SignOutIcon } from "@phosphor-icons/react";
+import { KeyIcon, ListChecksIcon, SignOutIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { ThemeToggle, Wordmark, initials } from "./ui";
 import { Bell } from "./bell";
@@ -10,6 +10,7 @@ import { InventarioView } from "./inventario-view";
 import { VentasView } from "./ventas-view";
 import { EquipoView } from "./equipo-view";
 import { ChangePasswordForm } from "./auth-ui";
+import { Onboarding } from "./onboarding";
 
 type Section = "vender" | "inventario" | "ventas" | "equipo";
 
@@ -31,6 +32,12 @@ export function StockApp({ actor }: { actor: Actor }) {
   // La secretaría solo vende: el inventario (vencimientos, lotes) es del admin y la médica.
   // El equipo, solo el admin.
   const tabs = TABS.filter((t) => (t.id !== "inventario" || isAdmin || isMedico) && (t.id !== "equipo" || isAdmin));
+  // Cambia al moverse de pestaña o al reabrir "Primeros pasos": el checklist se recalcula.
+  const [onbKey, setOnbKey] = useState(0);
+  const go = (s: Section) => {
+    setSection(s);
+    setOnbKey((k) => k + 1);
+  };
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-bg">
@@ -44,7 +51,7 @@ export function StockApp({ actor }: { actor: Actor }) {
             return (
               <button
                 key={t.id}
-                onClick={() => setSection(t.id)}
+                onClick={() => go(t.id)}
                 aria-current={active ? "page" : undefined}
                 className={`relative flex items-center px-2 text-[14px] transition-colors sm:px-3 ${active ? "text-fg" : "text-neutral-400 hover:text-fg"}`}
               >
@@ -56,11 +63,12 @@ export function StockApp({ actor }: { actor: Actor }) {
         </nav>
         <span className="flex-1" />
         <span className="hidden truncate text-[13px] text-neutral-400 md:block">{actor.activeOrg?.name}</span>
-        {isMedico && <Bell onOpenStock={() => setSection("inventario")} />}
-        <AvatarMenu actor={actor} />
+        {(isMedico || isAdmin) && <Bell onOpenStock={() => go("inventario")} />}
+        <AvatarMenu actor={actor} onOnboarding={() => setOnbKey((k) => k + 1)} />
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto">
+        {isAdmin && <Onboarding go={go} reloadKey={onbKey} />}
         {section === "vender" && <VenderView actor={actor} />}
         {section === "inventario" && (isAdmin || isMedico) && <InventarioView />}
         {section === "ventas" && <VentasView actor={actor} />}
@@ -70,7 +78,7 @@ export function StockApp({ actor }: { actor: Actor }) {
   );
 }
 
-function AvatarMenu({ actor }: { actor: Actor }) {
+function AvatarMenu({ actor, onOnboarding }: { actor: Actor; onOnboarding: () => void }) {
   const [open, setOpen] = useState(false);
   const [pw, setPw] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -121,6 +129,18 @@ function AvatarMenu({ actor }: { actor: Actor }) {
           >
             <KeyIcon size={15} /> Cambiar contraseña
           </button>
+          {actor.activeOrg?.canAdmin && (
+            <button
+              onClick={async () => {
+                setOpen(false);
+                await fetch("/api/onboarding", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ done: false }) });
+                onOnboarding();
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-neutral-300 transition-colors hover:bg-accent-900"
+            >
+              <ListChecksIcon size={15} /> Primeros pasos
+            </button>
+          )}
           <button
             onClick={logout}
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-neutral-300 transition-colors hover:bg-accent-900"

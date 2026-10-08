@@ -12,7 +12,7 @@ import {
 import type { Actor } from "@/lib/domain/types";
 
 /**
- * Avisos de stock para la campanita de los médicos del consultorio:
+ * Avisos de stock para la campanita de las médicas y los admins del consultorio:
  *  · un lote vence dentro de `stock_expiry_days` (vence_pronto, una vez por lote);
  *  · un lote con stock ya venció (vencido, una vez por lote);
  *  · un producto quedó bajo su mínimo (stock_bajo; se re-arma cuando se repone).
@@ -36,7 +36,8 @@ function addDays(ymd: string, days: number): string {
 
 export async function refreshStockAlerts(orgId: string): Promise<number> {
   const [items, settings, members] = await Promise.all([listStockItems(orgId), getStockSettings(orgId), listOrgMembers(orgId)]);
-  const recipients = members.filter((m) => m.role === "medico" && m.active).map((m) => m.userId);
+  // Reciben los avisos las médicas y los admins (activos).
+  const recipients = members.filter((m) => m.active && (m.role === "medico" || m.isAdmin)).map((m) => m.userId);
 
   const today = todayYmd();
   const limit = addDays(today, settings.expiryDays);
