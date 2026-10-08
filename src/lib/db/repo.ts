@@ -150,6 +150,8 @@ export interface OrgMember {
   mustChangePassword: boolean;
   providerId: string | null;
   commissionPct: number;
+  /** Apodos para la hoja de ventas. */
+  aliases: string[];
 }
 
 /** El equipo del consultorio (activos e inactivos), con admin y comisión. */
@@ -157,7 +159,7 @@ export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
   const org = await getOrganization(orgId);
   const adminIds = new Set(org?.adminIds ?? []);
   const rows = (await getSql()`
-    SELECT u.id AS user_id, u.name, u.username, u.active, u.must_change_password, m.role, m.provider_id, p.commission_pct
+    SELECT u.id AS user_id, u.name, u.username, u.active, u.must_change_password, u.aliases, m.role, m.provider_id, p.commission_pct
     FROM memberships m
     JOIN users u ON u.id = m.user_id
     LEFT JOIN providers p ON p.id = m.provider_id
@@ -173,6 +175,7 @@ export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
     mustChangePassword: Boolean(r.must_change_password),
     providerId: (r.provider_id as string) ?? null,
     commissionPct: Number(r.commission_pct ?? 0),
+    aliases: ((r.aliases as string) ?? "").split(",").filter(Boolean),
   }));
 }
 
@@ -245,6 +248,10 @@ export async function setUserActive(userId: string, active: boolean): Promise<vo
   await getSql()`
     UPDATE users SET active = ${active}, session_version = session_version + ${active ? 0 : 1}
     WHERE id = ${userId}`;
+}
+
+export async function setUserAliases(userId: string, aliases: string[]): Promise<void> {
+  await getSql()`UPDATE users SET aliases = ${aliases.join(",")} WHERE id = ${userId}`;
 }
 
 export async function renameUser(userId: string, name: string): Promise<void> {

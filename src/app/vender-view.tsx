@@ -31,6 +31,11 @@ export function VenderView({ actor }: { actor: Actor }) {
   const sellable = useMemo(() => (data?.products ?? []).filter((p) => p.price !== null && p.priceItemId), [data]);
   const isMedico = actor.role === "medico";
   const [seller, setSeller] = useSeller(!isMedico);
+  const [sellersData] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; aliases: string[] }[] }>("/api/sellers", 60_000);
+  const sellers = useMemo(
+    () => (isMedico ? [] : (sellersData?.sellers ?? []).map((s) => ({ id: s.providerId, name: s.name, aliases: s.aliases }))),
+    [sellersData, isMedico],
+  );
   // La médica que registra vende a su nombre; si registra otra persona, tiene que elegir la médica.
   const sellerReady = isMedico || !!seller;
 
@@ -49,9 +54,9 @@ export function VenderView({ actor }: { actor: Actor }) {
         {greeting()}, {firstName(actor.name)}
       </h1>
 
-      {!isMedico && <SellerPicker seller={seller} setSeller={setSeller} />}
+      {!isMedico && <SellerPicker sellers={sellers} loaded={!!sellersData} seller={seller} setSeller={setSeller} />}
 
-      <Hoja products={sellable} providerId={seller} sellerReady={sellerReady} onSold={onSold} onError={showToast} />
+      <Hoja products={sellable} sellers={sellers} providerId={seller} sellerReady={sellerReady} onSold={onSold} onError={showToast} />
 
       <ProductList products={sellable} providerId={seller} sellerReady={sellerReady} loading={!data} onSold={onSold} onError={showToast} />
 
@@ -82,12 +87,14 @@ type Sellable = CatalogProduct & { id: string };
 
 function Hoja({
   products,
+  sellers,
   providerId,
   sellerReady,
   onSold,
   onError,
 }: {
   products: CatalogProduct[];
+  sellers: { id: string; name: string; aliases?: string[] }[];
   providerId: string | null;
   sellerReady: boolean;
   onSold: (m: string) => void;
@@ -102,19 +109,22 @@ function Hoja({
   const catalog: Sellable[] = useMemo(() => products.map((p) => ({ ...p, id: p.stockItemId })), [products]);
   const lines = useMemo(
     () =>
-      parseQuickSale(text, catalog)
+      parseQuickSale(text, catalog, sellers)
         .filter((l) => !dropped.has(l.text))
         .map((l) => ({ ...l, match: l.match ?? catalog.find((p) => p.id === picked[l.text]) ?? null })),
-    [text, catalog, picked, dropped],
+    [text, catalog, sellers, picked, dropped],
   );
   const ready = lines.length > 0 && lines.every((l) => l.match);
+  // Cada renglón necesita médica: la escrita en el texto o, si no, la elegida arriba.
+  const sellersOk = lines.every((l) => l.seller || sellerReady);
+  const pickedName = sellers.find((s) => s.id === providerId)?.name;
   const total = lines.reduce((n, l) => n + (l.match?.price ?? 0) * l.quantity, 0);
 
   async function registrar() {
     setBusy(true);
     const done: string[] = [];
     for (const l of lines) {
-      const r = await call("/api/sales", "POST", { itemId: l.match!.priceItemId, quantity: l.quantity, providerId });
+      const r = await call("/api/sales", "POST", { itemId: l.match!.priceItemId, quantity: l.quantity, providerId: l.seller?.id ?? providerId });
       if (!r.ok) {
         setBusy(false);
         onError(`${l.match!.name}: ${r.error ?? "no se pudo registrar"}${done.length ? ` (lo anterior sí quedó registrado)` : ""}`);
@@ -123,7 +133,7 @@ function Hoja({
         if (done.length) onSold(`Registrado: ${done.join(", ")}`);
         return;
       }
-      done.push(`${l.quantity} × ${l.match!.name}`);
+      done.push(`${l.quantity} × ${l.match!.name}${l.seller ? ` (${l.seller.name})` : ""}`);
     }
     setBusy(false);
     setText("");
@@ -141,7 +151,7 @@ function Hoja({
           setDropped(new Set());
         }}
         rows={3}
-        placeholder={"Escribí lo que vendiste.\nEj: vendí 2 cremas pindonga y un protector"}
+        placeholder={"Escribí lo que vendiste y quién.\nEj: laura vendió 2 cremas pindonga y un protector"}
         className="w-full resize-none bg-transparent text-[16px] leading-relaxed outline-none placeholder:text-neutral-600"
       />
 
@@ -152,7 +162,12 @@ function Hoja({
               {l.match ? (
                 <div className="flex items-center gap-3 text-[15px]">
                   <span className="w-8 shrink-0 tabular-nums text-neutral-400">{l.quantity} ×</span>
-                  <span className="min-w-0 flex-1 truncate">{l.match.name}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {l.match.name}
+                    {(l.seller?.name ?? pickedName) && (
+                      <span className="block truncate text-[12.5px] text-neutral-400">{l.seller?.name ?? pickedName}</span>
+                    )}
+                  </span>
                   <span className="tabular-nums text-neutral-300">{money((l.match.price ?? 0) * l.quantity)}</span>
                   <button
                     aria-label="Quitar"
@@ -193,8 +208,8 @@ function Hoja({
       )}
 
       {lines.length > 0 && (
-        <button onClick={registrar} disabled={!ready || !sellerReady || busy} className={BTN_BIG}>
-          {busy ? "Registrando…" : !sellerReady ? "Elegí quién vendió (arriba)" : ready ? `Registrar · ${money(total)}` : "Elegí los productos marcados"}
+        <button onClick={registrar} disabled={!ready || !sellersOk || busy} className={BTN_BIG}>
+          {busy ? "Registrando…" : !ready ? "Elegí los productos marcados" : !sellersOk ? "Falta quién vendió (escribilo o elegilo arriba)" : `Registrar · ${money(total)}`}
         </button>
       )}
     </section>
@@ -353,23 +368,32 @@ function useSeller(enabled: boolean): [string | null, (id: string | null) => voi
   return [seller, setSeller];
 }
 
-function SellerPicker({ seller, setSeller }: { seller: string | null; setSeller: (id: string | null) => void }) {
-  const [data] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string }[] }>("/api/sellers", 60_000);
-  const sellers = useMemo(() => data?.sellers ?? [], [data]);
+function SellerPicker({
+  sellers: list,
+  loaded,
+  seller,
+  setSeller,
+}: {
+  sellers: { id: string; name: string }[];
+  loaded: boolean;
+  seller: string | null;
+  setSeller: (id: string | null) => void;
+}) {
+  const sellers = useMemo(() => list.map((s) => ({ providerId: s.id, name: s.name })), [list]);
 
   // Si la elegida ya no está (baja) se limpia; si hay una sola médica, queda elegida sola.
   useEffect(() => {
-    if (!data) return;
+    if (!loaded) return;
     if (seller && !sellers.some((s) => s.providerId === seller)) setSeller(null);
     else if (!seller && sellers.length === 1) setSeller(sellers[0].providerId);
-  }, [data, sellers, seller, setSeller]);
+  }, [loaded, sellers, seller, setSeller]);
 
-  if (!data) return null;
+  if (!loaded) return null;
   if (!sellers.length) return <p className="text-[13px] text-neutral-400">No hay médicas activas: el admin las da de alta en Equipo.</p>;
 
   return (
     <section className="flex flex-col gap-2">
-      <span className="text-[13px] text-neutral-400">¿Quién vendió?</span>
+      <span className="text-[13px] text-neutral-400">¿Quién vendió? <span className="text-neutral-600">— o escribilo en la hoja</span></span>
       <div className="flex flex-wrap gap-2">
         {sellers.map((s) => (
           <button

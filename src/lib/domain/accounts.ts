@@ -19,6 +19,7 @@ import {
   setProviderActive,
   setProviderCommission,
   setUserActive,
+  setUserAliases,
   type OrgMember,
 } from "@/lib/db/repo";
 import { getSql } from "@/lib/db/connection";
@@ -52,6 +53,19 @@ const MAX_ATTEMPTS = 5;
 const LOCK_MINUTES = 15;
 const ROLES: StaffRole[] = ["medico", "recepcion"];
 const cleanName = (s: unknown) => (typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "");
+
+/** "Pili, pilu ,  lola" → ["pili","pilu","lola"]: minúsculas, sin tildes, 3+ letras, hasta 10. */
+function cleanAliases(raw: unknown): string[] | null {
+  const list = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(",") : [];
+  const out = [
+    ...new Set(
+      list
+        .map((a) => String(a).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9ñ ]/g, "").trim())
+        .filter((a) => a.length >= 3),
+    ),
+  ];
+  return out.length > 10 ? null : out;
+}
 
 function pctProblem(pct: unknown): string | null {
   if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 100) return "La comisión tiene que ser un % entre 0 y 100.";
@@ -163,13 +177,13 @@ export async function listTeam(actor: Actor): Promise<Result<{ members: OrgMembe
 }
 
 /** Médicas activas del consultorio (para elegir quién vendió). La médica se ve solo a sí misma. */
-export async function listSellers(actor: Actor): Promise<Result<{ sellers: { providerId: string; name: string }[] }>> {
+export async function listSellers(actor: Actor): Promise<Result<{ sellers: { providerId: string; name: string; aliases: string[] }[] }>> {
   if (!actor.activeOrg) return fail("No autorizado.", 403);
   const members = await listOrgMembers(actor.activeOrg.id);
   const sellers = members
     .filter((m) => m.active && m.role === "medico" && m.providerId)
     .filter((m) => actor.role !== "medico" || m.userId === actor.userId)
-    .map((m) => ({ providerId: m.providerId!, name: m.name }));
+    .map((m) => ({ providerId: m.providerId!, name: m.name, aliases: m.aliases }));
   return { ok: true, sellers };
 }
 
@@ -179,7 +193,7 @@ async function member(orgId: string, userId: string): Promise<OrgMember | undefi
 
 export async function createMember(
   actor: Actor,
-  v: { name: string; username: string; role: StaffRole; isAdmin?: boolean; commissionPct?: number },
+  v: { name: string; username: string; role: StaffRole; isAdmin?: boolean; commissionPct?: number; aliases?: string | string[] },
 ): Promise<Result<{ userId: string; username: string; temporaryPassword: string }>> {
   const g = adminOrg(actor);
   if (!g.ok) return g;
@@ -204,6 +218,8 @@ export async function createMember(
   }
   await addMembership({ userId: user.id, organizationId: g.orgId, role: v.role, providerId });
   if (v.isAdmin) await setOrgAdmin(g.orgId, user.id, true);
+  const aliases = cleanAliases(v.aliases);
+  if (aliases?.length) await setUserAliases(user.id, aliases);
   return { ok: true, userId: user.id, username, temporaryPassword: temp };
 }
 
@@ -214,7 +230,7 @@ async function activeAdminCount(orgId: string): Promise<number> {
 export async function updateMember(
   actor: Actor,
   userId: string,
-  v: { name?: string; isAdmin?: boolean; commissionPct?: number; active?: boolean },
+  v: { name?: string; isAdmin?: boolean; commissionPct?: number; active?: boolean; aliases?: string | string[] },
 ): Promise<Result<object>> {
   const g = adminOrg(actor);
   if (!g.ok) return g;
@@ -241,6 +257,10 @@ export async function updateMember(
     if (await nameTaken(name, userId)) return fail(`Ya hay alguien llamado "${name}".`, 409);
   }
 
+  const aliases = v.aliases === undefined ? undefined : cleanAliases(v.aliases);
+  if (aliases === null) return fail("Hasta 10 apodos.");
+
+  if (aliases !== undefined) await setUserAliases(userId, aliases);
   if (name !== undefined && name !== m.name) {
     await renameUser(userId, name);
     if (m.providerId) await renameProvider(m.providerId, name);
