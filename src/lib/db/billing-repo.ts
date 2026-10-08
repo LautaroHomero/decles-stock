@@ -13,13 +13,18 @@ const uid = (p: string) => `${p}_${randomUUID().slice(0, 8)}`;
 
 export type PriceKind = "consulta" | "tratamiento" | "producto";
 export type BillingSource = "manual" | "agent";
+/** Medio de pago (Decles). "efectivo" incluye transferencia: mismo precio. */
+export type PaymentMethod = "efectivo" | "tarjeta";
 
 export interface PriceItem {
   id: string;
   organizationId: string;
   kind: PriceKind;
   name: string;
+  /** Precio base = efectivo / transferencia. */
   amount: number;
+  /** Precio con tarjeta; null = igual a `amount`. */
+  cardAmount: number | null;
   providerId: string | null;
   providerName: string | null;
   stockItemId: string | null;
@@ -57,6 +62,11 @@ export interface Sale {
   /** % y monto de comisión congelados al vender (0 si no hubo médica). */
   commissionPct: number;
   commissionAmount: number;
+  /** null = no se cargó el medio de pago. */
+  paymentMethod: PaymentMethod | null;
+  /** Valor de la venta a precio efectivo y a precio tarjeta (congelados al vender). */
+  cashTotal: number;
+  cardTotal: number;
 }
 
 export interface BillingWho {
@@ -71,6 +81,7 @@ const toItem = (r: Row): PriceItem => ({
   kind: r.kind as PriceKind,
   name: r.name as string,
   amount: Number(r.amount),
+  cardAmount: r.card_amount === null || r.card_amount === undefined ? null : Number(r.card_amount),
   providerId: (r.provider_id as string) ?? null,
   providerName: (r.provider_name as string) ?? null,
   stockItemId: (r.stock_item_id as string) ?? null,
@@ -105,15 +116,15 @@ export async function getPriceItem(orgId: string, id: string): Promise<PriceItem
 
 export async function createPriceItem(
   orgId: string,
-  v: { kind: PriceKind; name: string; amount: number; providerId: string | null; stockItemId: string | null },
+  v: { kind: PriceKind; name: string; amount: number; cardAmount?: number | null; providerId: string | null; stockItemId: string | null },
   who: BillingWho,
 ): Promise<string> {
   const id = uid("pli");
   const now = realNowIso();
   await getSql().begin(async (tx) => {
     await tx`
-      INSERT INTO price_list_items (id, organization_id, kind, name, amount, provider_id, stock_item_id, created_at)
-      VALUES (${id}, ${orgId}, ${v.kind}, ${v.name}, ${v.amount}, ${v.providerId}, ${v.stockItemId}, ${now})`;
+      INSERT INTO price_list_items (id, organization_id, kind, name, amount, card_amount, provider_id, stock_item_id, created_at)
+      VALUES (${id}, ${orgId}, ${v.kind}, ${v.name}, ${v.amount}, ${v.cardAmount ?? null}, ${v.providerId}, ${v.stockItemId}, ${now})`;
     await tx`
       INSERT INTO price_history (id, organization_id, item_id, old_amount, new_amount, changed_by, changed_by_name, source, changed_at)
       VALUES (${uid("prh")}, ${orgId}, ${id}, NULL, ${v.amount}, ${who.id}, ${who.name}, ${who.source}, ${now})`;
@@ -125,14 +136,14 @@ export async function createPriceItem(
 export async function updatePriceItem(
   orgId: string,
   cur: PriceItem,
-  v: { name: string; amount: number; active: boolean; stockItemId: string | null },
+  v: { name: string; amount: number; cardAmount: number | null; active: boolean; stockItemId: string | null },
   who: BillingWho,
 ): Promise<void> {
   const now = realNowIso();
   await getSql().begin(async (tx) => {
     await tx`
       UPDATE price_list_items
-      SET name = ${v.name}, amount = ${v.amount}, active = ${v.active}, stock_item_id = ${v.stockItemId}
+      SET name = ${v.name}, amount = ${v.amount}, card_amount = ${v.cardAmount}, active = ${v.active}, stock_item_id = ${v.stockItemId}
       WHERE id = ${cur.id} AND organization_id = ${orgId}`;
     if (v.amount !== cur.amount) {
       await tx`
@@ -181,6 +192,9 @@ const toSale = (r: Row): Sale => ({
   voidReason: (r.void_reason as string) ?? null,
   commissionPct: Number(r.commission_pct ?? 0),
   commissionAmount: Number(r.commission_amount ?? 0),
+  paymentMethod: (r.payment_method as PaymentMethod) ?? null,
+  cashTotal: Number(r.cash_total ?? r.total),
+  cardTotal: Number(r.card_total ?? r.total),
 });
 
 export async function insertSale(
@@ -191,21 +205,42 @@ export async function insertSale(
     providerId: string | null;
     patientId: string | null;
     note: string;
-    /** % de comisión de la médica que vendió (0 = sin comisión). */
+    /** % de comisión de la médica que vendió (0 = sin comisión). Siempre sobre el precio efectivo. */
     commissionPct?: number;
+    /** null/undefined = no se cargó: se registra a precio efectivo y se guardan los dos valores. */
+    paymentMethod?: PaymentMethod | null;
   },
   who: BillingWho,
-): Promise<{ id: string; total: number; commissionAmount: number }> {
+): Promise<{ id: string; total: number; cashTotal: number; cardTotal: number; commissionAmount: number }> {
   const id = uid("sal");
-  const total = v.item.amount * v.quantity;
+  const cashUnit = v.item.amount;
+  const cardUnit = v.item.cardAmount ?? v.item.amount;
+  const cashTotal = cashUnit * v.quantity;
+  const cardTotal = cardUnit * v.quantity;
+  const method = v.paymentMethod ?? null;
+  const unitPrice = method === "tarjeta" ? cardUnit : cashUnit;
+  const total = unitPrice * v.quantity;
   const pct = v.commissionPct ?? 0;
-  const commissionAmount = Math.round((total * pct) / 100);
+  const commissionAmount = Math.round((cashTotal * pct) / 100);
   await getSql()`
     INSERT INTO sales (id, organization_id, item_id, item_name, kind, quantity, unit_price, total, provider_id, patient_id, note,
-                       created_by, created_by_name, source, created_at, commission_pct, commission_amount)
-    VALUES (${id}, ${orgId}, ${v.item.id}, ${v.item.name}, ${v.item.kind}, ${v.quantity}, ${v.item.amount}, ${total},
-            ${v.providerId}, ${v.patientId}, ${v.note}, ${who.id}, ${who.name}, ${who.source}, ${realNowIso()}, ${pct}, ${commissionAmount})`;
-  return { id, total, commissionAmount };
+                       created_by, created_by_name, source, created_at, commission_pct, commission_amount,
+                       payment_method, cash_total, card_total)
+    VALUES (${id}, ${orgId}, ${v.item.id}, ${v.item.name}, ${v.item.kind}, ${v.quantity}, ${unitPrice}, ${total},
+            ${v.providerId}, ${v.patientId}, ${v.note}, ${who.id}, ${who.name}, ${who.source}, ${realNowIso()}, ${pct}, ${commissionAmount},
+            ${method}, ${cashTotal}, ${cardTotal})`;
+  return { id, total, cashTotal, cardTotal, commissionAmount };
+}
+
+/** Carga el medio de pago de una venta que quedó sin él (solo si sigue sin medio y paga). */
+export async function setSalePayment(orgId: string, id: string, method: PaymentMethod): Promise<boolean> {
+  const rows = (await getSql()`
+    UPDATE sales SET payment_method = ${method},
+      total = CASE WHEN ${method} = 'tarjeta' THEN card_total ELSE cash_total END,
+      unit_price = CASE WHEN ${method} = 'tarjeta' THEN card_total ELSE cash_total END / quantity
+    WHERE id = ${id} AND organization_id = ${orgId} AND payment_method IS NULL AND status = 'paid'
+    RETURNING id`) as unknown as Row[];
+  return rows.length > 0;
 }
 
 export interface CommissionRow {

@@ -12,6 +12,14 @@
  *  4. Compara las palabras que quedan con cada producto: igual (sin tildes ni
  *     plurales) > prefijo ("prot" → protector) > un error de tipeo. Gana el de mejor
  *     puntaje; si empatan, se ofrece elegir. Nada se registra sin confirmar.
+ *  5. Quién vendió: si aparece el nombre o apellido de una médica ("laura vendió…",
+ *     "…, paula", "Dra. Ríos:" arriba de varias líneas) ese renglón y los siguientes
+ *     quedan a su nombre; los renglones anteriores sin médica toman la primera nombrada.
+ *     Un nombre que también es palabra de un producto no cuenta como médica.
+ *     Entiende diminutivos ("lau", "lauri", "laurita" → Laura; "anita" → Ana) y los
+ *     apodos que el admin carga en Equipo para los que no salen del nombre ("pili" → Pilar).
+ *  6. Medio de pago (opcional): "con tarjeta", "débito", "en efectivo", "transferencia", "mp".
+ *     Igual que la médica: vale para ese renglón y los siguientes, y lo anterior sin medio lo hereda.
  */
 
 export interface QuickProduct {
@@ -19,7 +27,22 @@ export interface QuickProduct {
   name: string;
 }
 
-export interface QuickLine<P extends QuickProduct = QuickProduct> {
+export interface QuickSeller {
+  id: string;
+  name: string;
+  /** Apodos cargados por el admin ("pili", "lola"). */
+  aliases?: string[];
+}
+
+export type QuickPayment = "efectivo" | "tarjeta";
+
+const PAYMENT_WORDS: Record<string, QuickPayment> = {
+  tarjeta: "tarjeta", tarjetas: "tarjeta", credito: "tarjeta", debito: "tarjeta", posnet: "tarjeta", visa: "tarjeta", master: "tarjeta",
+  efectivo: "efectivo", efvo: "efectivo", efe: "efectivo", cash: "efectivo", contado: "efectivo",
+  transferencia: "efectivo", transf: "efectivo", transfer: "efectivo", mp: "efectivo", mercadopago: "efectivo",
+};
+
+export interface QuickLine<P extends QuickProduct = QuickProduct, S extends QuickSeller = QuickSeller> {
   /** El pedazo de texto que generó este renglón. */
   text: string;
   quantity: number;
@@ -27,6 +50,10 @@ export interface QuickLine<P extends QuickProduct = QuickProduct> {
   match: P | null;
   /** Si es ambiguo o no hubo match claro: las mejores opciones para elegir. */
   candidates: P[];
+  /** Médica nombrada en el texto (o heredada del renglón anterior); null = usar la elegida en pantalla. */
+  seller: S | null;
+  /** Medio de pago escrito en el texto; null = el elegido en pantalla o sin cargar. */
+  payment: QuickPayment | null;
 }
 
 const NUMBER_WORDS: Record<string, number> = {
@@ -39,6 +66,8 @@ const FILLER = new Set([
   "compro", "compraron", "llevo", "llevaron", "hoy", "recien", "otra", "otro", "mas",
   "de", "del", "la", "el", "los", "las", "al", "a", "con", "para", "por", "en",
   "marca", "unidad", "unidades", "u", "x", "cant", "cantidad", "producto", "productos",
+  "dra", "dr", "doctora", "doctor", "lic", "licenciada",
+  "pago", "pagaron", "pagado", "abono", "abonaron", "medio",
 ]);
 
 /** Minúsculas, sin tildes, sin puntuación (conserva dígitos). */
@@ -128,25 +157,101 @@ function parseSegment(seg: string, nameNumbers: Set<string>): { quantity: number
   return { quantity: quantity && quantity > 0 ? quantity : 1, words: rest };
 }
 
-export function parseQuickSale<P extends QuickProduct>(text: string, products: P[]): QuickLine<P>[] {
-  const lines: QuickLine<P>[] = [];
+/** Palabras propias de cada médica: nombre, apellido y apodos (sin "Dra."). */
+const sellerWords = (s: QuickSeller) =>
+  [s.name, ...(s.aliases ?? [])]
+    .flatMap((x) => normalize(x).split(" "))
+    .filter((w) => w.length >= 3 && !FILLER.has(w));
+
+/** Terminaciones de diminutivo, de la más larga a la más corta. */
+const DIMINUTIVE = ["citas", "citos", "cita", "cito", "itas", "itos", "ita", "ito", "illa", "illo", "ina", "ino", "ucha", "ie", "i", "y"];
+
+/**
+ * ¿La palabra escrita `w` nombra a `sw` (nombre, apellido o apodo)?
+ *  · igual, o un error de tipeo en palabras largas;
+ *  · abreviado: "lau", "pau", "sofi" (prefijo de 3+ letras);
+ *  · diminutivo: "laurita", "lauri" (laur + ita/i), "anita" (an + ita → ana), "carlitos".
+ */
+function nameMatches(w: string, sw: string): boolean {
+  if (w === sw) return true;
+  if (w.length >= 5 && within1(w, sw)) return true;
+  if (w.length >= 3 && sw.startsWith(w)) return true;
+  for (const suf of DIMINUTIVE) {
+    if (!w.endsWith(suf) || w.length - suf.length < 2) continue;
+    const base = w.slice(0, -suf.length);
+    if (base.length >= 3 ? sw.startsWith(base) : sw.startsWith(base) && sw.length - base.length <= 1) return true;
+  }
+  return false;
+}
+
+/**
+ * Busca médicas nombradas en el renglón. Devuelve la médica si hay UNA sola posible y las
+ * palabras que hay que sacar antes de buscar el producto.
+ */
+function findSeller<S extends QuickSeller>(seg: string, sellers: S[], productVocab: Set<string>): { seller: S | null; used: Set<string> } {
+  const used = new Set<string>();
+  const hits = new Set<S>();
+  for (const w of normalize(seg).split(" ")) {
+    if (w.length < 3 || FILLER.has(w) || productVocab.has(stem(w))) continue;
+    // Una abreviatura que también empieza una palabra de producto ("cre" de crema) no es un nombre.
+    if (w.length <= 4 && [...productVocab].some((pv) => pv.startsWith(w))) continue;
+    const found = sellers.filter((s) => sellerWords(s).some((sw) => nameMatches(w, sw)));
+    if (found.length) {
+      used.add(w);
+      found.forEach((s) => hits.add(s));
+    }
+  }
+  return { seller: hits.size === 1 ? [...hits][0] : null, used };
+}
+
+export function parseQuickSale<P extends QuickProduct, S extends QuickSeller = QuickSeller>(
+  text: string,
+  products: P[],
+  sellers: S[] = [],
+): QuickLine<P, S>[] {
+  const lines: QuickLine<P, S>[] = [];
   const nameNumbers = new Set(products.flatMap((p) => normalize(p.name).split(" ").filter((w) => /^\d+$/.test(w))));
-  for (const seg of splitSegments(text)) {
+  const productVocab = new Set(products.flatMap((p) => productWords(p.name)));
+  let current: S | null = null;
+  let first: S | null = null;
+  let pay: QuickPayment | null = null;
+  let firstPay: QuickPayment | null = null;
+  for (const raw of splitSegments(text)) {
+    const { seller, used } = findSeller(raw, sellers, productVocab);
+    if (seller) {
+      current = seller;
+      first ??= seller;
+    }
+    for (const w of normalize(raw).split(" ")) {
+      if (PAYMENT_WORDS[w]) {
+        pay = PAYMENT_WORDS[w];
+        firstPay ??= pay;
+        used.add(w);
+      }
+    }
+    const seg = used.size ? normalize(raw).split(" ").filter((w) => !used.has(w)).join(" ") : raw;
     const { quantity, words } = parseSegment(seg, nameNumbers);
-    if (!words.length) continue; // "vendí" solo, o un número suelto
+    if (!words.length) continue; // "vendí", "Laura:" o un número suelto
     const ranked = products
       .map((p) => ({ p, s: score(words, p.name) }))
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s);
-    const [first, second] = ranked;
+    const [best, second] = ranked;
     // Match claro: hay uno solo, o el primero le saca ventaja al segundo.
-    const clear = first && (!second || first.s - second.s >= 0.15);
+    const clear = best && (!second || best.s - second.s >= 0.15);
     lines.push({
-      text: seg,
+      text: raw,
       quantity,
-      match: clear ? first.p : null,
+      match: clear ? best.p : null,
       candidates: clear ? [] : ranked.slice(0, 4).map((x) => x.p),
+      seller: current,
+      payment: pay,
     });
+  }
+  // "2 cremas pindonga, laura": lo anterior a la primera médica nombrada también es suyo. Igual el pago.
+  for (const l of lines) {
+    if (!l.seller) l.seller = first;
+    if (!l.payment) l.payment = firstPay;
   }
   return lines;
 }

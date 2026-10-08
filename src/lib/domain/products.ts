@@ -19,8 +19,10 @@ export interface CatalogProduct {
   name: string;
   unit: string;
   category: string;
-  /** Precio vigente (ARS enteros); null = el admin todavía no le puso precio, no se puede vender. */
+  /** Precio efectivo / transferencia (ARS enteros); null = sin precio, no se puede vender. */
   price: number | null;
+  /** Precio con tarjeta; null = igual al de efectivo. */
+  cardPrice: number | null;
   available: number;
   minQuantity: number;
   low: boolean;
@@ -56,6 +58,7 @@ export async function catalog(actor: Actor): Promise<
       unit: i.unit,
       category: i.category,
       price: price ? price.amount : null,
+      cardPrice: price ? price.cardAmount : null,
       available: i.available,
       minQuantity: i.minQuantity,
       low: i.low,
@@ -90,6 +93,7 @@ export async function createProduct(
   v: {
     name: string;
     price: number;
+    cardPrice?: number | null;
     unit?: string;
     category?: string;
     minQuantity?: number;
@@ -104,7 +108,7 @@ export async function createProduct(
     return fail("El precio tiene que ser un número entero de pesos, 0 o más.");
   const item = await createItem(actor, { name: v.name, unit: v.unit, category: v.category, minQuantity: v.minQuantity });
   if (!item.ok) return item;
-  const price = await createPrice(actor, { kind: "producto", name: v.name, amount: v.price, stockItemId: item.itemId });
+  const price = await createPrice(actor, { kind: "producto", name: v.name, amount: v.price, cardAmount: v.cardPrice ?? null, stockItemId: item.itemId });
   if (!price.ok) {
     // Sin precio el producto no se puede vender: se deshace el alta para no dejarlo a medias.
     await editItem(actor, item.itemId, { active: false });
@@ -122,7 +126,7 @@ export async function createProduct(
 export async function updateProduct(
   actor: Actor,
   stockItemId: string,
-  v: { name?: string; price?: number; unit?: string; category?: string; minQuantity?: number; active?: boolean },
+  v: { name?: string; price?: number; cardPrice?: number | null; unit?: string; category?: string; minQuantity?: number; active?: boolean },
 ): Promise<Result<object>> {
   const g = await adminGate(actor);
   if (!g.ok) return g;
@@ -132,11 +136,11 @@ export async function updateProduct(
   if (!prices.ok) return prices;
   const linked = prices.items.find((p) => p.kind === "producto" && p.stockItemId === stockItemId);
   if (linked) {
-    const u = await updatePrice(actor, linked.id, { name: v.name, amount: v.price, active: v.active });
+    const u = await updatePrice(actor, linked.id, { name: v.name, amount: v.price, cardAmount: v.cardPrice, active: v.active });
     if (!u.ok) return u;
   } else if (v.price !== undefined) {
     const cur = await getStockItem(actor.activeOrg!.id, stockItemId);
-    const c = await createPrice(actor, { kind: "producto", name: cur?.name ?? v.name ?? "", amount: v.price, stockItemId });
+    const c = await createPrice(actor, { kind: "producto", name: cur?.name ?? v.name ?? "", amount: v.price, cardAmount: v.cardPrice ?? null, stockItemId });
     if (!c.ok) return c;
   }
   return { ok: true };

@@ -9,6 +9,7 @@ export async function POST(req: Request) {
   const b = await bodyOf<{
     name: string;
     price: number;
+    cardPrice: number | null;
     unit: string;
     category: string;
     minQuantity: number;

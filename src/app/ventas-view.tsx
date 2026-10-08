@@ -3,7 +3,23 @@
 import { useState } from "react";
 import type { Actor } from "@/lib/domain/types";
 import { SECTION_TITLE } from "./ui";
-import { BTN, BTN_DARK, FIELD, Toast, call, fmtDate, fmtTime, localToday, money, usePoll, useToast, type SaleRow } from "./shared";
+import {
+  Amount,
+  BTN,
+  BTN_DARK,
+  FIELD,
+  PAYMENT_LABEL,
+  Toast,
+  call,
+  fmtDate,
+  fmtTime,
+  localToday,
+  money,
+  usePoll,
+  useToast,
+  type Payment,
+  type SaleRow,
+} from "./shared";
 
 interface CommissionRow {
   providerId: string | null;
@@ -50,7 +66,17 @@ export function VentasView({ actor }: { actor: Actor }) {
   const [toast, showToast] = useToast();
 
   const paid = (data?.sales ?? []).filter((s) => s.status === "paid");
-  const total = paid.reduce((n, s) => n + s.total, 0);
+  const cash = paid.filter((s) => s.paymentMethod === "efectivo").reduce((n, s) => n + s.cashTotal, 0);
+  const card = paid.filter((s) => s.paymentMethod === "tarjeta").reduce((n, s) => n + s.cardTotal, 0);
+  const unknown = paid.filter((s) => !s.paymentMethod);
+  const unknownCash = unknown.reduce((n, s) => n + s.cashTotal, 0);
+  const unknownCard = unknown.reduce((n, s) => n + s.cardTotal, 0);
+
+  async function setMethod(id: string, method: Payment) {
+    const r = await call(`/api/sales/${id}/payment`, "POST", { method });
+    if (!r.ok) return showToast(r.error ?? "No se pudo guardar.");
+    refresh();
+  }
   const multiDay = from !== to;
 
   async function voidSale(id: string) {
@@ -70,7 +96,7 @@ export function VentasView({ actor }: { actor: Actor }) {
         <div className="flex items-end gap-3">
           <div className="flex flex-col">
             <h1 className="font-display text-[22px] font-medium tracking-[-.01em]">Ventas</h1>
-            <p className="text-[13px] text-neutral-400">{paid.length ? `${paid.length} ventas · ${money(total)}` : "Sin ventas en el período."}</p>
+            <p className="text-[13px] text-neutral-400">{paid.length ? `${paid.length} ventas` : "Sin ventas en el período."}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -101,6 +127,18 @@ export function VentasView({ actor }: { actor: Actor }) {
           )}
         </div>
       </div>
+
+      {paid.length > 0 && (
+        <section className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <Tile label={PAYMENT_LABEL.efectivo} value={money(cash)} />
+          <Tile label={PAYMENT_LABEL.tarjeta} value={money(card)} />
+          <Tile
+            label={`Sin medio cargado (${unknown.length})`}
+            value={unknown.length ? money(unknownCash) : "—"}
+            sub={unknown.length && unknownCard !== unknownCash ? `o ${money(unknownCard)} si fue con tarjeta` : undefined}
+          />
+        </section>
+      )}
 
       {seesCommission && comm?.rows && comm.rows.length > 0 && (
         <section className="flex flex-col gap-2">
@@ -158,10 +196,21 @@ export function VentasView({ actor }: { actor: Actor }) {
                       {s.providerName ?? "Sin médica"}
                       {s.createdByName !== s.providerName && ` · cargó ${s.createdByName}`}
                       {seesCommission && s.status === "paid" && s.commissionAmount > 0 && ` · comisión ${money(s.commissionAmount)} (${s.commissionPct}%)`}
+                      {s.status === "paid" && s.paymentMethod && ` · ${PAYMENT_LABEL[s.paymentMethod]}`}
                       {s.status === "voided" && ` · anulada: ${s.voidReason}`}
                     </span>
+                    {s.status === "paid" && !s.paymentMethod && (
+                      <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px] text-neutral-500">
+                        ¿Cómo pagó?
+                        {(["efectivo", "tarjeta"] as Payment[]).map((m) => (
+                          <button key={m} className={BTN} onClick={() => setMethod(s.id, m)}>
+                            {PAYMENT_LABEL[m]}
+                          </button>
+                        ))}
+                      </span>
+                    )}
                   </span>
-                  <span className="tabular-nums">{money(s.total)}</span>
+                  <Amount cash={s.cashTotal} card={s.cardTotal} method={s.paymentMethod} />
                   {admin && s.status === "paid" && voiding !== s.id && (
                     <button className={BTN} onClick={() => setVoiding(s.id)}>
                       Anular
@@ -185,6 +234,16 @@ export function VentasView({ actor }: { actor: Actor }) {
           </ul>
         )}
       </section>
+    </div>
+  );
+}
+
+function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="flex flex-col gap-0.5 rounded-xl bg-surface px-4 py-3 shadow-sm">
+      <span className="text-[11.5px] uppercase tracking-[.06em] text-neutral-500">{label}</span>
+      <span className="text-[18px] font-medium tabular-nums">{value}</span>
+      {sub && <span className="text-[12px] text-neutral-400">{sub}</span>}
     </div>
   );
 }

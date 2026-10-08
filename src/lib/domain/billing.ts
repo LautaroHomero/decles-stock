@@ -10,6 +10,7 @@ import {
   markSaleVoided,
   setPricingRoles,
   updatePriceItem as persistPriceItem,
+  setSalePayment,
   commissionSummary,
   type CommissionRow,
   type BillingSource,
@@ -98,7 +99,7 @@ export async function listPrices(
 
 export async function createPrice(
   actor: Actor,
-  v: { kind: PriceKind; name: string; amount: number; providerId?: string | null; stockItemId?: string | null },
+  v: { kind: PriceKind; name: string; amount: number; cardAmount?: number | null; providerId?: string | null; stockItemId?: string | null },
   source: BillingSource = "manual",
 ): Promise<Result<{ itemId: string }>> {
   const g = await editCtx(actor, source);
@@ -107,6 +108,8 @@ export async function createPrice(
   const name = cleanName(v.name);
   if (!name) return fail("Falta el nombre.");
   if (!amountOk(v.amount)) return fail("El importe tiene que ser un número entero de pesos, 0 o más.");
+  if (v.cardAmount !== undefined && v.cardAmount !== null && !amountOk(v.cardAmount))
+    return fail("El precio con tarjeta tiene que ser un número entero de pesos, 0 o más.");
 
   let providerId: string | null = null;
   if (v.providerId) {
@@ -122,7 +125,7 @@ export async function createPrice(
     stockItemId = s.id;
   }
   try {
-    const itemId = await insertPriceItem(g.ctx.orgId, { kind: v.kind, name, amount: v.amount, providerId, stockItemId }, g.ctx.who);
+    const itemId = await insertPriceItem(g.ctx.orgId, { kind: v.kind, name, amount: v.amount, cardAmount: v.cardAmount ?? null, providerId, stockItemId }, g.ctx.who);
     return { ok: true, itemId };
   } catch (err) {
     if ((err as { code?: string }).code === "23505")
@@ -134,7 +137,7 @@ export async function createPrice(
 export async function updatePrice(
   actor: Actor,
   id: string,
-  v: { name?: string; amount?: number; active?: boolean; stockItemId?: string | null },
+  v: { name?: string; amount?: number; cardAmount?: number | null; active?: boolean; stockItemId?: string | null },
   source: BillingSource = "manual",
 ): Promise<Result<{ item: string; oldAmount: number; amount: number }>> {
   const g = await editCtx(actor, source);
@@ -145,6 +148,8 @@ export async function updatePrice(
   if (!name) return fail("Falta el nombre.");
   const amount = v.amount ?? cur.amount;
   if (!amountOk(amount)) return fail("El importe tiene que ser un número entero de pesos, 0 o más.");
+  const cardAmount = v.cardAmount === undefined ? cur.cardAmount : v.cardAmount;
+  if (cardAmount !== null && !amountOk(cardAmount)) return fail("El precio con tarjeta tiene que ser un número entero de pesos, 0 o más.");
   let stockItemId = cur.stockItemId;
   if (v.stockItemId !== undefined) {
     if (v.stockItemId && cur.kind !== "producto") return fail("Solo un producto puede vincularse al stock.");
@@ -152,7 +157,7 @@ export async function updatePrice(
     stockItemId = v.stockItemId;
   }
   try {
-    await persistPriceItem(g.ctx.orgId, cur, { name, amount, active: v.active ?? cur.active, stockItemId }, g.ctx.who);
+    await persistPriceItem(g.ctx.orgId, cur, { name, amount, cardAmount, active: v.active ?? cur.active, stockItemId }, g.ctx.who);
   } catch (err) {
     if ((err as { code?: string }).code === "23505") return fail(`Ya existe otro precio llamado "${name}".`, 409);
     throw err;
@@ -205,15 +210,33 @@ export async function recordSale(
     note?: string;
     /** Opcional: vencimiento del que se vendió (YYYY-MM-DD, DD/MM/AAAA o MM/AAAA); se descuenta primero de ese lote. */
     expiresOn?: string | null;
+    /** Opcional: "efectivo" (o transferencia) | "tarjeta". Sin medio se registra a precio efectivo. */
+    paymentMethod?: string | null;
   },
   source: BillingSource = "manual",
-): Promise<Result<{ saleId: string; item: string; quantity: number; unitPrice: number; total: number; stockLeft?: number }>> {
+): Promise<
+  Result<{
+    saleId: string;
+    item: string;
+    quantity: number;
+    unitPrice: number;
+    total: number;
+    cashTotal: number;
+    cardTotal: number;
+    paymentMethod: string | null;
+    stockLeft?: number;
+  }>
+> {
   const ctx = staffCtx(actor, source);
   if (!ctx) return fail("Solo el equipo del consultorio puede registrar ventas.", 403);
   const quantity = v.quantity === undefined ? 1 : posInt(v.quantity);
   if (!quantity) return fail("La cantidad tiene que ser un entero mayor a 0.");
   const item = await getPriceItem(ctx.orgId, v.itemId);
   if (!item || !item.active) return fail("Ese ítem no está en la lista de precios.", 404);
+  const rawMethod = v.paymentMethod ? (v.paymentMethod === "transferencia" ? "efectivo" : v.paymentMethod) : null;
+  if (rawMethod && rawMethod !== "efectivo" && rawMethod !== "tarjeta")
+    return fail("El medio de pago tiene que ser efectivo, transferencia o tarjeta.");
+  const paymentMethod = rawMethod as "efectivo" | "tarjeta" | null;
   const preferExpiry = parseExpiry(v.expiresOn);
   if (preferExpiry === undefined) return fail("No entiendo la fecha de vencimiento. Usá DD/MM/AAAA o MM/AAAA.");
   // Un médico solo vende lo general o lo propio.
@@ -244,9 +267,9 @@ export async function recordSale(
       return fail(`No alcanza el stock de "${s.name}": hay ${s.available} y querés vender ${quantity}.`, 409);
   }
 
-  const { id, total } = await insertSale(
+  const { id, total, cashTotal, cardTotal } = await insertSale(
     ctx.orgId,
-    { item, quantity, providerId, patientId: v.patientId ?? null, note: cleanName(v.note), commissionPct },
+    { item, quantity, providerId, patientId: v.patientId ?? null, note: cleanName(v.note), commissionPct, paymentMethod },
     ctx.who,
   );
 
@@ -265,7 +288,7 @@ export async function recordSale(
     }
     stockLeft = (await getStockItem(ctx.orgId, item.stockItemId))?.available;
   }
-  return { ok: true, saleId: id, item: item.name, quantity, unitPrice: item.amount, total, stockLeft };
+  return { ok: true, saleId: id, item: item.name, quantity, unitPrice: paymentMethod === "tarjeta" ? (item.cardAmount ?? item.amount) : item.amount, total, cashTotal, cardTotal, paymentMethod, stockLeft };
 }
 
 export async function voidSale(actor: Actor, saleId: string, reason: string, source: BillingSource = "manual"): Promise<Result<{ restoredUnits: number }>> {
@@ -311,4 +334,17 @@ export async function commissions(actor: Actor, from?: string, to?: string): Pro
   const rows = await commissionSummary(ctx.orgId, f, t);
   const mine = actor.activeOrg?.providerId;
   return { ok: true, from: f, to: t, rows: isAdmin ? rows : rows.filter((r) => r.providerId === mine) };
+}
+
+/** Completa el medio de pago de una venta que quedó sin cargar (cualquiera del equipo). */
+export async function completeSalePayment(actor: Actor, saleId: string, method: string): Promise<Result<object>> {
+  const ctx = staffCtx(actor, "manual");
+  if (!ctx) return fail("No autorizado.", 403);
+  const m = method === "transferencia" ? "efectivo" : method;
+  if (m !== "efectivo" && m !== "tarjeta") return fail("El medio de pago tiene que ser efectivo, transferencia o tarjeta.");
+  const sale = await getSale(ctx.orgId, saleId);
+  if (!sale) return fail("Venta no encontrada.", 404);
+  if (actor.role === "medico" && sale.providerId !== actor.activeOrg?.providerId) return fail("Esa venta no es tuya.", 403);
+  if (!(await setSalePayment(ctx.orgId, saleId, m))) return fail("Esa venta ya tiene medio de pago (o está anulada).", 409);
+  return { ok: true };
 }

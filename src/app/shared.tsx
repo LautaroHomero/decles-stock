@@ -113,7 +113,10 @@ export interface CatalogProduct {
   name: string;
   unit: string;
   category: string;
+  /** Precio efectivo / transferencia. */
   price: number | null;
+  /** Precio con tarjeta; null = igual al de efectivo. */
+  cardPrice: number | null;
   available: number;
   minQuantity: number;
   low: boolean;
@@ -144,6 +147,29 @@ export interface SaleRow {
   providerName: string | null;
   commissionPct: number;
   commissionAmount: number;
+  paymentMethod: Payment | null;
+  cashTotal: number;
+  cardTotal: number;
+}
+
+export type Payment = "efectivo" | "tarjeta";
+export const PAYMENT_LABEL: Record<Payment, string> = { efectivo: "Efectivo / transf.", tarjeta: "Tarjeta" };
+
+/** Precio con tarjeta efectivo (si no se cargó, es el mismo que efectivo). */
+export const cardOf = (p: { price: number | null; cardPrice: number | null }) => p.cardPrice ?? p.price ?? 0;
+
+/**
+ * Importe a mostrar: con medio conocido, ese precio; sin medio y con precios distintos, los dos.
+ */
+export function Amount({ cash, card, method, className = "" }: { cash: number; card: number; method: Payment | null; className?: string }) {
+  if (method === "tarjeta") return <span className={`tabular-nums ${className}`}>{money(card)}</span>;
+  if (method === "efectivo" || card === cash) return <span className={`tabular-nums ${className}`}>{money(cash)}</span>;
+  return (
+    <span className={`flex flex-col items-end leading-tight tabular-nums ${className}`}>
+      <span>{money(cash)}</span>
+      <span className="text-[11.5px] text-neutral-500">tarjeta {money(card)}</span>
+    </span>
+  );
 }
 
 export const unitsLabel = (n: number, unit: string) =>

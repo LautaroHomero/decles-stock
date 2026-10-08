@@ -25,10 +25,18 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
 - **Bloqueo**: 5 intentos fallidos → 15 min.
 - **Si el único admin perdió la contraseña**: `npm run user:reset-password -- <usuario>` en la máquina donde corre.
 
-## Comisiones
+## Precios, medio de pago y comisiones
 
-Cada médica tiene un % (lo fija el admin en Equipo). En cada venta se **congela** el % y el monto: cambiar
-el % después no reescribe ventas anteriores. Una venta anulada no suma comisión.
+- Cada producto tiene **precio efectivo/transferencia** (el mismo) y **precio con tarjeta** (vacío = igual).
+- Al vender, el medio de pago es **opcional** (botón o escrito en la hoja: "con tarjeta", "efectivo", "transferencia").
+  Si no se carga, la venta guarda los dos valores y Ventas muestra "$X, o $Y si fue con tarjeta"; se puede completar después.
+- Cada médica tiene un % (lo fija el admin en Equipo), **siempre sobre el precio en efectivo**: el recargo de tarjeta no
+  cambia la comisión y se sabe exacta aunque falte el medio. % y monto se **congelan** en la venta.
+
+## Primeros pasos (onboarding)
+
+Después del primer arranque, el admin ve un checklist de 5 pasos que se tildan solos al hacerlos: productos con precio,
+stock con vencimiento, médicas con comisión, secretaría y una venta de prueba. Se oculta y se reabre desde el menú de la cuenta.
 
 ## Instalación
 
@@ -66,7 +74,8 @@ Empezar de cero: `docker compose down -v && npm run db:up && npm run db:migrate 
 
 ```
 src/lib/db/migrations/   0001_core · 0002_stock · 0003_billing   (= Clavdia)
-                         0004_notifications · 0005_accounts_commissions   (nuevas)
+                         0004_notifications · 0005_accounts_commissions · 0006_user_aliases
+                         0007_payment_methods · 0008_onboarding   (nuevas)
 src/lib/auth/            session (cookie firmada + session_version), password (scrypt), actor
 src/lib/domain/
   accounts.ts      primer arranque, login, contraseña, equipo (alta/baja/reset/comisión)
@@ -74,14 +83,16 @@ src/lib/domain/
   billing.ts       = Clavdia + médica obligatoria y comisión congelada; resumen de comisiones
   products.ts      producto vendible = stock_item + price_list_item (alta/edición en un paso)
   notifications.ts avisos de vencimiento / vencido / stock bajo para las médicas
-  quick-sale.ts    intérprete SIN IA de la hoja de ventas
+  quick-sale.ts    intérprete SIN IA de la hoja: producto, cantidad, médica (con diminutivos/apodos) y medio de pago
+  onboarding.ts    "Primeros pasos" del admin
 ```
 
 ## Integración con Clavdia
 
 Diferencias concretas contra Clavdia; todo lo demás es igual:
 
-1. **Migraciones nuevas**: `0004_notifications.sql` y `0005_accounts_commissions.sql` (solo agregan tablas/columnas).
+1. **Migraciones nuevas**: `0004` a `0008` (solo agregan tablas/columnas). `price_list_items.amount` sigue siendo el
+   precio base (efectivo); `card_amount` es nuevo. `sales.total` = lo cobrado; `cash_total`/`card_total`/`payment_method` nuevos.
 2. **Login**: Clavdia entra con DNI/email + PIN. Al integrar, o se suma usuario+contraseña a Clavdia, o se completa
    `email`/`dni` de estas cuentas para que entren con el login de Clavdia. `session_version` conviene llevarlo igual.
 3. **`recordSale`** acepta `expiresOn` y, para productos, exige médica (`providerId`) y guarda la comisión.

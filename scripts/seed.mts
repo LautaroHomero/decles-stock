@@ -57,16 +57,16 @@ function must<T>(r: ({ ok: true } & T) | { ok: false; error: string }, what: str
 }
 
 const crema = must(
-  await createProduct(adminActor, { name: "Crema hidratante facial", price: 18500, minQuantity: 4, quantity: 6, expiresOn: day(18), lotCode: "CH-0925" }),
+  await createProduct(adminActor, { name: "Crema hidratante facial", price: 18500, cardPrice: 21300, minQuantity: 4, quantity: 6, expiresOn: day(18), lotCode: "CH-0925" }),
   "crema",
 );
 must(await addStock(adminActor, { itemId: crema.stockItemId, quantity: 10, expiresOn: day(240), lotCode: "CH-0426" }), "crema lote 2");
 
-must(await createProduct(adminActor, { name: "Protector solar FPS 50", price: 22000, minQuantity: 5, quantity: 3, expiresOn: day(300) }), "protector");
-must(await createProduct(adminActor, { name: "Sérum vitamina C", price: 31000, minQuantity: 2, quantity: 8, expiresOn: day(75), lotCode: "VC-12" }), "serum");
-const gel = must(await createProduct(adminActor, { name: "Gel de limpieza", price: 12000, minQuantity: 3, quantity: 9, expiresOn: day(400) }), "gel");
-must(await createProduct(adminActor, { name: "Crema Pindonga", price: 15900, minQuantity: 3, quantity: 12, expiresOn: day(200) }), "pindonga");
-must(await createProduct(adminActor, { name: "Contorno de ojos", price: 26500, minQuantity: 2, quantity: 5, expiresOn: day(150) }), "contorno");
+must(await createProduct(adminActor, { name: "Protector solar FPS 50", price: 22000, cardPrice: 25300, minQuantity: 5, quantity: 3, expiresOn: day(300) }), "protector");
+must(await createProduct(adminActor, { name: "Sérum vitamina C", price: 31000, cardPrice: 35600, minQuantity: 2, quantity: 8, expiresOn: day(75), lotCode: "VC-12" }), "serum");
+const gel = must(await createProduct(adminActor, { name: "Gel de limpieza", price: 12000, cardPrice: 13800, minQuantity: 3, quantity: 9, expiresOn: day(400) }), "gel");
+must(await createProduct(adminActor, { name: "Crema Pindonga", price: 15900, cardPrice: 18300, minQuantity: 3, quantity: 12, expiresOn: day(200) }), "pindonga");
+must(await createProduct(adminActor, { name: "Contorno de ojos", price: 26500, cardPrice: 30500, minQuantity: 2, quantity: 5, expiresOn: day(150) }), "contorno");
 
 // Un lote ya vencido (la app no deja ingresarlo así; se mete directo para la demo).
 await getSql()`
@@ -74,10 +74,12 @@ await getSql()`
   VALUES ('stl_seedexp', ${org.id}, ${gel.stockItemId}, 'GL-0225', 2, 4, ${day(-5)}, ${day(-200) + "T10:00:00"}, ${admin.id})`;
 
 // Un par de ventas de hoy.
-must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, providerId: laura.providerId }), "venta 1");
+must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, providerId: laura.providerId, paymentMethod: "tarjeta" }), "venta 1");
 must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, providerId: laura.providerId, expiresOn: day(240) }), "venta 2");
 
 const created = await refreshStockAlerts(org.id);
+// La demo ya tiene todo cargado: "Primeros pasos" arranca cerrado (se reabre desde el menú de la cuenta).
+await getSql()`UPDATE organizations SET onboarding_done = TRUE WHERE id = ${org.id}`;
 
 console.log(`
 Listo: ${ORG} con 6 productos, 2 ventas y ${created} avisos para las médicas.
