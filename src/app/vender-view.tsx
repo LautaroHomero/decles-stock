@@ -1,18 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { MagnifyingGlassIcon, MinusIcon, PlusIcon } from "@phosphor-icons/react";
+import { MagnifyingGlassIcon, MinusIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
-import { Pill, SECTION_TITLE, firstName, greeting } from "./ui";
+import { parseQuickSale } from "@/lib/domain/quick-sale";
+import { SECTION_TITLE, firstName, greeting } from "./ui";
 import {
   BTN_BIG,
   Toast,
   call,
-  daysUntil,
-  fmtDate,
   fmtTime,
   money,
-  unitsLabel,
   usePoll,
   useToast,
   type CatalogProduct,
@@ -21,83 +19,39 @@ import {
 } from "./shared";
 
 /**
- * Vender: buscar → tocar el producto → (cantidad / vencimiento, opcionales) → Registrar.
- * El precio lo pone el admin; el stock se descuenta solo, del lote que vence primero
- * salvo que se indique de cuál se vendió.
+ * Vender, lo más simple posible: escribir lo vendido en la hoja ("vendí 2 cremas
+ * pindonga") o tocar el producto en la lista. Solo nombre y precio: vencimientos y
+ * stock son cosa del admin y la médica. El stock se descuenta solo (lote que vence primero).
  */
 export function VenderView({ actor }: { actor: Actor }) {
   const [data, refresh] = usePoll<CatalogResponse>("/api/catalog", 20_000);
   const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[] }>("/api/sales", 30_000);
-  const [q, setQ] = useState("");
-  const [open, setOpen] = useState<string | null>(null);
   const [toast, showToast] = useToast();
 
-  const products = useMemo(() => {
-    const term = norm(q.trim());
-    const list = (data?.products ?? []).filter((p) => !term || norm(`${p.name} ${p.category}`).includes(term));
-    // Lo vendible primero.
-    return list.sort((a, b) => Number(sellable(b)) - Number(sellable(a)) || a.name.localeCompare(b.name));
-  }, [data, q]);
+  const sellable = useMemo(() => (data?.products ?? []).filter((p) => p.price !== null && p.priceItemId), [data]);
+
+  function onSold(msg: string) {
+    showToast(msg);
+    refresh();
+    refreshSales();
+  }
 
   const today = (sales?.sales ?? []).filter((s) => s.status === "paid");
-  const todayTotal = today.reduce((n, s) => n + s.total, 0);
 
   return (
-    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
+    <div className="mx-auto flex w-full max-w-[640px] flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8">
       <Toast msg={toast} />
-      <div>
-        <h1 className="font-display text-[22px] font-medium tracking-[-.01em]">
-          {greeting()}, {firstName(actor.name)}
-        </h1>
-        <p className="mt-1 text-[13.5px] text-neutral-400">Tocá el producto que vendiste.</p>
-      </div>
+      <h1 className="font-display text-[22px] font-medium tracking-[-.01em]">
+        {greeting()}, {firstName(actor.name)}
+      </h1>
 
-      <label className="flex h-12 items-center gap-2.5 rounded-lg border border-neutral-800 px-3.5 transition-colors focus-within:border-accent-700">
-        <MagnifyingGlassIcon size={18} className="text-neutral-500" />
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Buscar producto"
-          className="h-full flex-1 bg-transparent text-[15px] outline-none placeholder:text-neutral-600"
-        />
-      </label>
+      <Hoja products={sellable} onSold={onSold} onError={showToast} />
 
-      {!data ? (
-        <p className="text-[13px] text-neutral-500">Cargando…</p>
-      ) : products.length === 0 ? (
-        <p className="text-[13.5px] text-neutral-400">
-          {data.products.length === 0 ? "Todavía no hay productos cargados. El admin los carga desde Stock." : "Nada coincide con esa búsqueda."}
-        </p>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {products.map((p) => (
-            <ProductCard
-              key={p.stockItemId}
-              p={p}
-              open={open === p.stockItemId}
-              onToggle={() => setOpen(open === p.stockItemId ? null : p.stockItemId)}
-              onSold={(m) => {
-                setOpen(null);
-                setQ("");
-                showToast(m);
-                refresh();
-                refreshSales();
-              }}
-              onError={showToast}
-            />
-          ))}
-        </div>
-      )}
+      <ProductList products={sellable} loading={!data} onSold={onSold} onError={showToast} />
 
-      <section className="mt-2 flex flex-col gap-2">
-        <div className="flex items-baseline gap-2">
-          <h2 className={SECTION_TITLE}>{actor.role === "medico" ? "Tus ventas de hoy" : "Ventas de hoy"}</h2>
-          <span className="flex-1" />
-          {today.length > 0 && <span className="text-[13px] tabular-nums text-neutral-300">{money(todayTotal)}</span>}
-        </div>
-        {today.length === 0 ? (
-          <p className="text-[13px] text-neutral-500">Ninguna todavía.</p>
-        ) : (
+      {today.length > 0 && (
+        <section className="flex flex-col gap-1">
+          <h2 className={SECTION_TITLE}>Vendido hoy</h2>
           <ul className="flex flex-col">
             {today.map((s) => (
               <li key={s.id} className="flex items-baseline gap-3 border-b border-neutral-900 py-2 text-[13.5px] last:border-0">
@@ -105,20 +59,193 @@ export function VenderView({ actor }: { actor: Actor }) {
                 <span className="min-w-0 flex-1 truncate">
                   {s.quantity} × {s.itemName}
                 </span>
-                <span className="tabular-nums text-neutral-300">{money(s.total)}</span>
               </li>
             ))}
           </ul>
-        )}
-      </section>
+        </section>
+      )}
     </div>
   );
 }
 
-const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-const sellable = (p: CatalogProduct) => p.price !== null && p.available > 0;
+// ---------------------------------------------------------------------------
+// Hoja: texto libre → renglones → confirmar
+// ---------------------------------------------------------------------------
 
-function ProductCard({
+type Sellable = CatalogProduct & { id: string };
+
+function Hoja({
+  products,
+  onSold,
+  onError,
+}: {
+  products: CatalogProduct[];
+  onSold: (m: string) => void;
+  onError: (m: string) => void;
+}) {
+  const [text, setText] = useState("");
+  // Elecciones de la secretaria cuando el texto es ambiguo, por renglón (clave: el texto del renglón).
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const [dropped, setDropped] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+
+  const catalog: Sellable[] = useMemo(() => products.map((p) => ({ ...p, id: p.stockItemId })), [products]);
+  const lines = useMemo(
+    () =>
+      parseQuickSale(text, catalog)
+        .filter((l) => !dropped.has(l.text))
+        .map((l) => ({ ...l, match: l.match ?? catalog.find((p) => p.id === picked[l.text]) ?? null })),
+    [text, catalog, picked, dropped],
+  );
+  const ready = lines.length > 0 && lines.every((l) => l.match);
+  const total = lines.reduce((n, l) => n + (l.match?.price ?? 0) * l.quantity, 0);
+
+  async function registrar() {
+    setBusy(true);
+    const done: string[] = [];
+    for (const l of lines) {
+      const r = await call("/api/sales", "POST", { itemId: l.match!.priceItemId, quantity: l.quantity });
+      if (!r.ok) {
+        setBusy(false);
+        onError(`${l.match!.name}: ${r.error ?? "no se pudo registrar"}${done.length ? ` (lo anterior sí quedó registrado)` : ""}`);
+        // Saca de la hoja lo que ya se registró, para no duplicarlo al reintentar.
+        setDropped((d) => new Set([...d, ...lines.slice(0, done.length).map((x) => x.text)]));
+        if (done.length) onSold(`Registrado: ${done.join(", ")}`);
+        return;
+      }
+      done.push(`${l.quantity} × ${l.match!.name}`);
+    }
+    setBusy(false);
+    setText("");
+    setPicked({});
+    setDropped(new Set());
+    onSold(`Registrado: ${done.join(", ")}`);
+  }
+
+  return (
+    <section className="flex flex-col gap-3 rounded-xl bg-surface p-4 shadow-sm">
+      <textarea
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          setDropped(new Set());
+        }}
+        rows={3}
+        placeholder={"Escribí lo que vendiste.\nEj: vendí 2 cremas pindonga y un protector"}
+        className="w-full resize-none bg-transparent text-[16px] leading-relaxed outline-none placeholder:text-neutral-600"
+      />
+
+      {lines.length > 0 && (
+        <ul className="flex flex-col gap-2 border-t border-neutral-800 pt-3">
+          {lines.map((l) => (
+            <li key={l.text} className="flex flex-col gap-1.5">
+              {l.match ? (
+                <div className="flex items-center gap-3 text-[15px]">
+                  <span className="w-8 shrink-0 tabular-nums text-neutral-400">{l.quantity} ×</span>
+                  <span className="min-w-0 flex-1 truncate">{l.match.name}</span>
+                  <span className="tabular-nums text-neutral-300">{money((l.match.price ?? 0) * l.quantity)}</span>
+                  <button
+                    aria-label="Quitar"
+                    onClick={() => setDropped((d) => new Set([...d, l.text]))}
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-500 hover:bg-accent-900 hover:text-fg"
+                  >
+                    <XIcon size={14} />
+                  </button>
+                </div>
+              ) : l.candidates.length ? (
+                <>
+                  <span className="text-[13.5px] text-neutral-400">
+                    «{l.text}»: ¿cuál?
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {l.candidates.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => setPicked((p) => ({ ...p, [l.text]: c.id }))}
+                        className="rounded-pill border border-neutral-700 px-3 py-1.5 text-[13px] transition-colors hover:border-accent hover:bg-accent-900"
+                      >
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center gap-3 text-[13.5px] text-neutral-400">
+                  <span className="flex-1">No encontré «{l.text}». Buscalo en la lista de abajo.</span>
+                  <button aria-label="Quitar" onClick={() => setDropped((d) => new Set([...d, l.text]))} className="text-neutral-500 hover:text-fg">
+                    <XIcon size={14} />
+                  </button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {lines.length > 0 && (
+        <button onClick={registrar} disabled={!ready || busy} className={BTN_BIG}>
+          {busy ? "Registrando…" : ready ? `Registrar · ${money(total)}` : "Elegí los productos marcados"}
+        </button>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Lista: tocar el producto → cantidad → Registrar
+// ---------------------------------------------------------------------------
+
+const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+function ProductList({
+  products,
+  loading,
+  onSold,
+  onError,
+}: {
+  products: CatalogProduct[];
+  loading: boolean;
+  onSold: (m: string) => void;
+  onError: (m: string) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
+  const list = useMemo(() => {
+    const term = norm(q.trim());
+    return products.filter((p) => !term || norm(p.name).includes(term));
+  }, [products, q]);
+
+  if (loading) return <p className="text-[13px] text-neutral-500">Cargando…</p>;
+  if (!products.length) return <p className="text-[13.5px] text-neutral-400">Todavía no hay productos cargados.</p>;
+
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <h2 className={`${SECTION_TITLE} flex-1`}>O tocá el producto</h2>
+        <label className="flex h-9 w-[180px] items-center gap-2 rounded-md border border-neutral-800 px-2.5 focus-within:border-accent-700">
+          <MagnifyingGlassIcon size={14} className="text-neutral-500" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar" className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-neutral-600" />
+        </label>
+      </div>
+      {list.map((p) => (
+        <ProductRow
+          key={p.stockItemId}
+          p={p}
+          open={open === p.stockItemId}
+          onToggle={() => setOpen(open === p.stockItemId ? null : p.stockItemId)}
+          onSold={(m) => {
+            setOpen(null);
+            onSold(m);
+          }}
+          onError={onError}
+        />
+      ))}
+      {list.length === 0 && <p className="text-[13px] text-neutral-500">Nada con ese nombre.</p>}
+    </section>
+  );
+}
+
+function ProductRow({
   p,
   open,
   onToggle,
@@ -128,76 +255,44 @@ function ProductCard({
   p: CatalogProduct;
   open: boolean;
   onToggle: () => void;
-  onSold: (msg: string) => void;
-  onError: (msg: string) => void;
+  onSold: (m: string) => void;
+  onError: (m: string) => void;
 }) {
   const [qty, setQty] = useState(1);
-  const [expiry, setExpiry] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const can = sellable(p);
-  const soon = p.nextExpiry !== null && daysUntil(p.nextExpiry) <= 30;
+  const out = p.available === 0;
 
   async function sell() {
     setBusy(true);
-    const r = await call("/api/sales", "POST", { itemId: p.priceItemId, quantity: qty, expiresOn: expiry });
+    const r = await call("/api/sales", "POST", { itemId: p.priceItemId, quantity: qty });
     setBusy(false);
     if (!r.ok) return onError(r.error ?? "No se pudo registrar la venta.");
     setQty(1);
-    setExpiry(null);
-    const left = typeof r.stockLeft === "number" ? ` · quedan ${r.stockLeft}` : "";
-    onSold(`Listo: ${qty} × ${p.name}${left}`);
+    onSold(`Registrado: ${qty} × ${p.name}`);
   }
 
   return (
-    <div className={`overflow-hidden rounded-xl bg-surface shadow-sm transition-shadow ${open ? "shadow-md" : ""}`}>
+    <div className="overflow-hidden rounded-xl bg-surface shadow-sm">
       <button
         onClick={onToggle}
-        disabled={!can}
+        disabled={out}
         aria-expanded={open}
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-accent-900 disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-accent-900 disabled:cursor-not-allowed disabled:opacity-45"
       >
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[15px] font-medium">{p.name}</span>
-          <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-neutral-400">
-            {p.available > 0 ? <span>{unitsLabel(p.available, p.unit)}</span> : <span>Sin stock</span>}
-            {soon && p.nextExpiry && <Pill className="!py-0 !text-[11px]">vence {fmtDate(p.nextExpiry)}</Pill>}
-            {p.low && p.available > 0 && <Pill className="!py-0 !text-[11px]">quedan pocos</Pill>}
-          </span>
-        </span>
-        <span className="text-[15px] tabular-nums">{p.price === null ? <span className="text-[12.5px] text-neutral-500">sin precio</span> : money(p.price)}</span>
+        <span className="min-w-0 flex-1 truncate text-[15px]">{p.name}</span>
+        <span className="text-[14.5px] tabular-nums text-neutral-300">{out ? "sin stock" : money(p.price ?? 0)}</span>
       </button>
-
-      {open && can && (
-        <div className="flex animate-cl-in flex-col gap-4 border-t border-neutral-800 px-4 py-4">
-          <div className="flex items-center gap-3">
-            <span className="flex-1 text-[13.5px] text-neutral-300">Cantidad</span>
-            <button onClick={() => setQty((n) => Math.max(1, n - 1))} aria-label="Uno menos" className={STEP}>
-              <MinusIcon size={18} />
-            </button>
-            <span className="w-8 text-center text-[20px] tabular-nums">{qty}</span>
-            <button onClick={() => setQty((n) => Math.min(p.available, n + 1))} aria-label="Uno más" className={STEP} disabled={qty >= p.available}>
-              <PlusIcon size={18} />
-            </button>
-          </div>
-
-          {p.expiries.length > 1 && (
-            <div className="flex flex-col gap-2">
-              <span className="text-[12.5px] text-neutral-400">¿De qué vencimiento? (opcional)</span>
-              <div className="flex flex-wrap gap-2">
-                <Chip active={expiry === null} onClick={() => setExpiry(null)}>
-                  El que vence primero
-                </Chip>
-                {p.expiries.map((e) => (
-                  <Chip key={e.expiresOn} active={expiry === e.expiresOn} onClick={() => setExpiry(e.expiresOn)}>
-                    {fmtDate(e.expiresOn)} <span className="text-neutral-500">· {e.quantity}</span>
-                  </Chip>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <button onClick={sell} disabled={busy} className={BTN_BIG}>
-            {busy ? "Registrando…" : `Registrar venta · ${money((p.price ?? 0) * qty)}`}
+      {open && !out && (
+        <div className="flex animate-cl-in items-center gap-3 border-t border-neutral-800 px-4 py-3">
+          <button onClick={() => setQty((n) => Math.max(1, n - 1))} aria-label="Uno menos" className={STEP}>
+            <MinusIcon size={18} />
+          </button>
+          <span className="w-8 text-center text-[20px] tabular-nums">{qty}</span>
+          <button onClick={() => setQty((n) => Math.min(p.available, n + 1))} aria-label="Uno más" className={STEP} disabled={qty >= p.available}>
+            <PlusIcon size={18} />
+          </button>
+          <button onClick={sell} disabled={busy} className={`${BTN_BIG} !h-11 flex-1`}>
+            {busy ? "…" : `Registrar · ${money((p.price ?? 0) * qty)}`}
           </button>
         </div>
       )}
@@ -206,18 +301,4 @@ function ProductCard({
 }
 
 const STEP =
-  "flex h-11 w-11 items-center justify-center rounded-lg border border-neutral-800 text-neutral-200 transition-colors hover:border-accent-700 hover:bg-accent-900 disabled:opacity-30";
-
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      aria-pressed={active}
-      className={`rounded-pill border px-3 py-1.5 text-[12.5px] tabular-nums transition-colors ${
-        active ? "border-accent bg-accent-900 text-accent-200" : "border-neutral-800 text-neutral-300 hover:border-accent-700"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
+  "flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-neutral-800 text-neutral-200 transition-colors hover:border-accent-700 hover:bg-accent-900 disabled:opacity-30";

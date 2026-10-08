@@ -9,7 +9,7 @@ Clavdia cuando salga a producción sin migrar datos a mano.
 | Rol | Puede |
 | --- | --- |
 | **Admin** (cualquier rol con `admin_ids`) | Alta de productos con precio, ingresar lotes con vencimiento, editar precio/mínimo, dar de baja lotes (vencidos o pérdida), anular ventas, días de aviso de vencimiento |
-| **Secretaría** (`recepcion`) | Vender: buscar → tocar → (cantidad, vencimiento opcional) → Registrar. Ve stock y ventas |
+| **Secretaría** (`recepcion`) | Solo vender: escribe en la hoja ("vendí 2 cremas pindonga y un protector") o toca el producto. Ve nombre y precio, nada de vencimientos ni stock |
 | **Médica/o** (`medico`) | Vender igual que la secretaría + **campanita** con avisos de vencimientos y stock bajo |
 
 Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
@@ -55,6 +55,8 @@ src/lib/domain/
   billing.ts       = Clavdia + `expiresOn` opcional al vender; sin resúmenes de finanzas
   products.ts      nuevo: producto vendible = stock_item + price_list_item (alta/edición en un paso)
   notifications.ts nuevo: avisos de vencimiento / vencido / stock bajo para los médicos
+  quick-sale.ts    nuevo: intérprete SIN IA de la hoja de ventas (cantidad + producto por
+                   coincidencia de palabras, plurales y errores de tipeo; ante la duda pregunta)
 src/app/
   vender-view.tsx · inventario-view.tsx · ventas-view.tsx · bell.tsx · stock-app.tsx
   login/, ui.tsx, globals.css   (= Clavdia, recortados)

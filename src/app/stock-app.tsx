@@ -25,6 +25,8 @@ export function StockApp({ actor }: { actor: Actor }) {
   const isMedico = actor.role === "medico";
   // El admin arranca en el inventario (es quien carga); el resto, vendiendo.
   const [section, setSection] = useState<Section>(isAdmin ? "inventario" : "vender");
+  // La secretaría solo vende: el inventario (vencimientos, lotes) es del admin y la médica.
+  const tabs = TABS.filter((t) => t.id !== "inventario" || isAdmin || isMedico);
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-bg">
@@ -33,7 +35,7 @@ export function StockApp({ actor }: { actor: Actor }) {
           <Wordmark size={17} />
         </button>
         <nav className="flex h-full items-stretch gap-1 sm:gap-2" aria-label="Secciones">
-          {TABS.map((t) => {
+          {tabs.map((t) => {
             const active = section === t.id;
             return (
               <button
@@ -56,7 +58,7 @@ export function StockApp({ actor }: { actor: Actor }) {
 
       <main className="min-h-0 flex-1 overflow-y-auto">
         {section === "vender" && <VenderView actor={actor} />}
-        {section === "inventario" && <InventarioView />}
+        {section === "inventario" && (isAdmin || isMedico) && <InventarioView />}
         {section === "ventas" && <VentasView actor={actor} />}
       </main>
     </div>

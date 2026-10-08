@@ -64,6 +64,7 @@ must(await addStock(adminActor, { itemId: crema.stockItemId, quantity: 10, expir
 must(await createProduct(adminActor, { name: "Protector solar FPS 50", price: 22000, minQuantity: 5, quantity: 3, expiresOn: day(300) }), "protector");
 must(await createProduct(adminActor, { name: "Sérum vitamina C", price: 31000, minQuantity: 2, quantity: 8, expiresOn: day(75), lotCode: "VC-12" }), "serum");
 const gel = must(await createProduct(adminActor, { name: "Gel de limpieza", price: 12000, minQuantity: 3, quantity: 9, expiresOn: day(400) }), "gel");
+must(await createProduct(adminActor, { name: "Crema Pindonga", price: 15900, minQuantity: 3, quantity: 12, expiresOn: day(200) }), "pindonga");
 must(await createProduct(adminActor, { name: "Contorno de ojos", price: 26500, minQuantity: 2, quantity: 5, expiresOn: day(150) }), "contorno");
 
 // Un lote ya vencido (la app no deja ingresarlo así; se mete directo para la demo).
@@ -78,7 +79,7 @@ must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, expire
 const created = await refreshStockAlerts(org.id);
 
 console.log(`
-Listo: ${ORG} con 5 productos, 2 ventas y ${created} avisos para la médica.
+Listo: ${ORG} con 6 productos, 2 ventas y ${created} avisos para la médica.
 
   Rol            DNI        PIN
   Admin          11111111   1111
