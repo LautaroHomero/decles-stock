@@ -4,6 +4,8 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { CaretLeftIcon, CheckIcon, MinusIcon, PlusIcon, SquaresFourIcon, XIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { parseNote, suggest } from "@/lib/domain/quick-sale";
+import { parseExpense } from "@/lib/domain/expense-note";
+import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import { firstName, greeting } from "./ui";
 import { Toast, call, fmtTime, money, usePoll, useToast, type CatalogResponse, type Payment, type SaleRow } from "./shared";
 
@@ -115,6 +117,10 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[] }>("/api/sales", 30_000);
   const [toast, showToast] = useToast();
   const isMedico = actor.role === "medico";
+  // Egresos de plata: los anota la secretaría o el admin.
+  const canExpense = !isMedico;
+  const [expensesData, refreshExpenses] = usePoll<ExpensesResponse>("/api/expenses", 30_000);
+  const [expenseForm, setExpenseForm] = useState<{ expense?: Expense; initial?: { concept: string; amount: number } } | null>(null);
 
   const items: Item[] = useMemo(() => {
     const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [] }));
@@ -183,6 +189,8 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     }
     return { ...d, sellerId: pickSeller ?? d.sellerId, payment: d.payment ?? pickPay };
   }, [typed, items, sellers, fixedSeller, pickSeller, pickPay, chosen, unsureIs]);
+  // «pagué 5000 de luz» → es un egreso, no una atención.
+  const expense = useMemo(() => (canExpense ? parseExpense(typed) : null), [typed, canExpense]);
   const possible = preview ? sellersFor(preview.lines, sellers) : null;
   const notHers = !!preview && preview.lines.some((l) => !allowedFor(l.item, preview.sellerId));
   const missingSeller = !!preview && !isMedico && !preview.sellerId;
@@ -220,7 +228,26 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setTimeout(() => setFlash(null), 1400);
   }
 
+  async function saveExpense() {
+    if (!expense || busy) return;
+    if (!expense.concept || !expense.amount) return setExpenseForm({ initial: expense });
+    setBusy(true);
+    const r = await call("/api/expenses", "POST", expense);
+    setBusy(false);
+    if (!r.ok) return showToast(r.error ?? "No se pudo anotar el egreso.");
+    expenseDone(`Egreso · ${expense.concept} · ${money(expense.amount)}`);
+  }
+
+  function expenseDone(msg: string) {
+    setExpenseForm(null);
+    setFlash(msg);
+    setText("");
+    refreshExpenses();
+    setTimeout(() => setFlash(null), 1400);
+  }
+
   function go() {
+    if (expense) return saveExpense();
     if (preview && canSave && !busy) save(preview);
   }
 
@@ -229,17 +256,17 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const card = preview?.lines.reduce((n, l) => n + lineCard(l), 0) ?? 0;
 
   return (
-    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-7 px-5 pb-20 pt-10 text-[15px] leading-[1.45] sm:px-6 sm:pt-14">
+    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-7 px-5 pb-20 pt-6 text-[14px] leading-[1.45] sm:px-6 sm:pt-8">
       <Toast msg={toast} />
       {flash !== null && <Registered summary={flash} onClose={() => setFlash(null)} />}
 
       {mode === "idle" && (
         <div className="flex flex-col gap-6">
-          <h1 className="font-display text-[23px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[28px]">
+          <h1 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[22px]">
             {greeting()}, {firstName(actor.name)}
           </h1>
           <div className="flex flex-col gap-3">
-            <label htmlFor="anotar" className="text-[17px] font-semibold">
+            <label htmlFor="anotar" className="text-[15px] font-medium">
               ¿Qué querés anotar?
             </label>
             <textarea
@@ -270,7 +297,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                 }
               }}
               placeholder="Ej: María López, la atendió Laura, atención y peeling"
-              className="min-h-[96px] w-full resize-none rounded-[20px] border-2 border-neutral-800 bg-surface p-5 text-[16px] leading-[1.4] text-fg outline-none transition-colors placeholder:text-neutral-600 focus:border-accent-600 sm:text-[17px]"
+              className="min-h-[96px] w-full resize-none rounded-xl border border-neutral-800 bg-surface p-5 text-[16px] leading-[1.4] text-fg outline-none transition-colors placeholder:text-neutral-600 focus:border-accent-600 sm:text-[15px]"
             />
 
             {hints.length > 0 && (
@@ -280,7 +307,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     key={h.label + i}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => accept(h.text)}
-                    className={`rounded-full border-2 px-3.5 py-1.5 text-[14px] font-semibold transition-colors ${
+                    className={`rounded-full border px-3.5 py-1.5 text-[14px] font-medium transition-colors ${
                       i === 0 ? "border-accent-600 text-fg" : "border-neutral-800 text-neutral-300 hover:border-accent-600"
                     }`}
                   >
@@ -291,10 +318,21 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
               </div>
             )}
 
-            {preview ? (
-              <div className="flex animate-cl-in flex-col gap-3 rounded-[20px] border-2 border-neutral-800 px-5 py-4">
+            {expense ? (
+              <div className="flex animate-cl-in flex-col gap-1 rounded-xl border border-neutral-800 px-5 py-4">
+                <p className="text-[12px] uppercase tracking-[.06em] text-neutral-500">Egreso de plata</p>
+                <p className="flex items-baseline justify-between gap-3 text-[14px]">
+                  <b className="font-medium">{expense.concept || "¿En qué?"}</b>
+                  <span className="whitespace-nowrap tabular-nums">{expense.amount ? `− ${money(expense.amount)}` : "¿Cuánto?"}</span>
+                </p>
+                <button onClick={() => setExpenseForm({ initial: expense })} className="self-start pt-1 text-[13px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline">
+                  Corregir
+                </button>
+              </div>
+            ) : preview ? (
+              <div className="flex animate-cl-in flex-col gap-3 rounded-xl border border-neutral-800 px-5 py-4">
                 {preview.patient && !preview.patientUnsure && (
-                  <p className="text-[15px]">
+                  <p className="text-[14px]">
                     <span className="text-neutral-400">Paciente </span>
                     <b>{preview.patient}</b>
                   </p>
@@ -315,10 +353,10 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                 {(preview.lines.length > 0 || preview.unresolved.length > 0) && (
                   <ul className="flex flex-col gap-1">
                     {preview.lines.map((l, i) => (
-                      <li key={i} className="flex items-baseline justify-between gap-3 text-[15px]">
+                      <li key={i} className="flex items-baseline justify-between gap-3 text-[14px]">
                         <span>
                           {l.qty > 1 && <span className="tabular-nums text-neutral-400">{l.qty} × </span>}
-                          <b className="font-semibold">{l.item.name}</b>
+                          <b className="font-medium">{l.item.name}</b>
                           {l.item.kind === "pendiente" && <span className="text-[13px] text-neutral-400"> · no está cargado, va como pendiente</span>}
                           {!allowedFor(l.item, preview.sellerId) && <span className="text-[13px] text-accent"> · no es de esa médica</span>}
                           {l.item.kind === "producto" && l.qty > (l.item.available ?? 0) && (
@@ -384,13 +422,20 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                 </div>
               </div>
             ) : (
-              <p className="text-[13.5px] text-neutral-400">Sirve para pacientes y para ventas. Ej: «Gabriela vendió 2 cremas con tarjeta».</p>
+              <p className="text-[13.5px] text-neutral-400">
+                Sirve para pacientes y para ventas. Ej: «Gabriela vendió 2 cremas con tarjeta»
+                {canExpense && <> · y para egresos: «pagué 5000 de luz»</>}.
+              </p>
             )}
 
-            <button onClick={go} disabled={!canSave || busy || loading} className={CTA}>
+            <button onClick={go} disabled={expense ? busy : !canSave || busy || loading} className={CTA}>
               {busy
                 ? "Guardando…"
-                : !preview
+                : expense
+                  ? expense.concept && expense.amount
+                    ? `Guardar egreso · ${money(expense.amount)}`
+                    : "Completar el egreso"
+                  : !preview
                   ? "Guardar"
                   : nothing
                     ? "Falta qué se hizo"
@@ -400,7 +445,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                         ? "Elegí quién la atendió"
                         : `Guardar · ${money(preview.payment === "tarjeta" ? card : cash)}`}
             </button>
-            {preview && !nothing && (
+            {preview && !nothing && !expense && (
               <button
                 onClick={() => {
                   setDraft(preview);
@@ -419,8 +464,13 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
               disabled={loading}
               className={`${GHOST} min-h-[44px] gap-3`}
             >
-              <SquaresFourIcon size={22} /> Prefiero elegirlo de una lista
+              <SquaresFourIcon size={20} /> Prefiero elegirlo de una lista
             </button>
+            {canExpense && (
+              <button onClick={() => setExpenseForm({})} className={`${GHOST} min-h-[44px] gap-3`}>
+                <MinusIcon size={18} /> Anotar un egreso de plata
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -443,7 +493,17 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
         <Confirm items={items} draft={draft} setDraft={setDraft} sellers={sellers} isMedico={isMedico} busy={busy} onSave={() => save(draft)} onEdit={() => setMode("idle")} />
       )}
 
-      {mode === "idle" && <Today sales={sales?.sales ?? null} highlight={lastVisit} onOpenClose={onOpenClose} onEdit={setEditing} />}
+      {mode === "idle" && (
+        <Today
+          sales={sales?.sales ?? null}
+          expenses={canExpense ? (expensesData?.expenses ?? []) : []}
+          highlight={lastVisit}
+          onOpenClose={onOpenClose}
+          onEdit={setEditing}
+          onEditExpense={(e) => setExpenseForm({ expense: e })}
+        />
+      )}
+      {expenseForm && <ExpenseForm {...expenseForm} onClose={() => setExpenseForm(null)} onSaved={expenseDone} />}
       {editing && (
         <EditVisit
           sales={editing}
@@ -552,8 +612,8 @@ function Registered({ summary, onClose }: { summary: string; onClose: () => void
       <span className="cl-pop flex h-24 w-24 items-center justify-center rounded-full bg-success text-on-success shadow-lg">
         <CheckIcon size={52} weight="bold" />
       </span>
-      <span className="text-[24px] font-bold">¡Registrado!</span>
-      {summary && <span className="max-w-[480px] text-[15px] text-neutral-300">{summary}</span>}
+      <span className="text-[22px] font-medium">¡Registrado!</span>
+      {summary && <span className="max-w-[480px] text-[14px] text-neutral-300">{summary}</span>}
     </button>
   );
 }
@@ -607,7 +667,7 @@ function ManualView({
   return (
     <section className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
-        <button onClick={onBack} className="flex min-h-11 items-center gap-2 rounded-xl py-2 pl-1.5 pr-3.5 text-[15px] font-semibold hover:bg-neutral-900">
+        <button onClick={onBack} className="flex min-h-11 items-center gap-2 rounded-xl py-2 pl-1.5 pr-3.5 text-[14px] font-medium hover:bg-neutral-900">
           <CaretLeftIcon size={20} weight="bold" /> Volver
         </button>
         <input
@@ -615,16 +675,16 @@ function ManualView({
           onChange={(e) => setDraft({ ...draft, patient: e.target.value })}
           placeholder="Paciente (opcional)"
           aria-label="Paciente (opcional)"
-          className="w-[220px] rounded-xl border-2 border-neutral-800 bg-surface px-3 py-2 text-[15px] outline-none focus:border-accent-600"
+          className="w-[220px] rounded-xl border border-neutral-800 bg-surface px-3 py-2 text-[14px] outline-none focus:border-accent-600"
         />
       </div>
 
       {!fixedSeller && (
         <div className="flex flex-col gap-2.5">
-          <h2 className="text-[17px] font-bold">¿Quién la atendió?</h2>
+          <h2 className="text-[15px] font-medium">¿Quién la atendió?</h2>
           <div className="flex flex-wrap gap-2">
             {sellers.map((x) => (
-              <button key={x.id} onClick={() => chooseSeller(x.id)} aria-pressed={draft.sellerId === x.id} className={`${draft.sellerId === x.id ? CHIP_ON : CHIP} !px-5 !py-2.5 !text-[15px]`}>
+              <button key={x.id} onClick={() => chooseSeller(x.id)} aria-pressed={draft.sellerId === x.id} className={`${draft.sellerId === x.id ? CHIP_ON : CHIP} !px-5 !py-2.5 !text-[14px]`}>
                 {x.name}
               </button>
             ))}
@@ -633,10 +693,10 @@ function ManualView({
       )}
 
       <div className={`flex flex-col gap-4 transition-opacity ${missingSeller ? "pointer-events-none opacity-40" : ""}`} aria-disabled={missingSeller}>
-        <h2 className="text-[17px] font-bold">¿Qué se hizo o se vendió?</h2>
+        <h2 className="text-[15px] font-medium">¿Qué se hizo o se vendió?</h2>
         {groups.map((g) => (
           <div key={g.title} className="flex flex-col gap-2.5">
-            {groups.length > 1 && <h3 className="text-[12px] font-bold uppercase tracking-[.08em] text-neutral-500">{g.title}</h3>}
+            {groups.length > 1 && <h3 className="text-[12px] font-medium uppercase tracking-[.08em] text-neutral-500">{g.title}</h3>}
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               {g.list.map((it) => {
                 const line = draft.lines.find((l) => l.item.id === it.id);
@@ -644,12 +704,12 @@ function ManualView({
                 return (
                   <div
                     key={it.id}
-                    className={`flex min-h-[56px] items-center gap-2 rounded-[16px] border-2 pl-4 pr-2 transition-colors ${
+                    className={`flex min-h-[56px] items-center gap-2 rounded-xl border pl-4 pr-2 transition-colors ${
                       line ? "border-fg bg-fg text-bg" : "border-neutral-800 bg-surface hover:border-accent"
                     }`}
                   >
                     <button onClick={() => toggle(it)} aria-pressed={!!line} className="flex min-w-0 flex-1 flex-col py-2.5 text-left">
-                      <span className="text-[15px] font-semibold leading-tight">{it.name}</span>
+                      <span className="text-[14px] font-medium leading-tight">{it.name}</span>
                       <span className={`text-[13px] ${line ? "opacity-70" : "text-neutral-400"}`}>
                         {money(it.price)}
                         {out && " · sin stock cargado"}
@@ -660,7 +720,7 @@ function ManualView({
                         <button onClick={() => setQty(it.id, line.qty - 1)} aria-label="Uno menos" className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-black/10">
                           <MinusIcon size={16} weight="bold" />
                         </button>
-                        <span className="min-w-5 text-center text-[16px] font-bold tabular-nums">{line.qty}</span>
+                        <span className="min-w-5 text-center text-[15px] font-medium tabular-nums">{line.qty}</span>
                         <button onClick={() => setQty(it.id, line.qty + 1)} aria-label="Uno más" className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-black/10">
                           <PlusIcon size={16} weight="bold" />
                         </button>
@@ -676,9 +736,9 @@ function ManualView({
         {draft.lines
           .filter((l) => l.item.kind === "pendiente")
           .map((l) => (
-            <div key={l.item.id} className="flex items-center gap-3 rounded-[16px] border-2 border-dashed border-accent-700 px-4 py-2.5">
+            <div key={l.item.id} className="flex items-center gap-3 rounded-xl border border-dashed border-accent-700 px-4 py-2.5">
               <span className="min-w-0 flex-1">
-                <span className="block text-[15px] font-semibold">{l.item.name}</span>
+                <span className="block text-[14px] font-medium">{l.item.name}</span>
                 <span className="text-[13px] text-neutral-400">{l.item.price ? `Sin cargar · ${money(l.item.price)}` : "Sin cargar · el admin le pone precio"}</span>
               </span>
               <button aria-label={`Quitar ${l.item.name}`} onClick={() => toggle(l.item)} className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-neutral-900">
@@ -730,12 +790,12 @@ function AddPending({ onAdd, initial = "", compact }: { onAdd: (name: string, pr
   };
   if (!open)
     return (
-      <button onClick={() => setOpen(true)} className="self-start py-1 text-[14.5px] font-semibold text-accent underline-offset-4 hover:underline">
+      <button onClick={() => setOpen(true)} className="self-start py-1 text-[14.5px] font-medium text-accent underline-offset-4 hover:underline">
         ¿No está en la lista? Anotalo igual
       </button>
     );
   return (
-    <div className={`flex flex-col gap-2 ${compact ? "" : "rounded-[18px] border-2 border-neutral-800 p-4"}`}>
+    <div className={`flex flex-col gap-2 ${compact ? "" : "rounded-xl border border-neutral-800 p-4"}`}>
       {!compact && <span className="text-[14px] text-neutral-300">Escribí qué se hizo o vendió y, si lo sabés, cuánto se cobró. El admin después lo carga en la lista.</span>}
       <div className="flex flex-wrap gap-2">
         <input
@@ -744,7 +804,7 @@ function AddPending({ onAdd, initial = "", compact }: { onAdd: (name: string, pr
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && name.trim() && add()}
           placeholder="Ej: radiofrecuencia"
-          className="min-w-[180px] flex-1 rounded-xl border-2 border-neutral-800 bg-bg px-3 py-2 text-[15px] outline-none focus:border-accent-600"
+          className="min-w-[180px] flex-1 rounded-xl border border-neutral-800 bg-bg px-3 py-2 text-[14px] outline-none focus:border-accent-600"
         />
         <input
           value={price}
@@ -753,7 +813,7 @@ function AddPending({ onAdd, initial = "", compact }: { onAdd: (name: string, pr
           inputMode="numeric"
           placeholder="Precio $ (opcional)"
           aria-label="Cuánto se cobró (opcional)"
-          className="w-[170px] rounded-xl border-2 border-neutral-800 bg-bg px-3 py-2 text-[15px] outline-none focus:border-accent-600"
+          className="w-[170px] rounded-xl border border-neutral-800 bg-bg px-3 py-2 text-[14px] outline-none focus:border-accent-600"
         />
         <button disabled={!name.trim()} onClick={add} className={CHIP_ON + " disabled:opacity-40"}>
           Agregar
@@ -777,7 +837,7 @@ function SearchItems({ items, sellerId, onPick }: { items: Item[]; sellerId: str
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Buscar…"
-        className="rounded-xl border-2 border-neutral-800 bg-bg px-3 py-2 text-[15px] outline-none focus:border-accent-600"
+        className="rounded-xl border border-neutral-800 bg-bg px-3 py-2 text-[14px] outline-none focus:border-accent-600"
       />
       <div className="flex flex-wrap gap-2">
         {list.map((it) => (
@@ -856,15 +916,15 @@ function Confirm({
   };
 
   return (
-    <section className="flex animate-cl-in flex-col gap-6 rounded-3xl border-2 border-neutral-800 bg-surface p-5 sm:p-7">
+    <section className="flex animate-cl-in flex-col gap-6 rounded-xl border border-neutral-800 bg-surface p-5 sm:p-7">
       <div className="flex items-center gap-3">
-        <span className="rounded-full bg-tag-bg px-3.5 py-1 text-[13px] font-bold text-tag-fg">{isVisit ? "Paciente" : "Venta"}</span>
-        <span className="text-[15px] text-neutral-300">{editing ? "Editando lo anotado" : "¿Está bien así?"}</span>
+        <span className="rounded-full bg-tag-bg px-3.5 py-1 text-[13px] font-medium text-tag-fg">{isVisit ? "Paciente" : "Venta"}</span>
+        <span className="text-[14px] text-neutral-300">{editing ? "Editando lo anotado" : "¿Está bien así?"}</span>
       </div>
 
       {draft.patientUnsure && (
-        <div className="flex flex-col gap-3 rounded-2xl border-2 border-accent-700 p-4">
-          <span className="text-[15px]">
+        <div className="flex flex-col gap-3 rounded-xl border border-accent-700 p-4">
+          <span className="text-[14px]">
             ¿<b>«{draft.patient}»</b> es el nombre de la paciente, o es algo que se hizo o se vendió?
           </span>
           <div className="flex flex-wrap gap-2">
@@ -897,7 +957,7 @@ function Confirm({
           value={draft.patient}
           onChange={(e) => setDraft({ ...draft, patient: e.target.value, patientUnsure: false })}
           placeholder="Nombre (opcional)"
-          className="border-b-2 border-neutral-800 bg-transparent pb-1 text-[21px] font-bold leading-tight outline-none placeholder:font-semibold placeholder:text-neutral-600 focus:border-accent-600 sm:text-[24px]"
+          className="border-b-2 border-neutral-800 bg-transparent pb-1 text-[18px] font-medium leading-tight outline-none placeholder:font-medium placeholder:text-neutral-600 focus:border-accent-600 sm:text-[22px]"
         />
       </label>
 
@@ -909,7 +969,7 @@ function Confirm({
               <button onClick={() => setQty(i, l.qty - 1)} aria-label={l.qty === 1 ? `Quitar ${l.item.name}` : "Uno menos"} className={ROUND}>
                 {l.qty === 1 ? <XIcon size={18} weight="bold" /> : <MinusIcon size={18} weight="bold" />}
               </button>
-              <span className="min-w-8 text-center text-[19px] font-bold tabular-nums">{l.qty}</span>
+              <span className="min-w-8 text-center text-[16px] font-medium tabular-nums">{l.qty}</span>
               <button
                 onClick={() => setQty(i, l.qty + 1)}
                 aria-label="Uno más"
@@ -918,10 +978,10 @@ function Confirm({
                 <PlusIcon size={18} weight="bold" />
               </button>
             </span>
-            <span className="min-w-0 flex-1 text-[17px] font-bold leading-tight sm:text-[19px]">
+            <span className="min-w-0 flex-1 text-[15px] font-medium leading-tight sm:text-[16px]">
               {l.item.name}
               {notHers(l) && (
-                <span className="block text-[13.5px] font-semibold text-accent">
+                <span className="block text-[13.5px] font-medium text-accent">
                   {sellerName(l.sellerId ?? draft.sellerId)} no tiene asignado esto. Quitalo o cambiá la médica.
                 </span>
               )}
@@ -937,24 +997,24 @@ function Confirm({
               )}
             </span>
             {l.item.kind === "pendiente" ? (
-              <label className="flex items-center gap-1 rounded-xl border-2 border-neutral-800 px-2.5 py-1 focus-within:border-accent-600">
-                <span className="text-[15px] text-neutral-400">$</span>
+              <label className="flex items-center gap-1 rounded-xl border border-neutral-800 px-2.5 py-1 focus-within:border-accent-600">
+                <span className="text-[14px] text-neutral-400">$</span>
                 <input
                   value={l.item.price ? l.item.price.toLocaleString("es-AR") : ""}
                   onChange={(e) => setPrice(i, toPesos(e.target.value))}
                   inputMode="numeric"
                   placeholder="precio"
                   aria-label={`Cuánto se cobró ${l.item.name} (por unidad)`}
-                  className="w-[96px] bg-transparent text-right text-[15px] tabular-nums outline-none placeholder:text-neutral-600"
+                  className="w-[96px] bg-transparent text-right text-[14px] tabular-nums outline-none placeholder:text-neutral-600"
                 />
               </label>
             ) : (
-              <span className="text-[15px] tabular-nums text-neutral-300">{money((draft.payment === "tarjeta" ? cardOf(l.item) : l.item.price) * l.qty)}</span>
+              <span className="text-[14px] tabular-nums text-neutral-300">{money((draft.payment === "tarjeta" ? cardOf(l.item) : l.item.price) * l.qty)}</span>
             )}
           </li>
         ))}
         {draft.unresolved.map((u, k) => (
-          <li key={`u-${k}`} className="flex flex-col gap-2 rounded-2xl border-2 border-dashed border-neutral-700 p-4">
+          <li key={`u-${k}`} className="flex flex-col gap-2 rounded-xl border border-dashed border-neutral-700 p-4">
             <span className="text-[14px] text-neutral-300">
               {u.candidates.length ? <>«{u.text}»: ¿cuál?</> : <>No encontré «{u.text}» en la lista.</>}
             </span>
@@ -994,7 +1054,7 @@ function Confirm({
               }}
             />
           ) : (
-            <button onClick={() => setAdding(true)} className="py-1 text-[14px] font-semibold text-accent underline-offset-4 hover:underline">
+            <button onClick={() => setAdding(true)} className="py-1 text-[14px] font-medium text-accent underline-offset-4 hover:underline">
               + Agregar algo
             </button>
           )}
@@ -1023,7 +1083,7 @@ function Confirm({
             </div>
           </div>
         ) : (
-          <p className="text-[15px] text-neutral-300">
+          <p className="text-[14px] text-neutral-300">
             {whoNames.join(" y ") || "—"}
             {!isMedico && (
               <button onClick={() => setPickWho(true)} className="ml-3 text-[13.5px] text-accent underline-offset-4 hover:underline">
@@ -1053,7 +1113,7 @@ function Confirm({
       </div>
 
       <div>
-        <p className="font-display text-[26px] font-medium tracking-[-.02em] tabular-nums sm:text-[30px]">
+        <p className="font-display text-[22px] font-medium tracking-[-.02em] tabular-nums sm:text-[24px]">
           {money(draft.payment === "tarjeta" ? card : cash)}
         </p>
         {!draft.payment && card !== cash && <p className="text-[14px] text-neutral-400">o {money(card)} si paga con tarjeta</p>}
@@ -1090,14 +1150,18 @@ type TodaySale = SaleRow;
 
 function Today({
   sales,
+  expenses,
   highlight,
   onOpenClose,
   onEdit,
+  onEditExpense,
 }: {
   sales: TodaySale[] | null;
+  expenses: Expense[];
   highlight: string | null;
   onOpenClose: () => void;
   onEdit: (rows: SaleRow[]) => void;
+  onEditExpense: (e: Expense) => void;
 }) {
   const rows = useMemo(() => {
     const paid = (sales ?? []).filter((s) => s.status === "paid");
@@ -1119,9 +1183,30 @@ function Today({
         product: g.some((s) => s.kind === "producto"),
         total: g.reduce((n, s) => n + s.total, 0),
         rows: g,
+        createdAt: g[g.length - 1].createdAt,
+        expense: null as Expense | null,
       };
     });
   }, [sales]);
+  const all = useMemo(
+    () =>
+      [
+        ...rows,
+        ...expenses.map((e) => ({
+          key: e.id,
+          time: fmtTime(e.createdAt),
+          label: `Egreso · ${e.concept}`,
+          patient: false,
+          product: false,
+          total: -e.amount,
+          rows: [] as SaleRow[],
+          createdAt: e.createdAt,
+          expense: e as Expense | null,
+        })),
+      ].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [rows, expenses],
+  );
+  const outflow = expenses.reduce((n, e) => n + e.amount, 0);
   if (!sales) return null;
   const total = rows.reduce((n, r) => n + r.total, 0);
   const patients = rows.filter((r) => r.patient).length;
@@ -1130,7 +1215,7 @@ function Today({
   return (
     <section className="mt-6 flex flex-col">
       <div className="flex items-baseline justify-between gap-3 border-b border-neutral-800 pb-3">
-        <span className="text-[15px] text-neutral-300">
+        <span className="text-[14px] text-neutral-300">
           Hoy
           {rows.length > 0 && (
             <span className="text-neutral-500">
@@ -1139,25 +1224,31 @@ function Today({
             </span>
           )}
         </span>
-        <span className="whitespace-nowrap text-[17px] font-bold tabular-nums">{money(total)}</span>
+        <span className="whitespace-nowrap text-[15px] font-medium tabular-nums">{money(total)}</span>
       </div>
-      {rows.map((r) => (
+      {outflow > 0 && (
+        <div className="flex items-baseline justify-between gap-3 border-b border-neutral-800 py-2 text-[13px] text-neutral-400">
+          <span>Egresos · queda {money(total - outflow)}</span>
+          <span className="tabular-nums">− {money(outflow)}</span>
+        </div>
+      )}
+      {all.map((r) => (
         <button
           key={r.key}
-          onClick={() => onEdit(r.rows)}
+          onClick={() => (r.expense ? onEditExpense(r.expense) : onEdit(r.rows))}
           title="Tocá para editar"
-          className={`-mx-2 flex justify-between gap-4 rounded-lg border-b border-neutral-900 px-2 py-3.5 text-left text-[14px] transition-colors hover:bg-neutral-900 sm:text-[15px] ${r.key === highlight ? "cl-flash-row" : ""}`}
+          className={`-mx-2 flex justify-between gap-4 rounded-lg border-b border-neutral-900 px-2 py-3.5 text-left text-[14px] transition-colors hover:bg-neutral-900 sm:text-[14px] ${r.key === highlight ? "cl-flash-row" : ""}`}
         >
           <span className="min-w-0">
             <span className="mr-3.5 tabular-nums text-neutral-500">{r.time}</span>
             {r.label}
           </span>
-          <span className="whitespace-nowrap tabular-nums text-neutral-300">{money(r.total)}</span>
+          <span className="whitespace-nowrap tabular-nums text-neutral-300">{r.total < 0 ? `− ${money(-r.total)}` : money(r.total)}</span>
         </button>
       ))}
-      {!rows.length && <p className="py-4 text-[14px] text-neutral-500">Todavía no se anotó nada hoy.</p>}
-      {rows.length > 0 && <p className="pt-2 text-[13px] text-neutral-500">Tocá una fila para corregirla.</p>}
-      <button onClick={onOpenClose} className="mt-4 self-start py-2 text-[15px] font-semibold text-accent underline-offset-4 hover:underline">
+      {!all.length && <p className="py-4 text-[14px] text-neutral-500">Todavía no se anotó nada hoy.</p>}
+      {all.length > 0 && <p className="pt-2 text-[13px] text-neutral-500">Tocá una fila para corregirla.</p>}
+      <button onClick={onOpenClose} className="mt-4 self-start py-2 text-[14px] font-medium text-accent underline-offset-4 hover:underline">
         Ver el cierre del día →
       </button>
     </section>
@@ -1165,10 +1256,10 @@ function Today({
 }
 
 const CTA =
-  "flex min-h-[56px] items-center justify-center rounded-[18px] bg-accent px-6 text-[16px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:cursor-not-allowed disabled:bg-neutral-900 disabled:text-neutral-500 sm:text-[17px]";
+  "flex min-h-12 items-center justify-center rounded-lg border border-accent bg-accent px-5 text-[15px] font-medium text-on-accent transition-opacity hover:opacity-85 active:opacity-70 disabled:cursor-not-allowed disabled:border-neutral-800 disabled:bg-neutral-900 disabled:text-neutral-500";
 const GHOST =
-  "flex items-center justify-center rounded-[18px] border-2 border-neutral-800 px-5 text-[15px] font-semibold text-fg transition-colors hover:bg-neutral-900";
+  "flex items-center justify-center rounded-lg border border-neutral-800 px-4 text-[14px] text-neutral-300 transition-colors hover:border-accent-700 hover:bg-accent-900 hover:text-fg";
 const ROUND =
-  "flex h-[44px] w-[44px] items-center justify-center rounded-full border-2 border-neutral-700 text-fg transition-colors hover:bg-neutral-900 disabled:opacity-30";
-const CHIP = "rounded-full border-2 border-neutral-700 px-4 py-2 text-[14px] font-semibold transition-colors hover:border-accent";
-const CHIP_ON = "rounded-full border-2 border-accent bg-accent px-4 py-2 text-[14px] font-bold text-on-accent";
+  "flex h-9 w-9 items-center justify-center rounded-md border border-neutral-800 text-fg transition-colors hover:bg-accent-900 disabled:opacity-30";
+const CHIP = "rounded-pill border border-neutral-700 px-3 py-1.5 text-[13px] transition-colors hover:border-accent hover:bg-accent-900";
+const CHIP_ON = "rounded-pill border border-accent bg-accent px-3 py-1.5 text-[13px] text-on-accent";

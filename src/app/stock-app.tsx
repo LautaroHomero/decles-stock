@@ -43,11 +43,11 @@ export function StockApp({ actor }: { actor: Actor }) {
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-bg print:h-auto print:overflow-visible">
-      <header className="cl-no-print flex h-16 shrink-0 items-center gap-3 border-b border-neutral-900 bg-header px-4 text-fg sm:gap-8 sm:px-6">
+      <header className="cl-force-dark cl-no-print flex h-14 shrink-0 items-center gap-4 border-b border-neutral-800 bg-header px-4 text-fg sm:gap-8 sm:px-6">
         <button onClick={() => setSection("vender")} aria-label="Klavdia — Anotar" className="shrink-0">
-          <Wordmark size={20} />
+          <Wordmark size={17} />
         </button>
-        <nav className="-mx-1 flex h-full min-w-0 items-stretch gap-0.5 overflow-x-auto sm:gap-2" aria-label="Secciones">
+        <nav className="-mx-1 flex h-full min-w-0 items-stretch gap-1 overflow-x-auto sm:gap-2" aria-label="Secciones">
           {tabs.map((t) => {
             const active = section === t.id;
             return (
@@ -55,10 +55,10 @@ export function StockApp({ actor }: { actor: Actor }) {
                 key={t.id}
                 onClick={() => go(t.id)}
                 aria-current={active ? "page" : undefined}
-                className={`relative flex shrink-0 items-center px-2 text-[15.5px] font-semibold transition-colors sm:px-3 ${active ? "text-fg" : "text-neutral-500 hover:text-fg"}`}
+                className={`relative flex shrink-0 items-center px-2 text-[14px] transition-colors sm:px-3 ${active ? "text-fg" : "text-neutral-400 hover:text-fg"}`}
               >
                 {t.label}
-                {active && <span className="absolute inset-x-2 bottom-0 h-[3px] rounded-full bg-accent sm:inset-x-3" />}
+                {active && <span className="absolute inset-x-2 bottom-0 h-[2px] rounded-full bg-fg sm:inset-x-3" />}
               </button>
             );
           })}

@@ -28,9 +28,9 @@ export function Pendientes({ onChange }: { onChange?: () => void }) {
 
   return (
     <section className="mx-auto w-full max-w-[880px] px-4 pt-6 sm:px-6">
-      <div className="flex flex-col gap-3 rounded-[20px] border-2 border-accent-700 bg-surface p-5">
+      <div className="flex flex-col gap-3 rounded-xl border border-accent-700 bg-surface p-5">
         <div>
-          <h2 className="text-[18px] font-bold">Anotado sin cargar ({list.length})</h2>
+          <h2 className="text-[16px] font-medium">Anotado sin cargar ({list.length})</h2>
           <p className="text-[14px] text-neutral-400">
             Se anotó algo que no estaba en la lista. Decí qué es o crealo con su precio: ahí se completan el importe y la comisión.
           </p>
@@ -75,7 +75,7 @@ function PendingRow({ s, items, onDone }: { s: SaleRow; items: { id: string; nam
   return (
     <div className="flex flex-col gap-3 border-t border-neutral-800 pt-3">
       <div>
-        <p className="text-[16px] font-semibold">
+        <p className="text-[15px] font-medium">
           {s.quantity > 1 ? `${s.quantity} × ` : ""}«{s.itemName}»
         </p>
         <p className="text-[13.5px] text-neutral-400">
@@ -137,7 +137,7 @@ function PendingRow({ s, items, onDone }: { s: SaleRow; items: { id: string; nam
               <button
                 key={k}
                 onClick={() => setF({ ...f, kind: k })}
-                className={`rounded-xl border-2 px-3.5 py-1.5 text-[14px] font-semibold ${f.kind === k ? "border-accent bg-accent text-on-accent" : "border-neutral-800"}`}
+                className={`rounded-xl border px-3.5 py-1.5 text-[14px] font-medium ${f.kind === k ? "border-accent bg-accent text-on-accent" : "border-neutral-800"}`}
               >
                 {label}
               </button>

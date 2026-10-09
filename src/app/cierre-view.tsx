@@ -24,6 +24,9 @@ interface DayClose {
   total: number;
   byPayment: { efectivo: number; tarjeta: number; pending: number; pendingCard: number };
   providers: CloseProvider[];
+  expenses: { id: string; concept: string; amount: number; createdByName: string }[];
+  expensesTotal: number;
+  net: number;
 }
 
 const shift = (ymd: string, days: number) => {
@@ -50,18 +53,18 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
   const pay = c?.byPayment;
 
   return (
-    <div className="cl-print-area mx-auto flex w-full max-w-[720px] flex-col gap-8 px-5 pb-20 pt-10 text-[15px] leading-[1.45] sm:px-6 sm:pt-14">
+    <div className="cl-print-area mx-auto flex w-full max-w-[720px] flex-col gap-6 px-5 pb-20 pt-6 text-[14px] leading-[1.45] sm:px-6 sm:pt-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="mb-1.5 text-[15px] text-neutral-400">{longDate(date)}</p>
-          <h1 className="font-display text-[23px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[28px]">Cierre del día</h1>
+          <p className="mb-1.5 text-[14px] text-neutral-400">{longDate(date)}</p>
+          <h1 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[22px]">Cierre del día</h1>
         </div>
         <div className="cl-no-print flex items-center gap-1">
           <button onClick={() => setDate(shift(date, -1))} aria-label="Día anterior" className={NAV}>
             <CaretLeftIcon size={20} weight="bold" />
           </button>
           {date !== today && (
-            <button onClick={() => setDate(today)} className="min-h-12 rounded-xl px-3 text-[14px] font-semibold hover:bg-neutral-900">
+            <button onClick={() => setDate(today)} className="min-h-10 rounded-xl px-3 text-[14px] font-medium hover:bg-neutral-900">
               Hoy
             </button>
           )}
@@ -75,7 +78,7 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
         <p className="text-neutral-500">{data && !data.ok ? data.error : "Cargando…"}</p>
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
             <Stat big={String(c.patients)} label={c.patients === 1 ? "paciente" : "pacientes"} />
             <Stat big={String(c.practices)} label={c.practices === 1 ? "práctica" : "prácticas"} />
             <Stat big={money(c.total)} label={`cobrado${c.productSales ? ` · ${plural(c.productSales, "venta", "ventas")}` : ""}`} small />
@@ -95,16 +98,39 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
             </p>
           )}
 
+          {c.expenses.length > 0 && (
+            <section className="flex flex-col gap-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <h2 className="text-[16px] font-medium">Egresos</h2>
+                <span className="tabular-nums text-neutral-300">− {money(c.expensesTotal)}</span>
+              </div>
+              <ul className="flex flex-col">
+                {c.expenses.map((e) => (
+                  <li key={e.id} className="flex justify-between gap-3 border-b border-neutral-900 py-2 text-[14px] last:border-0">
+                    <span>
+                      {e.concept} <span className="text-neutral-500">· {e.createdByName}</span>
+                    </span>
+                    <span className="whitespace-nowrap tabular-nums text-neutral-300">− {money(e.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="flex justify-between gap-3 border-t border-neutral-800 pt-2 text-[15px] font-medium">
+                <span>Queda (cobrado − egresos)</span>
+                <span className="tabular-nums">{money(c.net)}</span>
+              </p>
+            </section>
+          )}
+
           <section className="flex flex-col gap-3">
-            <h2 className="text-[18px] font-bold">Por médica</h2>
+            <h2 className="text-[16px] font-medium">Por médica</h2>
             {c.providers.map((p) => (
-              <div key={p.providerId ?? "-"} className="flex flex-col gap-2.5 rounded-[20px] border-2 border-neutral-800 px-6 py-5">
+              <div key={p.providerId ?? "-"} className="flex flex-col gap-2.5 rounded-xl border border-neutral-800 p-4">
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className="text-[17px] font-bold sm:text-[17px]">{p.name}</span>
-                  <span className="whitespace-nowrap text-[15px] font-semibold sm:text-[16px]">{plural(p.patients, "paciente", "pacientes")}</span>
+                  <span className="text-[15px] font-medium sm:text-[15px]">{p.name}</span>
+                  <span className="whitespace-nowrap text-[14px] font-medium sm:text-[15px]">{plural(p.patients, "paciente", "pacientes")}</span>
                 </div>
-                {p.practices.length > 0 && <p className="text-[14px] text-neutral-300 sm:text-[15px]">{counts(p.practices)}</p>}
-                {p.products.length > 0 && <p className="text-[14px] text-neutral-300 sm:text-[15px]">Vendió: {counts(p.products)}</p>}
+                {p.practices.length > 0 && <p className="text-[14px] text-neutral-300 sm:text-[14px]">{counts(p.practices)}</p>}
+                {p.products.length > 0 && <p className="text-[14px] text-neutral-300 sm:text-[14px]">Vendió: {counts(p.products)}</p>}
                 <p className="text-[14px] tabular-nums text-neutral-400">{money(p.total)}</p>
               </div>
             ))}
@@ -112,10 +138,10 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
           </section>
 
           <div className="cl-no-print flex flex-wrap gap-3">
-            <button onClick={() => window.print()} className={`${BIG} bg-accent text-on-accent hover:brightness-105`}>
+            <button onClick={() => window.print()} className={`${BIG} bg-accent text-on-accent hover:opacity-85`}>
               Imprimir
             </button>
-            <button onClick={onOpenSales} className={`${BIG} border-2 border-neutral-800 font-semibold hover:bg-neutral-900`}>
+            <button onClick={onOpenSales} className={`${BIG} border border-neutral-800 font-medium hover:bg-neutral-900`}>
               Ver la lista completa
             </button>
           </div>
@@ -127,12 +153,12 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
 
 function Stat({ big, label, small }: { big: string; label: string; small?: boolean }) {
   return (
-    <div className="rounded-[20px] bg-surface p-5 sm:p-[22px]">
-      <div className={`font-display font-medium tabular-nums ${small ? "text-[19px] leading-[1.45] sm:text-[21px]" : "text-[30px] leading-tight"}`}>{big}</div>
-      <div className="text-[14px] text-neutral-300">{label}</div>
+    <div className="min-w-0 rounded-xl bg-surface p-3.5 sm:p-5">
+      <div className={`font-display font-medium tabular-nums ${small ? "truncate text-[15px] leading-[1.6] sm:text-[19px]" : "text-[22px] leading-tight"}`}>{big}</div>
+      <div className="truncate text-[12.5px] text-neutral-400 sm:text-[13.5px]">{label}</div>
     </div>
   );
 }
 
-const NAV = "flex h-12 w-12 items-center justify-center rounded-xl hover:bg-neutral-900 disabled:opacity-30";
-const BIG = "flex min-h-13 flex-[1_1_240px] items-center justify-center rounded-[18px] px-6 text-[15px] font-bold transition-[filter,background]";
+const NAV = "flex h-9 w-9 items-center justify-center rounded-xl hover:bg-neutral-900 disabled:opacity-30";
+const BIG = "flex min-h-11 flex-[1_1_240px] items-center justify-center rounded-xl px-6 text-[14px] font-medium transition-[filter,background]";

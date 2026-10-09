@@ -21,6 +21,7 @@ import {
   type Payment,
   type SaleRow,
 } from "./shared";
+import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 
 interface CommissionRow {
   providerId: string | null;
@@ -131,6 +132,12 @@ export function VentasView({ actor }: { actor: Actor }) {
   );
   const [toast, showToast] = useToast();
   const [editing, setEditing] = useState<SaleRow[] | null>(null);
+  // Egresos: los ven la secretaría y el admin (la médica no).
+  const seesExpenses = !isMedico;
+  const [exData, refreshEx] = usePoll<ExpensesResponse>(seesExpenses ? `/api/expenses?from=${from}&to=${to}` : "/api/expenses?from=1900-01-01", 30_000);
+  const expenses = seesExpenses && exData?.ok ? exData.expenses : [];
+  const outflow = expenses.reduce((n, e) => n + e.amount, 0);
+  const [exEdit, setExEdit] = useState<Expense | null>(null);
 
   const sales = useMemo(() => data?.sales ?? [], [data]);
   const paid = sales.filter((s) => s.status === "paid");
@@ -200,7 +207,7 @@ export function VentasView({ actor }: { actor: Actor }) {
   ].filter(Boolean);
 
   return (
-    <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-5 pb-20 pt-10 text-[14px] sm:px-6 sm:pt-12">
+    <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-5 pb-20 pt-6 text-[14px] sm:px-6 sm:pt-12">
       <Toast msg={toast} />
       {editing && (
         <EditVisit
@@ -216,17 +223,29 @@ export function VentasView({ actor }: { actor: Actor }) {
         />
       )}
 
+      {exEdit && (
+        <ExpenseForm
+          expense={exEdit}
+          onClose={() => setExEdit(null)}
+          onSaved={(msg) => {
+            setExEdit(null);
+            showToast(msg + ".");
+            refreshEx();
+          }}
+        />
+      )}
+
       <div className="flex flex-wrap items-center gap-4">
-        <h1 className="font-display text-[23px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[28px]">Ventas</h1>
+        <h1 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[22px]">Ventas</h1>
         <span className="flex-1" />
-        <div className="flex rounded-2xl border-2 border-neutral-800 p-1" role="tablist" aria-label="Período">
+        <div className="flex rounded-xl border border-neutral-800 p-1" role="tablist" aria-label="Período">
           {periods.map(([id, text]) => (
             <button
               key={id}
               role="tab"
               aria-selected={period === id}
               onClick={() => pick(id)}
-              className={`min-h-11 rounded-xl px-5 text-[13.5px] font-semibold transition-colors ${
+              className={`min-h-11 rounded-xl px-5 text-[13.5px] font-medium transition-colors ${
                 period === id ? "bg-accent text-on-accent" : "text-neutral-400 hover:text-fg"
               }`}
             >
@@ -247,7 +266,7 @@ export function VentasView({ actor }: { actor: Actor }) {
               onClick={() => setCalOpen((o) => !o)}
               aria-expanded={calOpen}
               aria-label="Elegir un día en el calendario"
-              className="mx-auto flex min-h-12 max-w-full items-center justify-center gap-2.5 rounded-xl px-4 text-[15px] font-semibold transition-colors hover:bg-neutral-900"
+              className="mx-auto flex min-h-10 max-w-full items-center justify-center gap-2.5 rounded-xl px-4 text-[14px] font-medium transition-colors hover:bg-neutral-900"
             >
               <CalendarBlankIcon size={20} className="shrink-0 text-neutral-400" />
               <span className="truncate">{label(period, from, to)}</span>
@@ -271,17 +290,17 @@ export function VentasView({ actor }: { actor: Actor }) {
           </button>
         </div>
         {!isCurrent && (
-          <button onClick={() => setAnchor(today)} className="py-1 text-[13.5px] font-semibold text-accent underline-offset-4 hover:underline">
+          <button onClick={() => setAnchor(today)} className="py-1 text-[13.5px] font-medium text-accent underline-offset-4 hover:underline">
             Volver a {period === "dia" ? "hoy" : period === "semana" ? "esta semana" : "este mes"}
           </button>
         )}
       </div>
 
       {/* Lo cobrado */}
-      <section className="flex flex-col gap-5 rounded-[24px] bg-surface p-6">
+      <section className="flex flex-col gap-5 rounded-xl bg-surface p-6">
         <div className="flex flex-col gap-1">
           <span className="text-[14px] text-neutral-400">Cobrado</span>
-          <span className="font-display text-[28px] font-medium leading-none tracking-[-.02em] tabular-nums sm:text-[32px]">
+          <span className="font-display text-[22px] font-medium leading-none tracking-[-.02em] tabular-nums sm:text-[24px]">
             {data ? money(total) : "…"}
           </span>
           <span className="text-[14px] text-neutral-300">{data ? (paid.length ? counts.join(" · ") : "No se anotó nada.") : " "}</span>
@@ -297,34 +316,44 @@ export function VentasView({ actor }: { actor: Actor }) {
             />
           </div>
         )}
+        {outflow > 0 && (
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-neutral-800 pt-4 text-[14px]">
+            <span className="text-neutral-400">
+              Egresos <span className="tabular-nums text-neutral-300">− {money(outflow)}</span>
+            </span>
+            <span>
+              Queda <b className="font-medium tabular-nums">{money(total - outflow)}</b>
+            </span>
+          </div>
+        )}
         {period !== "dia" && paid.length > 0 && <DayBars from={from} to={to} today={today} sales={paid} onPick={openDay} />}
       </section>
 
       {seesCommission && comm?.rows && comm.rows.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-[17px] font-bold">{admin ? "Comisiones" : "Tu comisión"}</h2>
-          <div className="overflow-x-auto rounded-[20px] border-2 border-neutral-800 px-5">
+          <h2 className="text-[15px] font-medium">{admin ? "Comisiones" : "Tu comisión"}</h2>
+          <div className="overflow-x-auto rounded-xl border border-neutral-800 px-5">
             <table className="w-full text-[13.5px]">
               <thead>
-                <tr className="text-left text-[13px] font-bold uppercase tracking-[.06em] text-neutral-500">
-                  <th className="py-3 font-bold">Médica</th>
-                  <th className="py-3 text-right font-bold">Cobrado</th>
-                  <th className="py-3 text-right font-bold">Comisión</th>
+                <tr className="text-left text-[13px] font-medium uppercase tracking-[.06em] text-neutral-500">
+                  <th className="py-3 font-medium">Médica</th>
+                  <th className="py-3 text-right font-medium">Cobrado</th>
+                  <th className="py-3 text-right font-medium">Comisión</th>
                 </tr>
               </thead>
               <tbody>
                 {comm.rows.map((r) => (
                   <tr key={r.providerId ?? "none"} className="border-t border-neutral-900">
-                    <td className="py-3 font-semibold">{r.providerName}</td>
+                    <td className="py-3 font-medium">{r.providerName}</td>
                     <td className="py-3 text-right tabular-nums">{money(r.total)}</td>
-                    <td className="py-3 text-right font-bold tabular-nums">{money(r.commission)}</td>
+                    <td className="py-3 text-right font-medium tabular-nums">{money(r.commission)}</td>
                   </tr>
                 ))}
                 {admin && comm.rows.length > 1 && (
                   <tr className="border-t border-neutral-800">
                     <td className="py-3 text-neutral-400">Total</td>
                     <td className="py-3 text-right tabular-nums">{money(comm.rows.reduce((n, r) => n + r.total, 0))}</td>
-                    <td className="py-3 text-right font-bold tabular-nums">{money(comm.rows.reduce((n, r) => n + r.commission, 0))}</td>
+                    <td className="py-3 text-right font-medium tabular-nums">{money(comm.rows.reduce((n, r) => n + r.commission, 0))}</td>
                   </tr>
                 )}
               </tbody>
@@ -336,7 +365,7 @@ export function VentasView({ actor }: { actor: Actor }) {
       {/* Mes / semana: día por día */}
       {period !== "dia" && days.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-[17px] font-bold">Día por día</h2>
+          <h2 className="text-[15px] font-medium">Día por día</h2>
           <div className="flex flex-col">
             {days.map(([d, x]) => (
               <button
@@ -345,12 +374,12 @@ export function VentasView({ actor }: { actor: Actor }) {
                 className="flex min-h-[44px] items-center gap-4 border-b border-neutral-900 px-1 text-left transition-colors hover:bg-neutral-900"
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[14px] font-semibold">{d === today ? "Hoy" : cap(dayName(d))}</span>
+                  <span className="block text-[14px] font-medium">{d === today ? "Hoy" : cap(dayName(d))}</span>
                   <span className="text-[13px] text-neutral-400">
                     {x.visits.size} {x.visits.size === 1 ? "anotación" : "anotaciones"}
                   </span>
                 </span>
-                <span className="text-[14px] font-semibold tabular-nums">{money(x.total)}</span>
+                <span className="text-[14px] font-medium tabular-nums">{money(x.total)}</span>
                 <CaretRightIcon size={18} className="text-neutral-500" />
               </button>
             ))}
@@ -358,10 +387,36 @@ export function VentasView({ actor }: { actor: Actor }) {
         </section>
       )}
 
+      {expenses.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-[15px] font-medium">Egresos</h2>
+          <div className="flex flex-col">
+            {expenses.map((e) => {
+              const editable = admin || e.createdAt.slice(0, 10) === today;
+              return (
+                <button
+                  key={e.id}
+                  disabled={!editable}
+                  onClick={() => setExEdit(e)}
+                  className="flex items-baseline justify-between gap-4 border-b border-neutral-900 px-1 py-2.5 text-left transition-colors enabled:hover:bg-neutral-900"
+                >
+                  <span className="min-w-0">
+                    <span className="mr-3 tabular-nums text-neutral-500">{period === "dia" ? fmtTime(e.createdAt) : `${e.createdAt.slice(8, 10)}/${e.createdAt.slice(5, 7)}`}</span>
+                    {e.concept}
+                    <span className="text-neutral-500"> · {e.createdByName}</span>
+                  </span>
+                  <span className="whitespace-nowrap tabular-nums text-neutral-300">− {money(e.amount)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* Día: el detalle */}
       {period === "dia" && data && visits.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-[17px] font-bold">Detalle</h2>
+          <h2 className="text-[15px] font-medium">Detalle</h2>
           <div className="flex flex-col gap-2.5">
             {visits.map((v) => (
               <VisitCard
@@ -437,11 +492,11 @@ function VisitCard({
   const items = v.sales.map(itemLabel).join(", ");
 
   return (
-    <div className={`flex flex-col gap-3 rounded-[20px] bg-surface px-5 py-4 ${voided ? "opacity-50" : ""}`}>
+    <div className={`flex flex-col gap-3 rounded-xl bg-surface px-5 py-4 ${voided ? "opacity-50" : ""}`}>
       <div className="flex items-start gap-4">
         <span className="pt-0.5 text-[13.5px] tabular-nums text-neutral-500">{v.time}</span>
         <span className="min-w-0 flex-1">
-          <span className={`block text-[15px] font-semibold leading-snug ${voided ? "line-through" : ""}`}>{v.patient ?? items}</span>
+          <span className={`block text-[14px] font-medium leading-snug ${voided ? "line-through" : ""}`}>{v.patient ?? items}</span>
           {v.patient && <span className={`block text-[13.5px] text-neutral-300 ${voided ? "line-through" : ""}`}>{items}</span>}
           <span className="mt-0.5 block text-[13px] text-neutral-400">
             {[
@@ -455,7 +510,7 @@ function VisitCard({
               .join(" · ")}
           </span>
         </span>
-        {!voided && <Amount cash={cashT} card={cardT} method={pending.length ? null : method} className="text-[14px] font-semibold" />}
+        {!voided && <Amount cash={cashT} card={cardT} method={pending.length ? null : method} className="text-[14px] font-medium" />}
       </div>
 
       {!voided && (pending.length > 0 || admin || canEdit) && !voiding && (
@@ -499,14 +554,14 @@ function VisitCard({
 }
 
 const NAV =
-  "flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border-2 border-neutral-800 text-fg transition-colors hover:bg-neutral-900 disabled:opacity-25 disabled:hover:bg-transparent";
-const CHIP = "rounded-full border-2 border-neutral-800 px-3.5 py-1.5 text-[13px] font-semibold transition-colors hover:border-accent-600";
+  "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-neutral-800 text-fg transition-colors hover:bg-neutral-900 disabled:opacity-25 disabled:hover:bg-transparent";
+const CHIP = "rounded-full border border-neutral-800 px-3.5 py-1.5 text-[13px] font-medium transition-colors hover:border-accent-600";
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <span className="truncate text-[13px] text-neutral-400">{label}</span>
-      <span className="truncate text-[16px] font-semibold tabular-nums">{value}</span>
+      <span className="truncate text-[15px] font-medium tabular-nums">{value}</span>
       {sub && <span className="text-[14px] leading-snug text-neutral-500">{sub}</span>}
     </div>
   );
@@ -636,7 +691,7 @@ function Calendar({
   return (
     <div
       ref={ref}
-      className="absolute left-1/2 top-14 z-30 w-[340px] max-w-[calc(100vw-32px)] -translate-x-1/2 animate-cl-in rounded-[20px] border-2 border-neutral-800 bg-surface p-4 shadow-lg"
+      className="absolute left-1/2 top-14 z-30 w-[340px] max-w-[calc(100vw-32px)] -translate-x-1/2 animate-cl-in rounded-xl border border-neutral-800 bg-surface p-4 shadow-lg"
       role="dialog"
       aria-label="Calendario"
     >
@@ -644,7 +699,7 @@ function Calendar({
         <button aria-label="Mes anterior" onClick={() => move(-1)} className={CAL_NAV}>
           <CaretLeftIcon size={14} />
         </button>
-        <span className="flex-1 text-center text-[14px] font-semibold">{cap(`${MONTH[f.getMonth()]} ${f.getFullYear()}`)}</span>
+        <span className="flex-1 text-center text-[14px] font-medium">{cap(`${MONTH[f.getMonth()]} ${f.getFullYear()}`)}</span>
         <button aria-label="Mes siguiente" onClick={() => move(1)} disabled={!canNext} className={CAL_NAV}>
           <CaretRightIcon size={14} />
         </button>
@@ -682,7 +737,7 @@ function Calendar({
         </span>
         <span className="tabular-nums">{data ? `Mes: ${money(monthTotal)}` : "…"}</span>
       </div>
-      <button onClick={() => onPick(today)} className="mt-2 min-h-11 w-full rounded-xl text-[13px] font-semibold text-neutral-200 transition-colors hover:bg-neutral-900">
+      <button onClick={() => onPick(today)} className="mt-2 min-h-11 w-full rounded-xl text-[13px] font-medium text-neutral-200 transition-colors hover:bg-neutral-900">
         Ir a hoy
       </button>
     </div>

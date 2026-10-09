@@ -1,10 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Figtree, Unbounded } from "next/font/google";
+import { Inter, Unbounded } from "next/font/google";
 import "./globals.css";
 
-const figtree = Figtree({ subsets: ["latin"], weight: ["400", "500", "600", "700"], variable: "--font-figtree" });
+const inter = Inter({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-inter" });
 // Fuente de marca (wordmark кlavdia). El subset cyrillic es obligatorio (la к).
-const unbounded = Unbounded({ subsets: ["latin", "cyrillic"], weight: ["500", "600"], variable: "--font-unbounded" });
+const unbounded = Unbounded({ subsets: ["latin", "cyrillic"], weight: ["500"], variable: "--font-unbounded" });
 
 export const metadata: Metadata = {
   title: "Klavdia · Stock",
@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0c0c0d",
+  themeColor: "#0a0a0a",
   viewportFit: "cover",
   width: "device-width",
   initialScale: 1,
@@ -25,7 +25,7 @@ const THEME_BOOT = `try{var t=localStorage.getItem("clavdia_theme");document.doc
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="es" className={`h-full ${figtree.variable} ${unbounded.variable}`} data-theme="dark" suppressHydrationWarning>
+    <html lang="es" className={`h-full ${inter.variable} ${unbounded.variable}`} data-theme="dark" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
       </head>

@@ -1,91 +1,93 @@
 @import "tailwindcss";
 
 /*
- * Klavdia · Stock — paleta "Noche y champagne" (oscuro por defecto) con su versión clara.
+ * Klavdia — sistema monocromo (negro y blanco), tema oscuro por defecto.
  *
- * Los valores crudos viven en variables `--cl-*` por tema (`data-theme` en <html>) y el
- * `@theme inline` de abajo los expone como utilidades de Tailwind. Los ramps neutral/accent
- * están INVERTIDOS entre temas a propósito: el mismo nombre sirve en los dos (900 = fondo
- * tenue / hover, 800 = bordes, 400 = texto secundario, 300/200 = texto sobre tintes).
- * `accent` es el champagne: botones principales (`bg-accent text-on-accent`) y foco.
+ * Los valores crudos viven en variables `--cl-*` por tema (`data-theme` en
+ * <html>) y el `@theme inline` de abajo los expone como utilidades de
+ * Tailwind. Los ramps neutral/accent están INVERTIDOS entre temas a
+ * propósito: el mismo nombre sirve en los dos (900 = fondo tenue / hover,
+ * 800 = bordes, 400 = texto secundario, 300/200 = texto sobre tintes).
+ *
+ * La única excepción al monocromo es la esfera del dictado (ver `.cl-orb`).
  */
 
 :root,
 :root[data-theme="dark"],
 .cl-force-dark {
   color-scheme: dark;
-  --cl-bg: #0c0c0d;
-  --cl-surface: #161618;
-  --cl-canvas: #08080a;
-  --cl-header: #0c0c0d;
-  --cl-fg: #f5f3f0;
-  --cl-accent: #f2d4bc;
-  --cl-on-accent: #0c0c0d;
-  --cl-success: #8fdca8;
-  --cl-on-success: #0c0c0d;
-  --cl-tag-bg: #23303a;
-  --cl-tag-fg: #bfe0f5;
-  --cl-divider: rgba(245, 243, 240, 0.12);
-  --cl-n100: #f5f3f0;
-  --cl-n200: #e8e5e1;
-  --cl-n300: #d6d4d0;
-  --cl-n400: #b9b7b3;
-  --cl-n500: #9e9ca3;
-  --cl-n600: #8e8e95;
-  --cl-n700: #4a4a50;
-  --cl-n800: #34343a;
-  --cl-n900: #1e1e21;
-  --cl-a100: #fff1e6;
-  --cl-a200: #ffe6d2;
-  --cl-a300: #f2d4bc;
-  --cl-a400: #e3c0a4;
-  --cl-a500: #cfa98a;
-  --cl-a600: #a88870;
-  --cl-a700: #6e5a4b;
-  --cl-a800: #3a322c;
-  --cl-a900: #221e1b;
-  --cl-shadow-sm: 0 0 0 1px #26262a;
-  --cl-shadow-md: 0 0 0 1px #2e2e32, 0 8px 24px rgba(0, 0, 0, 0.55);
-  --cl-shadow-lg: 0 0 0 1px #3a3a3f, 0 16px 40px rgba(0, 0, 0, 0.65);
-  --cl-ring: rgba(242, 212, 188, 0.45);
+  --cl-bg: #0a0a0a;
+  --cl-surface: #141414;
+  --cl-canvas: #000000;
+  --cl-header: #000000;
+  --cl-fg: #f2f2f2;
+  --cl-accent: #f2f2f2;
+  --cl-on-accent: #0a0a0a;
+  --cl-success: #f2f2f2;
+  --cl-on-success: #0a0a0a;
+  --cl-tag-bg: #1f1f1f;
+  --cl-tag-fg: #e6e6e6;
+  --cl-divider: rgba(242, 242, 242, 0.14);
+  --cl-n100: #f5f5f5;
+  --cl-n200: #e6e6e6;
+  --cl-n300: #cccccc;
+  --cl-n400: #a8a8a8;
+  --cl-n500: #8a8a8a;
+  --cl-n600: #6b6b6b;
+  --cl-n700: #4a4a4a;
+  --cl-n800: #2a2a2a;
+  --cl-n900: #1a1a1a;
+  --cl-a100: #f5f5f5;
+  --cl-a200: #ebebeb;
+  --cl-a300: #e0e0e0;
+  --cl-a400: #cfcfcf;
+  --cl-a500: #bdbdbd;
+  --cl-a600: #8a8a8a;
+  --cl-a700: #4a4a4a;
+  --cl-a800: #2e2e2e;
+  --cl-a900: #1c1c1c;
+  --cl-shadow-sm: 0 0 0 1px #2a2a2a;
+  --cl-shadow-md: 0 0 0 1px #2e2e2e, 0 8px 24px rgba(0, 0, 0, 0.6);
+  --cl-shadow-lg: 0 0 0 1px #3a3a3a, 0 16px 40px rgba(0, 0, 0, 0.7);
+  --cl-ring: rgba(242, 242, 242, 0.45);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --cl-bg: #f7f4ef;
+  --cl-bg: #fafafa;
   --cl-surface: #ffffff;
-  --cl-canvas: #ede8e1;
-  --cl-header: #f7f4ef;
-  --cl-fg: #1a1816;
-  --cl-accent: #8c5a3c;
-  --cl-on-accent: #ffffff;
-  --cl-success: #2f7a4a;
-  --cl-on-success: #ffffff;
-  --cl-tag-bg: #dbe9f4;
-  --cl-tag-fg: #1f4a66;
-  --cl-divider: rgba(26, 24, 22, 0.12);
-  --cl-n100: #141210;
-  --cl-n200: #26231f;
-  --cl-n300: #3d3934;
-  --cl-n400: #5e5a55;
-  --cl-n500: #6f6a64;
-  --cl-n600: #8a847d;
-  --cl-n700: #c9c2b9;
-  --cl-n800: #e4ded6;
-  --cl-n900: #f0ebe4;
-  --cl-a100: #3b2516;
-  --cl-a200: #5a3822;
-  --cl-a300: #7a4c2e;
-  --cl-a400: #8c5a3c;
-  --cl-a500: #a87556;
-  --cl-a600: #c29a7e;
-  --cl-a700: #dcc0a9;
-  --cl-a800: #ebdacb;
-  --cl-a900: #f6ede4;
-  --cl-shadow-sm: 0 0 0 1px #e4ded6;
-  --cl-shadow-md: 0 0 0 1px #e4ded6, 0 8px 24px rgba(60, 40, 20, 0.06);
-  --cl-shadow-lg: 0 0 0 1px #ddd5cb, 0 16px 40px rgba(60, 40, 20, 0.08);
-  --cl-ring: rgba(140, 90, 60, 0.35);
+  --cl-canvas: #ececec;
+  --cl-header: #fafafa;
+  --cl-fg: #0a0a0a;
+  --cl-accent: #0a0a0a;
+  --cl-on-accent: #fafafa;
+  --cl-success: #0a0a0a;
+  --cl-on-success: #fafafa;
+  --cl-tag-bg: #ececec;
+  --cl-tag-fg: #1f1f1f;
+  --cl-divider: rgba(10, 10, 10, 0.12);
+  --cl-n100: #0f0f0f;
+  --cl-n200: #1f1f1f;
+  --cl-n300: #333333;
+  --cl-n400: #5c5c5c;
+  --cl-n500: #737373;
+  --cl-n600: #8f8f8f;
+  --cl-n700: #bdbdbd;
+  --cl-n800: #e3e3e3;
+  --cl-n900: #f0f0f0;
+  --cl-a100: #0a0a0a;
+  --cl-a200: #141414;
+  --cl-a300: #1f1f1f;
+  --cl-a400: #333333;
+  --cl-a500: #444444;
+  --cl-a600: #737373;
+  --cl-a700: #bdbdbd;
+  --cl-a800: #e0e0e0;
+  --cl-a900: #f0f0f0;
+  --cl-shadow-sm: 0 0 0 1px #e3e3e3;
+  --cl-shadow-md: 0 0 0 1px #e3e3e3, 0 8px 24px rgba(0, 0, 0, 0.06);
+  --cl-shadow-lg: 0 0 0 1px #dcdcdc, 0 16px 40px rgba(0, 0, 0, 0.08);
+  --cl-ring: rgba(10, 10, 10, 0.35);
 }
 
 @theme inline {
@@ -138,14 +140,14 @@
 }
 
 @theme {
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 18px;
-  --radius-2xl: 22px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 14px;
   --radius-pill: 9999px;
 
-  --font-sans: var(--font-figtree), "Figtree", system-ui, -apple-system, BlinkMacSystemFont,
+  --font-sans: var(--font-inter), "Inter", system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, Menlo, monospace;
   --font-display: var(--font-unbounded), "Unbounded", var(--font-sans);

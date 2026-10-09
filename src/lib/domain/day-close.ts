@@ -1,6 +1,7 @@
 import { salesList } from "@/lib/domain/billing";
 import { realNowIso } from "@/lib/domain/clock";
 import type { Actor } from "@/lib/domain/types";
+import { listExpenses, type Expense } from "@/lib/domain/expenses";
 
 /**
  * Cierre del día: pacientes, prácticas y ventas de productos, total cobrado y el detalle por
@@ -34,6 +35,11 @@ export interface DayClose {
   /** Totales por medio de pago; `pending` = sin medio cargado (a precio efectivo; con tarjeta sería `pendingCard`). */
   byPayment: { efectivo: number; tarjeta: number; pending: number; pendingCard: number };
   providers: CloseProvider[];
+  /** Egresos del día (la médica no los ve: lista vacía). */
+  expenses: Expense[];
+  expensesTotal: number;
+  /** Cobrado − egresos. */
+  net: number;
 }
 
 const add = (list: CloseCount[], name: string, q: number) => {
@@ -83,8 +89,22 @@ export async function dayClose(actor: Actor, date?: string): Promise<Result<{ cl
   const list = [...providers.values()]
     .map(({ visits, ...p }) => ({ ...p, patients: visits.size }))
     .sort((a, b) => b.total - a.total);
+  const ex = await listExpenses(actor, day, day);
+  const expenses = ex.ok ? ex.expenses : [];
+  const expensesTotal = ex.ok ? ex.total : 0;
   return {
     ok: true,
-    close: { date: day, patients: patientVisits.size, practices, productSales: productVisits.size, total, byPayment, providers: list },
+    close: {
+      date: day,
+      patients: patientVisits.size,
+      practices,
+      productSales: productVisits.size,
+      total,
+      byPayment,
+      providers: list,
+      expenses,
+      expensesTotal,
+      net: total - expensesTotal,
+    },
   };
 }

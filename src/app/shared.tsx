@@ -3,18 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // Clases de la vista Sistema de Clavdia (src/app/system-shared.tsx), mismas medidas.
-// Botones y campos de la paleta "Noche y champagne": esquinas redondeadas, bordes de 2px y
-// el champagne (`bg-accent`) solo para la acción principal.
-export const CARD = "flex w-full flex-col gap-3 rounded-2xl bg-surface p-5 shadow-sm";
+export const CARD = "flex w-full flex-col gap-3 rounded-xl bg-surface p-5 shadow-sm";
 export const BTN =
-  "rounded-xl border-2 border-neutral-800 px-3.5 py-1.5 text-[13.5px] font-semibold text-fg transition-colors hover:border-neutral-700 hover:bg-neutral-900 disabled:opacity-40";
+  "rounded-md border border-neutral-800 px-2.5 py-1 text-[12px] text-neutral-300 transition-colors hover:border-accent-700 hover:bg-accent-900 disabled:opacity-40";
 export const BTN_DARK =
-  "rounded-xl border-2 border-accent bg-accent px-3.5 py-1.5 text-[13.5px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:opacity-40";
+  "rounded-md border border-accent px-2.5 py-1 text-[12px] font-medium text-accent-300 transition-colors hover:bg-accent-900 active:bg-accent-800 disabled:opacity-40";
 export const FIELD =
-  "w-full rounded-xl border-2 border-neutral-800 bg-surface px-3 py-2 text-[15px] text-fg placeholder:text-neutral-600 focus:border-accent-600 focus:outline-none";
-/** Acción principal grande (se toca con el dedo). */
+  "w-full rounded-md border border-neutral-800 bg-transparent px-2.5 py-1.5 text-[13px] text-fg placeholder:text-neutral-600 focus:border-accent-700 focus:outline-none";
+/** Acción principal grande (pantalla de venta: se toca con el dedo). */
 export const BTN_BIG =
-  "inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-5 text-[15px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:pointer-events-none disabled:opacity-40";
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg border border-accent bg-accent px-4 text-[15px] font-medium text-bg transition-opacity hover:opacity-85 active:opacity-70 disabled:pointer-events-none disabled:opacity-40";
 
 export const money = (n: number) => `$\u00a0${n.toLocaleString("es-AR")}`;
 
@@ -41,7 +39,7 @@ export function daysUntil(ymd: string): number {
 
 export type ApiResult = { ok: boolean; error?: string } & Record<string, unknown>;
 
-export async function call(url: string, method: "POST" | "PATCH", body: object = {}): Promise<ApiResult> {
+export async function call(url: string, method: "POST" | "PATCH" | "DELETE", body: object = {}): Promise<ApiResult> {
   try {
     const r = await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     if (r.status === 401) {
@@ -212,7 +210,7 @@ export function ProviderPicker({ value, onChange }: { value: string[]; onChange:
   const toggle = (id: string) => onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
   return (
     <div className="flex flex-col gap-1.5">
-      <span className="text-[13px] text-neutral-400">¿Quién lo hace o lo vende?</span>
+      <span className="text-[12px] text-neutral-400">¿Quién lo hace o lo vende?</span>
       <div className="flex flex-wrap gap-2">
         {sellers.map((s) => {
           const on = value.includes(s.id);
@@ -222,8 +220,8 @@ export function ProviderPicker({ value, onChange }: { value: string[]; onChange:
               key={s.id}
               aria-pressed={on}
               onClick={() => toggle(s.id)}
-              className={`rounded-full border-2 px-3.5 py-1.5 text-[14px] font-semibold transition-colors ${
-                on ? "border-accent bg-accent text-on-accent" : "border-neutral-800 text-fg hover:border-accent-600"
+              className={`rounded-md border px-2.5 py-1 text-[12.5px] transition-colors ${
+                on ? "border-accent bg-accent text-on-accent" : "border-neutral-800 text-neutral-300 hover:border-accent-700 hover:bg-accent-900"
               }`}
             >
               {s.name}
@@ -231,7 +229,7 @@ export function ProviderPicker({ value, onChange }: { value: string[]; onChange:
           );
         })}
       </div>
-      <span className="text-[12.5px] text-neutral-500">{value.length ? "Solo las marcadas lo pueden anotar." : "Sin marcar = cualquiera de las médicas."}</span>
+      <span className="text-[11.5px] text-neutral-500">{value.length ? "Solo las marcadas lo pueden anotar." : "Sin marcar = cualquiera de las médicas."}</span>
     </div>
   );
 }
@@ -249,7 +247,7 @@ export const parsePct = (s: string): number | null => (s.trim() === "" ? null : 
 export function CommissionField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[13px] text-neutral-400">Comisión de la médica (%)</span>
+      <span className="text-[12px] text-neutral-400">Comisión de la médica (%)</span>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value.replace(/[^\d.,]/g, ""))}

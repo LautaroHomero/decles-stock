@@ -17,7 +17,8 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
 - Venta de producto o práctica exige médica (`providerId`); la comisión se congela en `sales.commission_*`.
 - Anotar = `recordVisit` (`domain/visits.ts`): renglones con el mismo `visit_id`, todo o nada. Paciente = texto libre.
   Lo no cargado = venta `kind 'pendiente'` (resuelve el admin, `domain/pending.ts`); sin stock = `stock_items.owed`.
-- Paleta "Noche y champagne": tokens `--cl-*` en `globals.css`; acción principal `bg-accent text-on-accent`.
+- Diseño monocromo (negro y blanco, Inter): tokens `--cl-*` en `globals.css`; acción principal `bg-accent text-on-accent`.
+- Egresos de plata: tabla `expenses` (`domain/expenses.ts`), los anota secretaría/admin; texto «pagué 5000 de luz» → `expense-note.ts`.
 - Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada. `migrate` activa RLS en todas
   las tablas de `public` (bloquea la API REST de Supabase); la app entra como dueña y no le afecta.
 - Fechas: `realNowIso()` (zona `America/Argentina/Buenos_Aires`), timestamps TEXT.

@@ -14,7 +14,7 @@ export function StockSection({ canAdmin }: { canAdmin: boolean }) {
     <>
       {canAdmin && <Pendientes onChange={() => setReload((n) => n + 1)} />}
       <div className="mx-auto w-full max-w-[880px] px-4 pt-6 sm:px-6 sm:pt-8">
-        <div role="tablist" className="inline-flex rounded-2xl border-2 border-neutral-800 p-1">
+        <div role="tablist" className="inline-flex rounded-xl border border-neutral-800 p-1">
           {(
             [
               ["productos", "Productos"],
@@ -26,7 +26,7 @@ export function StockSection({ canAdmin }: { canAdmin: boolean }) {
               role="tab"
               aria-selected={tab === id}
               onClick={() => setTab(id)}
-              className={`min-h-11 rounded-xl px-5 text-[13.5px] font-semibold transition-colors ${
+              className={`min-h-11 rounded-xl px-5 text-[13.5px] font-medium transition-colors ${
                 tab === id ? "bg-accent text-on-accent" : "text-neutral-400 hover:text-fg"
               }`}
             >
@@ -85,7 +85,7 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
       <Toast msg={toast} />
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex min-w-[220px] flex-1 flex-col">
-          <h1 className="font-display text-[18px] font-medium tracking-[-.01em]">Prácticas</h1>
+          <h1 className="font-display text-[16px] font-medium tracking-[-.01em]">Prácticas</h1>
           <p className="text-[13px] text-neutral-400">Lo que se hace en la consulta. Comisión: la de la práctica si tiene una, si no la de cada médica (sobre el precio en efectivo).</p>
         </div>
         {canAdmin && editing !== "new" && (
@@ -111,10 +111,10 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
                 key={p.id}
                 disabled={!canAdmin}
                 onClick={() => setEditing(p.id)}
-                className={`flex items-center gap-4 rounded-2xl bg-surface px-5 py-4 text-left shadow-sm transition-colors enabled:hover:bg-neutral-900 ${p.active ? "" : "opacity-50"}`}
+                className={`flex items-center gap-4 rounded-xl bg-surface px-5 py-4 text-left shadow-sm transition-colors enabled:hover:bg-neutral-900 ${p.active ? "" : "opacity-50"}`}
               >
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-[14px] font-semibold">
+                  <span className="truncate text-[14px] font-medium">
                     {p.name}
                     {!p.active && <span className="ml-2 text-[13px] font-normal text-neutral-500">(dada de baja)</span>}
                   </span>
