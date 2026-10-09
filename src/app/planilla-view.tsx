@@ -1,10 +1,9 @@
 "use client";
 
-import { Fragment, useMemo, useRef, useState } from "react";
-import { CaretLeftIcon, CaretRightIcon, PlusIcon } from "@phosphor-icons/react";
+import { useMemo, useRef, useState } from "react";
+import { PlusIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { normalize, parseNote } from "@/lib/domain/quick-sale";
-import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogResponse, type Payment, type SaleRow } from "./shared";
 
 /**
@@ -18,15 +17,15 @@ import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogR
  *  · $K (kinesiología, auxiliares, externos): la parte de la profesional (sale de su %, se puede pisar).
  */
 
-type Area = "medicos" | "kinesiologia" | "auxiliares" | "externos";
-const AREAS: { id: Area; title: string; who: string }[] = [
+export type Area = "medicos" | "kinesiologia" | "auxiliares" | "externos";
+export const AREAS: { id: Area; title: string; who: string }[] = [
   { id: "medicos", title: "Médicos", who: "Médico" },
   { id: "kinesiologia", title: "Kinesiología", who: "Kinesióloga" },
   { id: "auxiliares", title: "Auxiliares", who: "Profesional" },
   { id: "externos", title: "Médicos externos", who: "Médico" },
 ];
 
-interface Seller {
+export interface Seller {
   id: string;
   name: string;
   area: Area;
@@ -40,7 +39,7 @@ interface Item {
 }
 
 /** Una fila de la planilla = una anotación: a quién se atendió, qué pagó, qué médica y cuánto. */
-interface Row {
+export interface Row {
   key: string;
   sales: SaleRow[];
   time: string;
@@ -60,14 +59,8 @@ const METHOD_SHORT: Record<Payment, string> = { efectivo: "Efvo.", transferencia
 const GENERIC = "Atención";
 const num = (s: string) => Number(s.replace(/\D/g, "") || 0);
 
-const shift = (ymd: string, days: number) => {
-  const d = new Date(`${ymd}T12:00:00`);
-  d.setDate(d.getDate() + days);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
-const shortDate = (ymd: string) => `${Number(ymd.slice(8, 10))}/${Number(ymd.slice(5, 7))}`;
 
-function toRows(sales: SaleRow[]): Row[] {
+export function toRows(sales: SaleRow[]): Row[] {
   const byVisit = new Map<string, SaleRow[]>();
   for (const s of sales) {
     if (s.status !== "paid") continue;
@@ -140,30 +133,16 @@ function itemsIn(text: string, practices: Item[], products: Item[]): Picked[] {
   return out;
 }
 
-/**
- * La planilla del día en dos partes, como el papel:
- *  · `lista` (Ventas → Día): las filas por área (paciente, qué pagó, médica, cuánto). Fecha controlada por Ventas.
- *  · `cierre` (Cierre): ingresos y egresos extras, caja al cambio, totales por profesional y el resumen diario.
- */
-export function PlanillaView({ actor, date: dateProp, part }: { actor: Actor; date?: string; part: "lista" | "cierre" }) {
-  const bare = part === "lista";
+/** Ventas → Día: las filas del día por área (paciente, qué pagó, médica, cuánto). Fecha controlada por Ventas. */
+export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
   const today = useToday();
-  const [picked, setPicked] = useState<string | null>(null);
-  const date = dateProp ?? picked ?? today;
-  const setDate = (d: string) => setPicked(d === today ? null : d);
   const admin = !!actor.activeOrg?.canAdmin;
   const canEdit = admin || date === today;
-  // Ingresos, egresos y caja: secretaría y admin.
-  const canMoney = canEdit && actor.role !== "medico";
 
   const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[] }>(`/api/sales?from=${date}&to=${date}&limit=500`, 30_000);
   const [catalog, refreshCatalog] = usePoll<CatalogResponse>("/api/catalog", 60_000);
   const [sellersData] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; area: Area }[] }>("/api/sellers", 60_000);
-  const [egr, refreshEgr] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}`, 30_000);
-  const [ing, refreshIng] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}&direction=ingreso`, 30_000);
-  const [cash, refreshCash] = usePoll<{ ok: boolean; cash: { amount: number | null } }>(`/api/day-cash?date=${date}`, 60_000);
   const [toast, showToast] = useToast();
-  const [form, setForm] = useState<{ direction: "egreso" | "ingreso"; expense?: Expense } | null>(null);
 
   const sellers: Seller[] = useMemo(() => (sellersData?.sellers ?? []).map((s) => ({ id: s.providerId, name: s.name, area: s.area ?? "medicos" })), [sellersData]);
   const practices: Item[] = useMemo(
@@ -179,108 +158,15 @@ export function PlanillaView({ actor, date: dateProp, part }: { actor: Actor; da
   );
   const rows = useMemo(() => toRows(sales?.ok ? sales.sales : []), [sales]);
   const areaOf = (providerId: string | null): Area => sellers.find((s) => s.id === providerId)?.area ?? "medicos";
-
-  const egresos = egr?.ok ? egr.expenses : [];
-  const ingresos = ing?.ok ? ing.expenses : [];
-  const egTotal = egresos.reduce((n, e) => n + e.amount, 0);
-  const inTotal = ingresos.reduce((n, e) => n + e.amount, 0);
   const sections = AREAS.filter((a) => a.id === "medicos" || sellers.some((s) => s.area === a.id) || rows.some((r) => areaOf(r.providerId) === a.id));
 
-  const byMethod = (m: Payment | null) => rows.filter((r) => r.method === m).reduce((n, r) => n + r.total, 0);
-  const collected = rows.reduce((n, r) => n + r.total, 0);
-  const kTotal = rows.reduce((n, r) => n + r.k, 0);
-  const declesTotal = collected - kTotal;
-  const efectivo = byMethod("efectivo");
-  const sinMedio = byMethod(null);
-
-  function refreshAll() {
-    refreshSales();
-    refreshCatalog();
-  }
-
   return (
-    <div className={`cl-print-area flex w-full flex-col gap-6 text-[13.5px] ${bare ? "" : "mx-auto max-w-[1180px] px-4 pb-20 pt-6 sm:px-6 sm:pt-8"}`}>
+    <div className="cl-print-area flex w-full flex-col gap-6 text-[13.5px]">
       <Toast msg={toast} />
-      {form && (
-        <ExpenseForm
-          direction={form.direction}
-          expense={form.expense}
-          onClose={() => setForm(null)}
-          onSaved={(msg) => {
-            setForm(null);
-            showToast(msg + ".");
-            refreshEgr();
-            refreshIng();
-          }}
-        />
-      )}
-
-      {!bare && (
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="font-display text-[22px] font-medium tracking-[-.01em]">Cierre del día</h1>
-        <div className="flex items-center gap-1 text-[14px]">
-          <span className="text-neutral-400">Fecha:</span>
-          <button aria-label="Día anterior" onClick={() => setDate(shift(date, -1))} className={`${NAV} cl-no-print`}>
-            <CaretLeftIcon size={16} weight="bold" />
-          </button>
-          <span className="min-w-[48px] text-center font-medium tabular-nums">{shortDate(date)}</span>
-          <button aria-label="Día siguiente" onClick={() => setDate(shift(date, 1))} disabled={date >= today} className={`${NAV} cl-no-print`}>
-            <CaretRightIcon size={16} weight="bold" />
-          </button>
-          {date !== today && (
-            <button onClick={() => setDate(today)} className="cl-no-print ml-1 text-[13px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline">
-              Hoy
-            </button>
-          )}
-        </div>
-        <span className="flex-1" />
-        <button onClick={() => window.print()} className={`${BTN} cl-no-print`}>
-          Imprimir
-        </button>
-      </div>
-      )}
       {!canEdit && <p className="cl-no-print -mt-3 text-[13px] text-neutral-500">Lo de días anteriores lo corrige el admin.</p>}
-
-      {!bare && (
-      <>
-      {/* Ingresos extras · Egresos extras · Caja */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_1fr_220px]">
-        <MoneyList
-          title="Ingresos extras"
-          list={ingresos}
-          total={inTotal}
-          canEdit={canMoney}
-          onAdd={() => setForm({ direction: "ingreso" })}
-          onOpen={(e) => setForm({ direction: "ingreso", expense: e })}
-        />
-        <MoneyList
-          title="Egresos extras"
-          list={egresos}
-          total={egTotal}
-          canEdit={canMoney}
-          onAdd={() => setForm({ direction: "egreso" })}
-          onOpen={(e) => setForm({ direction: "egreso", expense: e })}
-        />
-        <CashBox
-          key={`${date}:${cash?.cash?.amount ?? ""}`}
-          amount={cash?.ok ? cash.cash.amount : null}
-          canEdit={canMoney}
-          onSave={async (amount) => {
-            const r = await call("/api/day-cash", "PUT", { date, amount });
-            if (!r.ok) return showToast(r.error ?? "No se pudo guardar.");
-            refreshCash();
-          }}
-        />
-      </div>
-
-      {sales && sellersData && (
-        <Totals sections={sections} rows={rows} sellers={sellers} areaOf={areaOf} />
-      )}
-      </>
-      )}
-
-      {bare && (!sales || !catalog || !sellersData) && <p className="text-neutral-500">Cargando…</p>}
-      {bare && sales && catalog && sellersData && (
+      {!sales || !catalog || !sellersData ? (
+        <p className="text-neutral-500">Cargando…</p>
+      ) : (
         sections.map((a) => (
           <AreaSection
             key={a.id}
@@ -291,207 +177,15 @@ export function PlanillaView({ actor, date: dateProp, part }: { actor: Actor; da
             practices={practices}
             products={products}
             canEdit={canEdit}
-            onSaved={refreshAll}
+            onSaved={() => {
+              refreshSales();
+              refreshCatalog();
+            }}
             onError={showToast}
           />
         ))
       )}
-
-      {/* Resumen diario */}
-      {!bare && (
-      <section className="flex flex-col gap-2 rounded-xl border border-neutral-800 p-4">
-        <h2 className="text-[12px] font-medium uppercase tracking-[.08em] text-neutral-400">Resumen diario</h2>
-        <div className="grid grid-cols-1 gap-x-10 gap-y-1 md:grid-cols-2">
-          <div className="flex flex-col">
-            <Line label="Ingresos extras" value={inTotal} />
-            {sections.map((a) => {
-              const rs = rows.filter((r) => areaOf(r.providerId) === a.id);
-              const d = rs.reduce((n, r) => n + r.total - r.k, 0);
-              return <Line key={a.id} label={`Total Decles ${a.title.toLowerCase()}`} value={d} />;
-            })}
-            <Line label="Egresos extras" value={-egTotal} />
-            <Line label="Subtotal Decles" value={declesTotal + inTotal - egTotal} strong />
-          </div>
-          <div className="flex flex-col">
-            <Line label="Efectivo" value={efectivo} />
-            <Line label="Transferencias" value={byMethod("transferencia")} />
-            <Line label="Tarjetas" value={byMethod("tarjeta")} />
-            {sinMedio > 0 && <Line label="Sin medio cargado" value={sinMedio} />}
-            <Line label="Profesionales ($K)" value={-kTotal} />
-            <Line
-              label="Efectivo que debería haber (efectivo + ingresos − egresos)"
-              value={efectivo + inTotal - egTotal}
-              strong
-            />
-            {cash?.ok && cash.cash.amount !== null && (
-              <Line label="Contado en caja al cambio" value={cash.cash.amount} hint={cash.cash.amount - (efectivo + inTotal - egTotal)} />
-            )}
-          </div>
-        </div>
-      </section>
-      )}
     </div>
-  );
-}
-
-/** Cierre: por área, cada profesional con sus pacientes, lo cobrado, su parte ($K) y lo de Decles. */
-function Totals({
-  sections,
-  rows,
-  sellers,
-  areaOf,
-}: {
-  sections: (typeof AREAS)[number][];
-  rows: Row[];
-  sellers: Seller[];
-  areaOf: (id: string | null) => Area;
-}) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div className="overflow-x-auto rounded-xl border border-neutral-800">
-        <table className="w-full min-w-[620px] border-collapse text-[13.5px]">
-          <thead>
-            <tr className="border-b border-neutral-800 text-left text-[11.5px] uppercase tracking-[.06em] text-neutral-500">
-              <th className="px-3 py-2 font-medium">Profesional</th>
-              <th className="px-3 py-2 text-right font-medium">Pacientes</th>
-              <th className="px-3 py-2 text-right font-medium">Cobrado</th>
-              <th className="px-3 py-2 text-right font-medium">$ Profesional</th>
-              <th className="px-3 py-2 text-right font-medium">$ Decles</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sections.map((a) => {
-              const rs = rows.filter((r) => areaOf(r.providerId) === a.id);
-              const ids = [...new Set(rs.map((r) => r.providerId))];
-              const sum = (list: Row[]) => ({
-                pac: list.filter((r) => r.patient).length,
-                total: list.reduce((n, r) => n + r.total, 0),
-                k: list.reduce((n, r) => n + r.k, 0),
-              });
-              const t = sum(rs);
-              return (
-                <Fragment key={a.id}>
-                  <tr className="border-b border-neutral-900 bg-surface">
-                    <td colSpan={5} className="px-3 py-1.5 text-[11.5px] font-medium uppercase tracking-[.08em] text-neutral-400">
-                      {a.title}
-                    </td>
-                  </tr>
-                  {ids.map((id) => {
-                    const s = sum(rs.filter((r) => r.providerId === id));
-                    return (
-                      <tr key={id ?? "-"} className="border-b border-neutral-900">
-                        <td className="px-3 py-1.5">{sellers.find((x) => x.id === id)?.name ?? rs.find((r) => r.providerId === id)?.sales[0].providerName ?? "—"}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{s.pac}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{money(s.total)}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{money(s.k)}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{fmtSigned(s.total - s.k)}</td>
-                      </tr>
-                    );
-                  })}
-                  {!ids.length && (
-                    <tr className="border-b border-neutral-900">
-                      <td colSpan={5} className="px-3 py-1.5 text-neutral-600">
-                        —
-                      </td>
-                    </tr>
-                  )}
-                  <tr className="border-b border-neutral-800 font-medium">
-                    <td className="px-3 py-1.5 text-neutral-400">total {a.title.toLowerCase()}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{t.pac}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{money(t.total)}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{money(t.k)}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{fmtSigned(t.total - t.k)}</td>
-                  </tr>
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function Line({ label, value, strong, hint }: { label: string; value: number; strong?: boolean; hint?: number }) {
-  return (
-    <div className={`flex items-baseline justify-between gap-4 border-b border-neutral-900 py-1.5 ${strong ? "font-medium" : ""}`}>
-      <span className={strong ? "" : "text-neutral-300"}>{label}</span>
-      <span className="whitespace-nowrap tabular-nums">
-        {value < 0 ? `− ${money(-value)}` : money(value)}
-        {hint !== undefined && hint !== 0 && (
-          <span className="ml-2 text-[12px] text-neutral-500">({hint > 0 ? "sobran" : "faltan"} {money(Math.abs(hint))})</span>
-        )}
-      </span>
-    </div>
-  );
-}
-
-function MoneyList({
-  title,
-  list,
-  total,
-  canEdit,
-  onAdd,
-  onOpen,
-}: {
-  title: string;
-  list: Expense[];
-  total: number;
-  canEdit: boolean;
-  onAdd: () => void;
-  onOpen: (e: Expense) => void;
-}) {
-  return (
-    <div className="overflow-hidden rounded-xl border border-neutral-800">
-      <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2">
-        <span className="text-[12px] font-medium uppercase tracking-[.08em] text-neutral-400">{title}</span>
-        {canEdit && (
-          <button onClick={onAdd} className="cl-no-print inline-flex items-center gap-1 text-[12.5px] text-neutral-300 hover:text-fg">
-            <PlusIcon size={12} weight="bold" /> Agregar
-          </button>
-        )}
-      </div>
-      <div className="grid grid-cols-[1fr_auto] text-[13px]">
-        <span className="border-b border-neutral-900 px-3 py-1 text-[11.5px] text-neutral-500">en concepto de</span>
-        <span className="border-b border-neutral-900 px-3 py-1 text-right text-[11.5px] text-neutral-500">monto $</span>
-        {list.map((e) => (
-          <Fragment key={e.id}>
-            <button disabled={!canEdit} onClick={() => onOpen(e)} className="truncate border-b border-neutral-900 px-3 py-1.5 text-left enabled:hover:bg-neutral-900">
-              {e.concept}
-            </button>
-            <button disabled={!canEdit} onClick={() => onOpen(e)} className="border-b border-neutral-900 px-3 py-1.5 text-right tabular-nums enabled:hover:bg-neutral-900">
-              {money(e.amount)}
-            </button>
-          </Fragment>
-        ))}
-        {!list.length && <span className="col-span-2 px-3 py-1.5 text-neutral-600">—</span>}
-        <span className="px-3 py-1.5 text-right text-neutral-500">total</span>
-        <span className="px-3 py-1.5 text-right font-medium tabular-nums">{money(total)}</span>
-      </div>
-    </div>
-  );
-}
-
-function CashBox({ amount, canEdit, onSave }: { amount: number | null; canEdit: boolean; onSave: (n: number | null) => void }) {
-  const [v, setV] = useState(amount === null ? "" : String(amount));
-  const save = () => {
-    const n = v.trim() === "" ? null : num(v);
-    if (n !== amount) onSave(n);
-  };
-  return (
-    <label className="flex flex-col justify-between gap-2 rounded-xl border border-neutral-800 p-3">
-      <span className="text-[12px] font-medium uppercase leading-snug tracking-[.08em] text-neutral-400">Dinero en caja al momento del cambio</span>
-      <input
-        value={v ? `$ ${num(v).toLocaleString("es-AR")}` : ""}
-        disabled={!canEdit}
-        onChange={(e) => setV(e.target.value.replace(/\D/g, ""))}
-        onBlur={save}
-        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-        inputMode="numeric"
-        placeholder="$"
-        className={`${CELL} rounded-md border border-neutral-800 text-[16px] tabular-nums`}
-      />
-    </label>
   );
 }
 
@@ -654,7 +348,7 @@ function AreaSection({
   );
 }
 
-const fmtSigned = (n: number) => (n < 0 ? `− ${money(-n)}` : money(n));
+export const fmtSigned = (n: number) => (n < 0 ? `− ${money(-n)}` : money(n));
 
 /**
  * Una fila que se escribe: paciente, qué pagó (prácticas y productos juntos: «peeling, contorno de ojos»),
@@ -817,5 +511,3 @@ function RowEditor({
 
 const CELL =
   "w-full min-w-0 rounded-sm border border-transparent bg-transparent px-1.5 py-1 text-[13px] text-fg outline-none placeholder:text-neutral-600 focus:border-accent-700 focus:bg-bg";
-const NAV = "flex h-8 w-8 items-center justify-center rounded-md text-neutral-300 hover:bg-neutral-900 disabled:opacity-30";
-const BTN = "rounded-md border border-neutral-800 px-3 py-1.5 text-[13px] text-neutral-300 transition-colors hover:border-accent-700 hover:bg-accent-900";

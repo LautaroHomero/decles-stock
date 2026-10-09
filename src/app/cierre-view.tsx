@@ -4,7 +4,7 @@ import { useState } from "react";
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { money, usePoll, useToday } from "./shared";
-import { PlanillaView } from "./planilla-view";
+import { CierreSheet } from "./cierre-sheet";
 
 interface CloseCount {
   name: string;
@@ -47,7 +47,7 @@ const counts = (list: CloseCount[]) => list.map((c) => `${c.name} ${c.quantity}`
 /** Cierre del día (diseño «Cierre del día»): pacientes, prácticas, lo cobrado y el detalle por médica. Se imprime. */
 export function CierreView({ actor, onOpenSales }: { actor: Actor; onOpenSales: () => void }) {
   // Secretaría y admin: el cierre con la forma de la planilla en papel. La médica sigue viendo su resumen.
-  if (actor.role !== "medico") return <PlanillaView actor={actor} part="cierre" />;
+  if (actor.role !== "medico") return <CierreSheet actor={actor} />;
   return <CierreMedica onOpenSales={onOpenSales} />;
 }
 

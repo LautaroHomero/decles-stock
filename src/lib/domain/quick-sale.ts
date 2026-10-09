@@ -91,6 +91,10 @@ const NUMBER_WORDS: Record<string, number> = {
 };
 
 /** Palabras que anuncian a la profesional ("la atendió la Dra. …"). */
+/** Palabras que rodean a una persona nombrada: «la gabi», «por laura» / «gabi hizo», «laura vendió». */
+const PERSON_BEFORE = new Set(["la", "el", "por", "con", "atendio", "atendi", "atiende", "atendida", "dra", "dr", "doctora", "lic"]);
+const PERSON_AFTER = new Set(["hizo", "hace", "vendio", "vende", "atendio", "atiende", "le", "lo", "la", "aplico", "realizo", "puso"]);
+
 const SELLER_CUES = new Set(["atendio", "atendi", "atendida", "atendido", "atiende", "dra", "dr", "doctora", "doctor", "lic", "licenciada"]);
 
 const FILLER = new Set([
@@ -300,16 +304,22 @@ function nameMatches(w: string, sw: string): boolean {
 function findSeller<S extends QuickSeller>(seg: string, sellers: S[], productVocab: Set<string>): { seller: S | null; used: Set<string> } {
   const used = new Set<string>();
   const hits = new Set<S>();
-  for (const w of normalize(seg).split(" ")) {
-    if (w.length < 3 || FILLER.has(w) || productVocab.has(stem(w))) continue;
-    // Una abreviatura que también empieza una palabra de producto ("cre" de crema) no es un nombre.
-    if (w.length <= 4 && [...productVocab].some((pv) => pv.startsWith(w))) continue;
+  const ws = normalize(seg).split(" ");
+  ws.forEach((w, i) => {
+    if (w.length < 3 || FILLER.has(w)) return;
+    // Contexto de persona: primera palabra, «la gabi», «gabi hizo», «la atendió gabi», «por gabi».
+    const ctx = i === 0 || PERSON_BEFORE.has(ws[i - 1]) || PERSON_AFTER.has(ws[i + 1] ?? "");
+    const exactName = sellers.some((s) => sellerWords(s).includes(w));
+    if (productVocab.has(stem(w)) && !exactName && !ctx) return;
+    // Una abreviatura que también empieza una palabra de producto ("cre" de crema) no es un nombre…
+    // salvo que esté donde va una persona («gabi hizo…»).
+    if (w.length <= 4 && !ctx && !exactName && [...productVocab].some((pv) => pv.startsWith(w))) return;
     const found = sellers.filter((s) => sellerWords(s).some((sw) => nameMatches(w, sw)));
     if (found.length) {
       used.add(w);
       found.forEach((s) => hits.add(s));
     }
-  }
+  });
   return { seller: hits.size === 1 ? [...hits][0] : null, used };
 }
 
@@ -395,6 +405,19 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
       const at = toks.findIndex((t) => score([stem(t.n), ...(SYNONYMS[t.n] ?? [])], best.p.name) > 0);
       const lead = toks.slice(0, Math.max(at, 0)).filter((t) => !FILLER.has(t.n) && !(t.n in NUMBER_WORDS) && t.n !== "par");
       if (lead.length && lead.length <= 4 && lead.every((t) => NAME_TOKEN.test(t.n))) patient = asName(lead);
+      // «le hizo botox a Carla (Pérez)» / «… para Carla»: el nombre después de «a»/«para».
+      if (!patient) {
+        const k = toks.findIndex((t, i) => i > at && (t.n === "a" || t.n === "para"));
+        const after = k >= 0 ? toks.slice(k + 1).filter((t) => !FILLER.has(t.n)) : [];
+        if (
+          after.length >= 1 &&
+          after.length <= 3 &&
+          after.every((t) => NAME_TOKEN.test(t.n) && !paymentOf(t.n) && score([stem(t.n)], best.p.name) === 0)
+        ) {
+          patient = asName(after);
+          patientSure = true;
+        }
+      }
     }
     // Match claro: hay uno solo, o el primero le saca ventaja al segundo.
     const clear = best && (!second || best.s - second.s >= 0.15);
