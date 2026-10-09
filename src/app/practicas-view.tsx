@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { PlusIcon } from "@phosphor-icons/react";
 import { InventarioView } from "./inventario-view";
-import { BTN, BTN_DARK, CARD, FIELD, Toast, call, money, usePoll, useToast } from "./shared";
+import { BTN, BTN_DARK, CARD, FIELD, ProviderPicker, Toast, call, money, providerNames, usePoll, useSellers, useToast } from "./shared";
 
 /** Stock: productos (con lotes y vencimientos) o prácticas (solo precio). */
 export function StockSection({ canAdmin }: { canAdmin: boolean }) {
@@ -43,6 +43,7 @@ interface Practice {
   price: number;
   cardPrice: number | null;
   active: boolean;
+  providerIds: string[];
 }
 
 const toInt = (s: string) => (s.trim() === "" ? null : Number(s.replace(/\./g, "").replace(",", ".")));
@@ -52,14 +53,21 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
   const [data, refresh] = usePoll<{ ok: boolean; practices: Practice[] }>("/api/practices", 60_000);
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [toast, showToast] = useToast();
+  const sellers = useSellers();
   const list = data?.practices ?? [];
 
-  async function save(id: string | null, v: { name: string; price: string; cardPrice: string; active?: boolean }) {
+  async function save(id: string | null, v: { name: string; price: string; cardPrice: string; active?: boolean; providerIds?: string[] }) {
     const price = toInt(v.price);
     if (price === null || !Number.isInteger(price) || price < 0) return showToast("El precio tiene que ser un número entero de pesos.");
     const card = toInt(v.cardPrice);
     if (card !== null && (!Number.isInteger(card) || card < 0)) return showToast("El precio con tarjeta tiene que ser un número entero de pesos.");
-    const body = { name: v.name, price, cardPrice: card, ...(v.active === undefined ? {} : { active: v.active }) };
+    const body = {
+      name: v.name,
+      price,
+      cardPrice: card,
+      ...(v.active === undefined ? {} : { active: v.active }),
+      ...(v.providerIds === undefined ? {} : { providerIds: v.providerIds }),
+    };
     const r = id ? await call(`/api/practices/${id}`, "PATCH", body) : await call("/api/practices", "POST", body);
     if (!r.ok) return showToast(r.error ?? "No se pudo guardar.");
     showToast(id ? "Guardado." : `«${v.name.trim()}» agregada.`);
@@ -100,9 +108,12 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
                 onClick={() => setEditing(p.id)}
                 className={`flex items-center gap-4 rounded-2xl bg-surface px-5 py-4 text-left shadow-sm transition-colors enabled:hover:bg-neutral-900 ${p.active ? "" : "opacity-50"}`}
               >
-                <span className="min-w-0 flex-1 truncate text-[17px] font-semibold">
-                  {p.name}
-                  {!p.active && <span className="ml-2 text-[13px] font-normal text-neutral-500">(dada de baja)</span>}
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-[17px] font-semibold">
+                    {p.name}
+                    {!p.active && <span className="ml-2 text-[13px] font-normal text-neutral-500">(dada de baja)</span>}
+                  </span>
+                  <span className="truncate text-[13.5px] text-neutral-400">{providerNames(p.providerIds, sellers)}</span>
                 </span>
                 <span className="flex flex-col items-end text-[16px] tabular-nums">
                   <span>{money(p.price)}</span>
@@ -124,7 +135,7 @@ function PracticeForm({
   onToggle,
 }: {
   initial?: Practice;
-  onSave: (v: { name: string; price: string; cardPrice: string }) => void;
+  onSave: (v: { name: string; price: string; cardPrice: string; providerIds: string[] }) => void;
   onCancel: () => void;
   onToggle?: () => void;
 }) {
@@ -132,6 +143,7 @@ function PracticeForm({
     name: initial?.name ?? "",
     price: initial ? String(initial.price) : "",
     cardPrice: initial?.cardPrice === null || !initial ? "" : String(initial.cardPrice),
+    providerIds: initial?.providerIds ?? ([] as string[]),
   });
   return (
     <div className={`${CARD} animate-cl-in`}>
@@ -149,6 +161,7 @@ function PracticeForm({
           <input value={f.cardPrice} onChange={(e) => setF({ ...f, cardPrice: e.target.value.replace(/[^\d]/g, "") })} inputMode="numeric" placeholder="Vacío = el mismo" className={FIELD} />
         </label>
       </div>
+      <ProviderPicker value={f.providerIds} onChange={(providerIds) => setF({ ...f, providerIds })} />
       <div className="flex flex-wrap gap-2">
         <button className={BTN_DARK} disabled={!f.name.trim() || !f.price} onClick={() => onSave(f)}>
           Guardar

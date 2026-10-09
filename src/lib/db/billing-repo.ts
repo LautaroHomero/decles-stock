@@ -304,3 +304,30 @@ export async function markSaleVoided(orgId: string, id: string, reason: string, 
     WHERE id = ${id} AND organization_id = ${orgId} AND status = 'paid' RETURNING id`) as unknown as Row[];
   return rows.length > 0;
 }
+
+// ---------------------------------------------------------------------------
+// Quién ofrece cada ítem (Decles): price_item_providers. Vacío = cualquiera.
+// ---------------------------------------------------------------------------
+
+/** item_id → provider_ids vinculados. */
+export async function listItemProviders(orgId: string): Promise<Map<string, string[]>> {
+  const rows = (await getSql()`
+    SELECT item_id, provider_id FROM price_item_providers WHERE organization_id = ${orgId}`) as unknown as Row[];
+  const map = new Map<string, string[]>();
+  for (const r of rows) map.set(r.item_id as string, [...(map.get(r.item_id as string) ?? []), r.provider_id as string]);
+  return map;
+}
+
+export async function getItemProviders(orgId: string, itemId: string): Promise<string[]> {
+  const rows = (await getSql()`
+    SELECT provider_id FROM price_item_providers WHERE organization_id = ${orgId} AND item_id = ${itemId}`) as unknown as Row[];
+  return rows.map((r) => r.provider_id as string);
+}
+
+export async function setItemProviders(orgId: string, itemId: string, providerIds: string[]): Promise<void> {
+  await getSql().begin(async (tx) => {
+    await tx`DELETE FROM price_item_providers WHERE organization_id = ${orgId} AND item_id = ${itemId}`;
+    for (const pid of providerIds)
+      await tx`INSERT INTO price_item_providers (organization_id, item_id, provider_id) VALUES (${orgId}, ${itemId}, ${pid})`;
+  });
+}

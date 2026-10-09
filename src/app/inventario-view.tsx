@@ -8,7 +8,10 @@ import {
   BTN_DARK,
   CARD,
   FIELD,
+  ProviderPicker,
   Toast,
+  providerNames,
+  useSellers,
   call,
   daysUntil,
   fmtDate,
@@ -56,6 +59,7 @@ export function InventarioView() {
   const [toast, showToast] = useToast();
   const admin = data?.canAdmin ?? false;
   const days = data?.expiryDays ?? 30;
+  const sellers = useSellers();
 
   const flags = (p: CatalogProduct) => ({
     vencido: p.expiredQuantity > 0,
@@ -189,6 +193,7 @@ export function InventarioView() {
                   onToggle={() => setOpen(open === p.stockItemId ? null : p.stockItemId)}
                   panel={panel && panel.kind !== "nuevo" && panel.id === p.stockItemId ? panel.kind : null}
                   setPanel={(k) => setPanel(k ? { kind: k, id: p.stockItemId } : null)}
+                  sellers={sellers}
                   act={act}
                 />
               ))}
@@ -211,7 +216,9 @@ function ProductRow({
   panel,
   setPanel,
   act,
+  sellers,
 }: {
+  sellers: { id: string; name: string }[] | null;
   p: CatalogProduct;
   days: number;
   admin: boolean;
@@ -237,6 +244,7 @@ function ProductRow({
             {soon && <Pill className="!py-0 !text-[11px]">por vencer</Pill>}
             {p.expiredQuantity > 0 && <Pill className="!py-0 !text-[11px]">{p.expiredQuantity} vencidas</Pill>}
             {p.low && <Pill className="!py-0 !text-[11px]">stock bajo</Pill>}
+            {p.providerIds.length > 0 && <span>· {providerNames(p.providerIds, sellers)}</span>}
           </span>
         </span>
         <span className="flex flex-col items-end text-[14px] leading-tight tabular-nums text-neutral-300">
@@ -293,7 +301,7 @@ function ProductRow({
                 Ingresar lote
               </button>
               <button className={BTN} onClick={() => setPanel("editar")}>
-                Editar precio / mínimo
+                Editar precio / médicas
               </button>
             </div>
           )}
@@ -323,6 +331,7 @@ const Label = ({ children }: { children: React.ReactNode }) => <span className="
 
 function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: (v: object) => Promise<boolean> }) {
   const [f, setF] = useState({ name: "", price: "", cardPrice: "", minQuantity: "", quantity: "", expiresOn: "", lotCode: "" });
+  const [providerIds, setProviderIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   const ok = f.name.trim() && f.price.trim();
@@ -359,6 +368,7 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
           <input value={f.lotCode} onChange={set("lotCode")} placeholder="Como figura en la caja" className={FIELD} />
         </label>
       </div>
+      <ProviderPicker value={providerIds} onChange={setProviderIds} />
       <div className="flex gap-2">
         <button
           className={BTN_DARK}
@@ -373,6 +383,7 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
               quantity: toInt(f.quantity),
               expiresOn: f.expiresOn,
               lotCode: f.lotCode,
+              providerIds,
             });
             setBusy(false);
           }}
@@ -427,7 +438,7 @@ function LotForm({ unit, onCancel, onSubmit }: { unit: string; onCancel: () => v
   );
 }
 
-type ProductPatch = { name?: string; price?: number; cardPrice?: number | null; minQuantity?: number; active?: boolean };
+type ProductPatch = { name?: string; price?: number; cardPrice?: number | null; minQuantity?: number; active?: boolean; providerIds?: string[] };
 
 function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () => void; onSubmit: (v: ProductPatch) => Promise<boolean> }) {
   const [f, setF] = useState({
@@ -436,6 +447,7 @@ function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () =
     cardPrice: p.cardPrice === null ? "" : String(p.cardPrice),
     minQuantity: String(p.minQuantity),
   });
+  const [providerIds, setProviderIds] = useState<string[]>(p.providerIds);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-neutral-800 p-3.5">
@@ -457,8 +469,9 @@ function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () =
           <input value={f.minQuantity} onChange={set("minQuantity")} inputMode="numeric" className={FIELD} />
         </label>
       </div>
+      <ProviderPicker value={providerIds} onChange={setProviderIds} />
       <div className="flex flex-wrap gap-2">
-        <button className={BTN_DARK} onClick={() => onSubmit({ name: f.name, price: toInt(f.price), cardPrice: toInt(f.cardPrice) ?? null, minQuantity: toInt(f.minQuantity) ?? 0 })}>
+        <button className={BTN_DARK} onClick={() => onSubmit({ name: f.name, price: toInt(f.price), cardPrice: toInt(f.cardPrice) ?? null, minQuantity: toInt(f.minQuantity) ?? 0, providerIds })}>
           Guardar
         </button>
         <button className={BTN} onClick={onCancel}>

@@ -22,7 +22,12 @@ interface Item {
   cardPrice: number | null;
   /** Solo productos: unidades disponibles. */
   available?: number;
+  /** Médicas que lo hacen / venden (vacío = cualquiera). */
+  providerIds: string[];
 }
+
+/** ¿Esa médica puede anotar este ítem? (sin vínculos = cualquiera). */
+const allowedFor = (it: Item, sellerId: string | null) => !sellerId || !it.providerIds.length || it.providerIds.includes(sellerId);
 interface Seller {
   id: string;
   name: string;
@@ -56,10 +61,10 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const isMedico = actor.role === "medico";
 
   const items: Item[] = useMemo(() => {
-    const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice }));
+    const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [] }));
     const products = (catalog?.products ?? [])
       .filter((p) => p.price !== null && p.priceItemId)
-      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available }));
+      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available, providerIds: p.providerIds ?? [] }));
     return [...practices, ...products];
   }, [catalog]);
   const sellers: Seller[] = useMemo(
@@ -304,9 +309,11 @@ function PickItems({
       ...draft,
       lines: picked.has(it.id) ? draft.lines.filter((l) => l.item.id !== it.id) : [...draft.lines, { item: it, qty: 1, sellerId: null }],
     });
+  // Solo lo que hace / vende la profesional elegida.
+  const mine = items.filter((i) => allowedFor(i, draft.sellerId));
   const groups = [
-    { title: "Prácticas", list: items.filter((i) => i.kind === "practica") },
-    { title: "Productos", list: items.filter((i) => i.kind === "producto") },
+    { title: "Prácticas", list: mine.filter((i) => i.kind === "practica") },
+    { title: "Productos", list: mine.filter((i) => i.kind === "producto") },
   ].filter((g) => g.list.length);
   const n = draft.lines.length;
 
@@ -345,7 +352,11 @@ function PickItems({
           </div>
         </div>
       ))}
-      {!groups.length && <p className="text-neutral-400">Todavía no hay prácticas ni productos con precio. Los carga el admin en Stock.</p>}
+      {!groups.length && (
+        <p className="text-neutral-400">
+          {proName ? `${proName} no tiene prácticas ni productos asignados.` : "Todavía no hay prácticas ni productos con precio."} Los carga el admin en Stock.
+        </p>
+      )}
       <button onClick={onNext} disabled={!n} className={`${CTA} mt-2`}>
         {n ? `Seguir (${n})` : "Marcá al menos uno"}
       </button>
@@ -381,7 +392,10 @@ function Confirm({
   const whoNames = [...new Set(draft.lines.map((l) => sellerName(l.sellerId ?? draft.sellerId)).filter(Boolean))];
   const cash = draft.lines.reduce((n, l) => n + l.item.price * l.qty, 0);
   const card = draft.lines.reduce((n, l) => n + cardOf(l.item) * l.qty, 0);
-  const blocked = !draft.lines.length || draft.unresolved.length > 0 || missingSeller;
+  // Algo que la médica elegida no tiene asignado (el admin lo vincula en Stock).
+  const notHers = (l: Line) => !allowedFor(l.item, l.sellerId ?? draft.sellerId);
+  const anyNotHers = draft.lines.some(notHers);
+  const blocked = !draft.lines.length || draft.unresolved.length > 0 || missingSeller || anyNotHers;
 
   const setQty = (i: number, qty: number) =>
     setDraft({ ...draft, lines: qty <= 0 ? draft.lines.filter((_, j) => j !== i) : draft.lines.map((l, j) => (j === i ? { ...l, qty } : l)) });
@@ -429,7 +443,14 @@ function Confirm({
                 <PlusIcon size={18} weight="bold" />
               </button>
             </span>
-            <span className="min-w-0 flex-1 text-[23px] font-bold leading-tight sm:text-[26px]">{l.item.name}</span>
+            <span className="min-w-0 flex-1 text-[23px] font-bold leading-tight sm:text-[26px]">
+              {l.item.name}
+              {notHers(l) && (
+                <span className="block text-[16px] font-semibold text-accent">
+                  {sellerName(l.sellerId ?? draft.sellerId)} no tiene asignado esto. Quitalo o cambiá la médica.
+                </span>
+              )}
+            </span>
             <span className="text-[19px] tabular-nums text-neutral-300">
               {money((draft.payment === "tarjeta" ? cardOf(l.item) : l.item.price) * l.qty)}
             </span>
@@ -515,7 +536,7 @@ function Confirm({
 
       <div className="flex flex-wrap gap-3">
         <button onClick={onSave} disabled={busy || blocked} className={`${CTA} flex-[2_1_220px]`}>
-          {busy ? "Guardando…" : missingSeller ? "Falta quién" : draft.unresolved.length ? "Revisá lo marcado" : "Sí, guardar"}
+          {busy ? "Guardando…" : missingSeller ? "Falta quién" : draft.unresolved.length || anyNotHers ? "Revisá lo marcado" : "Sí, guardar"}
         </button>
         <button onClick={onEdit} className={`${GHOST} min-h-[68px] flex-[1_1_160px]`}>
           Corregir

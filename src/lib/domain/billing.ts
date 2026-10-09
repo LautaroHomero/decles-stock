@@ -12,6 +12,7 @@ import {
   updatePriceItem as persistPriceItem,
   setSalePayment,
   commissionSummary,
+  getItemProviders,
   type CommissionRow,
   type BillingSource,
   type BillingWho,
@@ -262,6 +263,10 @@ export async function recordSale(
     if (!p.active) return fail(`${p.name} está dada de baja.`, 409);
     providerId = p.id;
     commissionPct = p.commissionPct;
+    // Decles: si el ítem tiene profesionales vinculados, solo ellos lo pueden anotar.
+    const allowed = await getItemProviders(ctx.orgId, item.id);
+    if (allowed.length && !allowed.includes(p.id))
+      return fail(`${p.name} no tiene asignado "${item.name}". El admin lo vincula en Stock.`, 409);
   }
 
   if (item.stockItemId) {

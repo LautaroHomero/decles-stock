@@ -75,6 +75,10 @@ const atencion = await practice("Atención", 25000, 28800);
 const peeling = await practice("Peeling", 40000, 46000);
 const botox = await practice("Aplicación de botox", 120000, 138000);
 const limpieza = await practice("Limpieza facial", 35000, 40300);
+// Peeling y botox solo los hace Laura; el resto, cualquiera.
+const { setItemLinks } = await import("../src/lib/domain/products");
+must(await setItemLinks(adminActor, peeling, [laura.providerId!]), "peeling → laura");
+must(await setItemLinks(adminActor, botox, [laura.providerId!]), "botox → laura");
 
 // Un lote ya vencido (la app no deja ingresarlo así; se mete directo para la demo).
 await getSql()`

@@ -112,6 +112,8 @@ export function Toast({ msg }: { msg: string | null }) {
 export interface CatalogProduct {
   stockItemId: string;
   priceItemId: string | null;
+  /** Médicas que lo venden (vacío = cualquiera). */
+  providerIds: string[];
   name: string;
   unit: string;
   category: string;
@@ -133,6 +135,7 @@ export interface CatalogPractice {
   name: string;
   price: number;
   cardPrice: number | null;
+  providerIds: string[];
 }
 
 export interface CatalogResponse {
@@ -187,3 +190,47 @@ export function Amount({ cash, card, method, className = "" }: { cash: number; c
 
 export const unitsLabel = (n: number, unit: string) =>
   unit === "unidad" ? `${n} ${n === 1 ? "unidad" : "unidades"}` : `${n} ${unit}`;
+
+/** Médicas activas del consultorio (para vincular y para elegir quién). */
+export function useSellers(): { id: string; name: string }[] | null {
+  const [d] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string }[] }>("/api/sellers", 60_000);
+  return d?.ok ? d.sellers.map((s) => ({ id: s.providerId, name: s.name })) : null;
+}
+
+/** Elegir qué profesionales hacen / venden algo. Ninguna marcada = todas. */
+export function ProviderPicker({ value, onChange }: { value: string[]; onChange: (ids: string[]) => void }) {
+  const sellers = useSellers();
+  if (!sellers) return null;
+  if (!sellers.length) return <p className="text-[13px] text-neutral-500">Todavía no hay médicas: se dan de alta en Equipo.</p>;
+  const toggle = (id: string) => onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[13px] text-neutral-400">¿Quién lo hace o lo vende?</span>
+      <div className="flex flex-wrap gap-2">
+        {sellers.map((s) => {
+          const on = value.includes(s.id);
+          return (
+            <button
+              type="button"
+              key={s.id}
+              aria-pressed={on}
+              onClick={() => toggle(s.id)}
+              className={`rounded-full border-2 px-3.5 py-1.5 text-[14px] font-semibold transition-colors ${
+                on ? "border-accent bg-accent text-on-accent" : "border-neutral-800 text-fg hover:border-accent-600"
+              }`}
+            >
+              {s.name}
+            </button>
+          );
+        })}
+      </div>
+      <span className="text-[12.5px] text-neutral-500">{value.length ? "Solo las marcadas lo pueden anotar." : "Sin marcar = cualquiera de las médicas."}</span>
+    </div>
+  );
+}
+
+/** "Laura, Paula" a partir de ids; vacío = "Todas". */
+export function providerNames(ids: string[], sellers: { id: string; name: string }[] | null): string {
+  if (!ids.length) return "Todas las médicas";
+  return ids.map((id) => sellers?.find((s) => s.id === id)?.name ?? "—").join(", ");
+}

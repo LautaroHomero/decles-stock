@@ -1,6 +1,8 @@
 import { createPrice, listPrices, updatePrice, canEditPrices } from "@/lib/domain/billing";
 import { addStock, createItem, editItem, stockOverview, canManageStock, type StockItem } from "@/lib/domain/stock";
 import { getStockItem } from "@/lib/db/stock-repo";
+import { listItemProviders, setItemProviders } from "@/lib/db/billing-repo";
+import { getProvider } from "@/lib/db/repo";
 import type { Actor } from "@/lib/domain/types";
 
 /**
@@ -16,6 +18,8 @@ const fail = (error: string, status = 400): { ok: false; error: string; status: 
 export interface CatalogProduct {
   stockItemId: string;
   priceItemId: string | null;
+  /** Profesionales que lo venden (vacío = cualquiera). */
+  providerIds: string[];
   name: string;
   unit: string;
   category: string;
@@ -39,6 +43,8 @@ export interface CatalogPractice {
   name: string;
   price: number;
   cardPrice: number | null;
+  /** Profesionales que la hacen (vacío = cualquiera). */
+  providerIds: string[];
 }
 
 export async function catalog(actor: Actor): Promise<
@@ -53,6 +59,7 @@ export async function catalog(actor: Actor): Promise<
   const [ov, prices] = await Promise.all([stockOverview(actor), listPrices(actor)]);
   if (!ov.ok) return ov;
   if (!prices.ok) return prices;
+  const links = await listItemProviders(actor.activeOrg!.id);
   const byStock = new Map(
     prices.items.filter((p) => p.kind === "producto" && p.stockItemId && p.active).map((p) => [p.stockItemId!, p]),
   );
@@ -63,6 +70,7 @@ export async function catalog(actor: Actor): Promise<
     return {
       stockItemId: i.id,
       priceItemId: price?.id ?? null,
+      providerIds: price ? (links.get(price.id) ?? []) : [],
       name: i.name,
       unit: i.unit,
       category: i.category,
@@ -79,7 +87,7 @@ export async function catalog(actor: Actor): Promise<
   });
   const practices = prices.items
     .filter((p) => p.kind === "tratamiento" && p.active)
-    .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount }));
+    .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, providerIds: links.get(p.id) ?? [] }));
   return {
     ok: true,
     products,
@@ -113,6 +121,8 @@ export async function createProduct(
     quantity?: number;
     expiresOn?: string | null;
     lotCode?: string;
+    /** Quién lo vende (vacío = cualquiera). */
+    providerIds?: string[];
   },
 ): Promise<Result<{ stockItemId: string; priceItemId: string; lotError?: string }>> {
   const g = await adminGate(actor);
@@ -127,6 +137,10 @@ export async function createProduct(
     await editItem(actor, item.itemId, { active: false });
     return price;
   }
+  if (v.providerIds?.length) {
+    const l = await setItemLinks(actor, price.itemId, v.providerIds);
+    if (!l.ok) return { ...l, error: `Producto creado, pero no se pudieron vincular los profesionales: ${l.error}` };
+  }
   let lotError: string | undefined;
   if (v.quantity) {
     const lot = await addStock(actor, { itemId: item.itemId, quantity: v.quantity, expiresOn: v.expiresOn, lotCode: v.lotCode });
@@ -139,7 +153,7 @@ export async function createProduct(
 export async function updateProduct(
   actor: Actor,
   stockItemId: string,
-  v: { name?: string; price?: number; cardPrice?: number | null; unit?: string; category?: string; minQuantity?: number; active?: boolean },
+  v: { name?: string; price?: number; cardPrice?: number | null; unit?: string; category?: string; minQuantity?: number; active?: boolean; providerIds?: string[] },
 ): Promise<Result<object>> {
   const g = await adminGate(actor);
   if (!g.ok) return g;
@@ -151,6 +165,10 @@ export async function updateProduct(
   if (linked) {
     const u = await updatePrice(actor, linked.id, { name: v.name, amount: v.price, cardAmount: v.cardPrice, active: v.active });
     if (!u.ok) return u;
+    if (v.providerIds !== undefined) {
+      const l = await setItemLinks(actor, linked.id, v.providerIds);
+      if (!l.ok) return l;
+    }
   } else if (v.price !== undefined) {
     const cur = await getStockItem(actor.activeOrg!.id, stockItemId);
     const c = await createPrice(actor, { kind: "producto", name: cur?.name ?? v.name ?? "", amount: v.price, cardAmount: v.cardPrice ?? null, stockItemId });
@@ -166,25 +184,61 @@ export async function updateProduct(
 export async function listPractices(actor: Actor): Promise<Result<{ practices: (CatalogPractice & { active: boolean })[] }>> {
   const prices = await listPrices(actor, { includeInactive: true });
   if (!prices.ok) return prices;
+  const links = await listItemProviders(actor.activeOrg!.id);
   return {
     ok: true,
     practices: prices.items
       .filter((p) => p.kind === "tratamiento")
-      .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, active: p.active })),
+      .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, active: p.active, providerIds: links.get(p.id) ?? [] })),
   };
 }
 
-export async function createPractice(actor: Actor, v: { name: string; price: number; cardPrice?: number | null }): Promise<Result<{ itemId: string }>> {
+export async function createPractice(
+  actor: Actor,
+  v: { name: string; price: number; cardPrice?: number | null; providerIds?: string[] },
+): Promise<Result<{ itemId: string }>> {
   if (!actor.activeOrg?.canAdmin) return fail("Solo un administrador puede cargar prácticas.", 403);
-  return createPrice(actor, { kind: "tratamiento", name: v.name, amount: v.price, cardAmount: v.cardPrice ?? null });
+  const ids = await validProviders(actor, v.providerIds);
+  if (!ids.ok) return ids;
+  const r = await createPrice(actor, { kind: "tratamiento", name: v.name, amount: v.price, cardAmount: v.cardPrice ?? null });
+  if (r.ok && ids.ids.length) await setItemProviders(actor.activeOrg.id, r.itemId, ids.ids);
+  return r;
+}
+
+/** Valida que los profesionales sean del consultorio. `undefined` = no tocar. */
+async function validProviders(actor: Actor, raw: unknown): Promise<Result<{ ids: string[] }>> {
+  if (raw === undefined) return { ok: true, ids: [] };
+  if (!Array.isArray(raw) || !raw.every((x) => typeof x === "string")) return fail("Profesionales inválidos.");
+  const ids = [...new Set(raw as string[])];
+  for (const id of ids) {
+    const p = await getProvider(id);
+    if (!p || p.organizationId !== actor.activeOrg?.id) return fail("Profesional no encontrado en este consultorio.", 404);
+  }
+  return { ok: true, ids };
+}
+
+/** Admin: quién ofrece un ítem (producto o tratamiento). Lista vacía = cualquiera. */
+export async function setItemLinks(actor: Actor, priceItemId: string, providerIds: string[]): Promise<Result<object>> {
+  if (!actor.activeOrg?.canAdmin) return fail("Solo un administrador puede vincular profesionales.", 403);
+  const prices = await listPrices(actor, { includeInactive: true });
+  if (!prices.ok) return prices;
+  if (!prices.items.some((p) => p.id === priceItemId)) return fail("Ítem no encontrado.", 404);
+  const ids = await validProviders(actor, providerIds);
+  if (!ids.ok) return ids;
+  await setItemProviders(actor.activeOrg.id, priceItemId, ids.ids);
+  return { ok: true };
 }
 
 export async function updatePractice(
   actor: Actor,
   id: string,
-  v: { name?: string; price?: number; cardPrice?: number | null; active?: boolean },
+  v: { name?: string; price?: number; cardPrice?: number | null; active?: boolean; providerIds?: string[] },
 ): Promise<Result<object>> {
   if (!actor.activeOrg?.canAdmin) return fail("Solo un administrador puede cambiar prácticas.", 403);
+  if (v.providerIds !== undefined) {
+    const l = await setItemLinks(actor, id, v.providerIds);
+    if (!l.ok) return l;
+  }
   const cur = (await listPrices(actor, { includeInactive: true }));
   if (!cur.ok) return cur;
   if (!cur.items.some((p) => p.id === id && p.kind === "tratamiento")) return fail("Práctica no encontrada.", 404);

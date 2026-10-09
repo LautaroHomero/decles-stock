@@ -39,6 +39,9 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
 - Todo lo anotado junto se guarda junto (`visit_id`): **o se anota todo o nada** (si no alcanza el stock de un producto, no se
   anota ninguna línea).
 - **Cierre del día**: pacientes, prácticas, lo cobrado (por medio de pago) y el detalle por médica. Se imprime.
+- **Quién hace qué**: el admin vincula cada práctica y cada producto a las médicas que lo hacen o venden (Stock →
+  editar → "¿Quién lo hace o lo vende?"). Sin marcar = cualquiera. Al anotar a mano, después de elegir la médica se ven
+  solo sus ítems; si se escribe algo que no tiene asignado, la confirmación lo marca y el servidor lo rechaza.
 
 ## Precios, medio de pago y comisiones
 
@@ -88,7 +91,7 @@ Empezar de cero: `docker compose down -v && npm run db:up && npm run db:migrate 
 ```
 src/lib/db/migrations/   0001_core · 0002_stock · 0003_billing   (= Clavdia)
                          0004_notifications · 0005_accounts_commissions · 0006_user_aliases
-                         0007_payment_methods · 0008_onboarding · 0009_visits   (nuevas)
+                         0007_payment_methods · 0008_onboarding · 0009_visits · 0010_item_providers   (nuevas)
 src/lib/auth/            session (cookie firmada + session_version), password (scrypt), actor
 src/lib/domain/
   accounts.ts      primer arranque, login, contraseña (y recuperación por código), equipo (alta/baja/reset/comisión)
@@ -106,8 +109,9 @@ src/lib/domain/
 
 Diferencias concretas contra Clavdia; todo lo demás es igual:
 
-1. **Migraciones nuevas**: `0004` a `0009` (solo agregan tablas/columnas). Prácticas = `price_list_items.kind = 'tratamiento'`
-   (sin stock). `sales.patient_label` (paciente escrito; en Clavdia se puede mapear a `patient_id`) y `sales.visit_id`. `price_list_items.amount` sigue siendo el
+1. **Migraciones nuevas**: `0004` a `0010` (solo agregan tablas/columnas). Prácticas = `price_list_items.kind = 'tratamiento'`
+   (sin stock). `sales.patient_label` (paciente escrito; en Clavdia se puede mapear a `patient_id`) y `sales.visit_id`.
+   `price_item_providers` (0010): qué médicas ofrecen cada ítem (distinto de `price_list_items.provider_id` de Clavdia). `price_list_items.amount` sigue siendo el
    precio base (efectivo); `card_amount` es nuevo. `sales.total` = lo cobrado; `cash_total`/`card_total`/`payment_method` nuevos.
 2. **Login**: Clavdia entra con DNI/email + PIN. Al integrar, o se suma usuario+contraseña a Clavdia, o se completa
    `email`/`dni` de estas cuentas para que entren con el login de Clavdia. `session_version` conviene llevarlo igual.
