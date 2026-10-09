@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CalendarBlankIcon, CaretDownIcon, CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { SECTION_TITLE } from "./ui";
 import {
@@ -102,6 +102,7 @@ export function VentasView({ actor }: { actor: Actor }) {
 
   const [period, setPeriod] = useState<Period>("dia");
   const [anchor, setAnchor] = useState(today);
+  const [calOpen, setCalOpen] = useState(false);
   const { from, to } = rangeOf(period, anchor);
   const isCurrent = from <= today && today <= to;
   const canNext = shift(period, anchor, 1) <= today || rangeOf(period, shift(period, anchor, 1)).from <= today;
@@ -193,7 +194,31 @@ export function VentasView({ actor }: { actor: Actor }) {
         <button aria-label="Anterior" onClick={() => setAnchor(shift(period, anchor, -1))} className={NAV}>
           <CaretLeftIcon size={16} />
         </button>
-        <span className="min-w-0 flex-1 truncate text-center text-[15px] font-medium">{label(period, from, to)}</span>
+        <div className="relative min-w-0 flex-1">
+          <button
+            onClick={() => setCalOpen((o) => !o)}
+            aria-expanded={calOpen}
+            aria-label="Elegir un día en el calendario"
+            className="mx-auto flex max-w-full items-center justify-center gap-2 rounded-lg px-3 py-1.5 text-[15px] font-medium transition-colors hover:bg-accent-900"
+          >
+            <CalendarBlankIcon size={16} className="shrink-0 text-neutral-400" />
+            <span className="truncate">{label(period, from, to)}</span>
+            <CaretDownIcon size={12} className={`shrink-0 text-neutral-500 transition-transform ${calOpen ? "rotate-180" : ""}`} />
+          </button>
+          {calOpen && (
+            <Calendar
+              selected={period === "dia" ? anchor : null}
+              start={anchor}
+              today={today}
+              onPick={(d) => {
+                setPeriod("dia");
+                setAnchor(d);
+                setCalOpen(false);
+              }}
+              onClose={() => setCalOpen(false)}
+            />
+          )}
+        </div>
         <button aria-label="Siguiente" onClick={() => setAnchor(shift(period, anchor, 1))} disabled={!canNext || isCurrent} className={NAV}>
           <CaretRightIcon size={16} />
         </button>
@@ -471,3 +496,114 @@ function SaleItem({
     </li>
   );
 }
+
+/**
+ * Calendario para elegir un día: un mes a la vez, con un punto en los días que tuvieron
+ * ventas. Los días futuros no se pueden elegir.
+ */
+function Calendar({
+  selected,
+  start,
+  today,
+  onPick,
+  onClose,
+}: {
+  selected: string | null;
+  start: string;
+  today: string;
+  onPick: (d: string) => void;
+  onClose: () => void;
+}) {
+  const [month, setMonth] = useState(start.slice(0, 7)); // "YYYY-MM"
+  const ref = useRef<HTMLDivElement>(null);
+  const first = `${month}-01`;
+  const last = rangeOf("mes", first).to;
+  const [data] = usePoll<{ ok: boolean; sales: SaleRow[] }>(`/api/sales?from=${first}&to=${last}&limit=500`, 60_000);
+
+  useEffect(() => {
+    // El contenedor incluye el botón que lo abre: tocarlo de nuevo lo cierra sin reabrirlo.
+    const close = (e: MouseEvent) => {
+      const box = ref.current?.parentElement;
+      if (box && !box.contains(e.target as Node)) onClose();
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [onClose]);
+
+  const totals = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of data?.sales ?? []) if (s.status === "paid") m.set(s.createdAt.slice(0, 10), (m.get(s.createdAt.slice(0, 10)) ?? 0) + charged(s));
+    return m;
+  }, [data]);
+
+  const lead = (fromYmd(first).getDay() + 6) % 7; // lunes primero
+  const cells: (string | null)[] = [...Array(lead).fill(null)];
+  for (let d = first; d <= last; d = addDays(d, 1)) cells.push(d);
+  const monthTotal = [...totals.values()].reduce((n, v) => n + v, 0);
+  const canNext = `${month}-01` < `${today.slice(0, 7)}-01`;
+  const move = (dir: 1 | -1) => setMonth(shift("mes", first, dir).slice(0, 7));
+  const f = fromYmd(first);
+
+  return (
+    <div
+      ref={ref}
+      className="absolute left-1/2 top-11 z-30 w-[300px] -translate-x-1/2 animate-cl-in rounded-2xl bg-surface p-4 shadow-lg"
+      role="dialog"
+      aria-label="Calendario"
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <button aria-label="Mes anterior" onClick={() => move(-1)} className={CAL_NAV}>
+          <CaretLeftIcon size={14} />
+        </button>
+        <span className="flex-1 text-center text-[14px] font-medium">{cap(`${MONTH[f.getMonth()]} ${f.getFullYear()}`)}</span>
+        <button aria-label="Mes siguiente" onClick={() => move(1)} disabled={!canNext} className={CAL_NAV}>
+          <CaretRightIcon size={14} />
+        </button>
+      </div>
+      <div className="grid grid-cols-7 gap-y-1 text-center text-[11px] text-neutral-500">
+        {["lu", "ma", "mi", "ju", "vi", "sá", "do"].map((d) => (
+          <span key={d} className="pb-1">
+            {d}
+          </span>
+        ))}
+        {cells.map((d, i) =>
+          d === null ? (
+            <span key={`x${i}`} />
+          ) : (
+            <button
+              key={d}
+              disabled={d > today}
+              onClick={() => onPick(d)}
+              title={totals.has(d) ? money(totals.get(d)!) : "Sin ventas"}
+              className={`relative mx-auto flex h-9 w-9 flex-col items-center justify-center rounded-full text-[13px] tabular-nums transition-colors disabled:opacity-25 ${
+                d === selected ? "bg-fg text-bg" : d === today ? "border border-neutral-600 text-fg hover:bg-accent-900" : "text-neutral-200 hover:bg-accent-900"
+              }`}
+            >
+              {Number(d.slice(8))}
+              {totals.has(d) && (
+                <span className={`absolute bottom-1 h-1 w-1 rounded-full ${d === selected ? "bg-bg" : "bg-fg"}`} aria-hidden />
+              )}
+            </button>
+          ),
+        )}
+      </div>
+      <div className="mt-3 flex items-center justify-between border-t border-neutral-800 pt-3 text-[12px] text-neutral-400">
+        <span className="flex items-center gap-1.5">
+          <span className="h-1 w-1 rounded-full bg-fg" aria-hidden /> días con ventas
+        </span>
+        <span className="tabular-nums">{data ? `Mes: ${money(monthTotal)}` : "…"}</span>
+      </div>
+      <button onClick={() => onPick(today)} className="mt-2 w-full rounded-md py-1.5 text-[13px] text-neutral-300 transition-colors hover:bg-accent-900">
+        Ir a hoy
+      </button>
+    </div>
+  );
+}
+
+const CAL_NAV =
+  "flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-accent-900 hover:text-fg disabled:opacity-25 disabled:hover:bg-transparent";
