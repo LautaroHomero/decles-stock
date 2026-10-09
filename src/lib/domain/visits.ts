@@ -1,4 +1,13 @@
-import { insertPendingSale, markSaleVoided, newVisitId, type PaymentMethod } from "@/lib/db/billing-repo";
+import {
+  insertPendingSale,
+  listVisitSales,
+  markSaleEdited,
+  markSaleVoided,
+  newVisitId,
+  stampVisit,
+  type PaymentMethod,
+} from "@/lib/db/billing-repo";
+import { realNowIso } from "@/lib/domain/clock";
 import { restoreStockForSale } from "@/lib/db/stock-repo";
 import { getProvider } from "@/lib/db/repo";
 import { recordSale } from "@/lib/domain/billing";
@@ -109,4 +118,35 @@ export async function recordVisit(
     cardTotal += r.cardTotal;
   }
   return { ok: true, visitId, saleIds, total, cashTotal, cardTotal, pending };
+}
+
+/**
+ * Editar una anotación ya guardada: se graba la versión nueva (validada igual que al anotar) y recién
+ * entonces la vieja pasa a 'edited' y devuelve su stock. Conserva la hora original.
+ * Permisos: lo del día, cualquiera del equipo (la médica solo lo suyo); días anteriores, solo el admin.
+ */
+export async function editVisit(
+  actor: Actor,
+  key: string,
+  v: VisitInput,
+): Promise<Result<{ visitId: string }>> {
+  const orgId = actor.activeOrg?.id;
+  if (!orgId || actor.role === "paciente") return { ok: false, error: "No autorizado.", status: 403 };
+  const old = await listVisitSales(orgId, key);
+  if (!old.length) return { ok: false, error: "Esa anotación ya no existe o fue anulada.", status: 404 };
+  const isAdmin = !!actor.activeOrg?.canAdmin;
+  const today = realNowIso().slice(0, 10);
+  if (!isAdmin && old[0].createdAt.slice(0, 10) !== today)
+    return { ok: false, error: "Lo de días anteriores lo corrige el admin.", status: 403 };
+  if (!isAdmin && actor.role === "medico" && old.some((s) => s.providerId !== actor.activeOrg?.providerId))
+    return { ok: false, error: "Solo podés editar lo tuyo.", status: 403 };
+
+  const r = await recordVisit(actor, v);
+  if (!r.ok) return r;
+  const who = { id: actor.userId, name: actor.name, source: "manual" as const };
+  for (const s of old) {
+    if (await markSaleEdited(orgId, s.id, who)) await restoreStockForSale(orgId, s.id, who);
+  }
+  await stampVisit(orgId, r.visitId, old[0].createdAt, `Editado por ${actor.name}`);
+  return { ok: true, visitId: r.visitId };
 }

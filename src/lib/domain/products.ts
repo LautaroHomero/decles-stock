@@ -1,7 +1,7 @@
 import { createPrice, listPrices, updatePrice, canEditPrices } from "@/lib/domain/billing";
 import { addStock, createItem, editItem, stockOverview, canManageStock, type StockItem } from "@/lib/domain/stock";
 import { getStockItem } from "@/lib/db/stock-repo";
-import { listItemProviders, setItemProviders } from "@/lib/db/billing-repo";
+import { listItemProviders, setItemCommission, setItemProviders } from "@/lib/db/billing-repo";
 import { getProvider } from "@/lib/db/repo";
 import type { Actor } from "@/lib/domain/types";
 
@@ -20,6 +20,8 @@ export interface CatalogProduct {
   priceItemId: string | null;
   /** Profesionales que lo venden (vacío = cualquiera). */
   providerIds: string[];
+  /** % de comisión propio (null = el de cada médica). */
+  commissionPct: number | null;
   name: string;
   unit: string;
   category: string;
@@ -47,6 +49,8 @@ export interface CatalogPractice {
   cardPrice: number | null;
   /** Profesionales que la hacen (vacío = cualquiera). */
   providerIds: string[];
+  /** % de comisión propio (null = el de cada médica). */
+  commissionPct: number | null;
 }
 
 export async function catalog(actor: Actor): Promise<
@@ -73,6 +77,7 @@ export async function catalog(actor: Actor): Promise<
       stockItemId: i.id,
       priceItemId: price?.id ?? null,
       providerIds: price ? (links.get(price.id) ?? []) : [],
+      commissionPct: price?.commissionPct ?? null,
       name: i.name,
       unit: i.unit,
       category: i.category,
@@ -90,7 +95,7 @@ export async function catalog(actor: Actor): Promise<
   });
   const practices = prices.items
     .filter((p) => p.kind === "tratamiento" && p.active)
-    .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, providerIds: links.get(p.id) ?? [] }));
+    .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, providerIds: links.get(p.id) ?? [], commissionPct: p.commissionPct }));
   return {
     ok: true,
     products,
@@ -126,10 +131,14 @@ export async function createProduct(
     lotCode?: string;
     /** Quién lo vende (vacío = cualquiera). */
     providerIds?: string[];
+    /** % de comisión propio (vacío = el de cada médica). */
+    commissionPct?: number | null;
   },
 ): Promise<Result<{ stockItemId: string; priceItemId: string; lotError?: string }>> {
   const g = await adminGate(actor);
   if (!g.ok) return g;
+  const pc = pctOf(v.commissionPct);
+  if (!pc.ok) return pc;
   if (typeof v.price !== "number" || !Number.isInteger(v.price) || v.price < 0)
     return fail("El precio tiene que ser un número entero de pesos, 0 o más.");
   const item = await createItem(actor, { name: v.name, unit: v.unit, category: v.category, minQuantity: v.minQuantity });
@@ -140,6 +149,7 @@ export async function createProduct(
     await editItem(actor, item.itemId, { active: false });
     return price;
   }
+  if (pc.pct !== undefined) await setItemCommission(actor.activeOrg!.id, price.itemId, pc.pct);
   if (v.providerIds?.length) {
     const l = await setItemLinks(actor, price.itemId, v.providerIds);
     if (!l.ok) return { ...l, error: `Producto creado, pero no se pudieron vincular los profesionales: ${l.error}` };
@@ -156,10 +166,22 @@ export async function createProduct(
 export async function updateProduct(
   actor: Actor,
   stockItemId: string,
-  v: { name?: string; price?: number; cardPrice?: number | null; unit?: string; category?: string; minQuantity?: number; active?: boolean; providerIds?: string[] },
+  v: {
+    name?: string;
+    price?: number;
+    cardPrice?: number | null;
+    unit?: string;
+    category?: string;
+    minQuantity?: number;
+    active?: boolean;
+    providerIds?: string[];
+    commissionPct?: number | null;
+  },
 ): Promise<Result<object>> {
   const g = await adminGate(actor);
   if (!g.ok) return g;
+  const pc = pctOf(v.commissionPct);
+  if (!pc.ok) return pc;
   const r = await editItem(actor, stockItemId, { name: v.name, unit: v.unit, category: v.category, minQuantity: v.minQuantity, active: v.active });
   if (!r.ok) return r;
   const prices = await listPrices(actor, { includeInactive: true });
@@ -172,6 +194,7 @@ export async function updateProduct(
       const l = await setItemLinks(actor, linked.id, v.providerIds);
       if (!l.ok) return l;
     }
+    if (pc.pct !== undefined) await setItemCommission(actor.activeOrg!.id, linked.id, pc.pct);
   } else if (v.price !== undefined) {
     const cur = await getStockItem(actor.activeOrg!.id, stockItemId);
     const c = await createPrice(actor, { kind: "producto", name: cur?.name ?? v.name ?? "", amount: v.price, cardAmount: v.cardPrice ?? null, stockItemId });
@@ -192,20 +215,32 @@ export async function listPractices(actor: Actor): Promise<Result<{ practices: (
     ok: true,
     practices: prices.items
       .filter((p) => p.kind === "tratamiento")
-      .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, active: p.active, providerIds: links.get(p.id) ?? [] })),
+      .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, active: p.active, providerIds: links.get(p.id) ?? [], commissionPct: p.commissionPct })),
   };
 }
 
 export async function createPractice(
   actor: Actor,
-  v: { name: string; price: number; cardPrice?: number | null; providerIds?: string[] },
+  v: { name: string; price: number; cardPrice?: number | null; providerIds?: string[]; commissionPct?: number | null },
 ): Promise<Result<{ itemId: string }>> {
   if (!actor.activeOrg?.canAdmin) return fail("Solo un administrador puede cargar prácticas.", 403);
   const ids = await validProviders(actor, v.providerIds);
   if (!ids.ok) return ids;
+  const pc = pctOf(v.commissionPct);
+  if (!pc.ok) return pc;
   const r = await createPrice(actor, { kind: "tratamiento", name: v.name, amount: v.price, cardAmount: v.cardPrice ?? null });
   if (r.ok && ids.ids.length) await setItemProviders(actor.activeOrg.id, r.itemId, ids.ids);
+  if (r.ok && pc.pct !== undefined) await setItemCommission(actor.activeOrg.id, r.itemId, pc.pct);
   return r;
+}
+
+/** % de comisión del ítem: undefined = no tocar, null/"" = usar el de la médica. */
+function pctOf(raw: unknown): { ok: true; pct: number | null | undefined } | { ok: false; error: string; status: number } {
+  if (raw === undefined) return { ok: true, pct: undefined };
+  if (raw === null || raw === "") return { ok: true, pct: null };
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > 100 || Math.round(raw * 100) !== raw * 100)
+    return fail("La comisión tiene que ser un % entre 0 y 100 (hasta 2 decimales).");
+  return { ok: true, pct: raw };
 }
 
 /** Valida que los profesionales sean del consultorio. `undefined` = no tocar. */
@@ -235,9 +270,11 @@ export async function setItemLinks(actor: Actor, priceItemId: string, providerId
 export async function updatePractice(
   actor: Actor,
   id: string,
-  v: { name?: string; price?: number; cardPrice?: number | null; active?: boolean; providerIds?: string[] },
+  v: { name?: string; price?: number; cardPrice?: number | null; active?: boolean; providerIds?: string[]; commissionPct?: number | null },
 ): Promise<Result<object>> {
   if (!actor.activeOrg?.canAdmin) return fail("Solo un administrador puede cambiar prácticas.", 403);
+  const pc = pctOf(v.commissionPct);
+  if (!pc.ok) return pc;
   if (v.providerIds !== undefined) {
     const l = await setItemLinks(actor, id, v.providerIds);
     if (!l.ok) return l;
@@ -246,5 +283,6 @@ export async function updatePractice(
   if (!cur.ok) return cur;
   if (!cur.items.some((p) => p.id === id && p.kind === "tratamiento")) return fail("Práctica no encontrada.", 404);
   const r = await updatePrice(actor, id, { name: v.name, amount: v.price, cardAmount: v.cardPrice, active: v.active });
+  if (r.ok && pc.pct !== undefined) await setItemCommission(actor.activeOrg.id, id, pc.pct);
   return r.ok ? { ok: true } : r;
 }

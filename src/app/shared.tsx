@@ -114,6 +114,8 @@ export interface CatalogProduct {
   priceItemId: string | null;
   /** Médicas que lo venden (vacío = cualquiera). */
   providerIds: string[];
+  /** % de comisión propio (null = el de cada médica). */
+  commissionPct: number | null;
   name: string;
   unit: string;
   category: string;
@@ -137,6 +139,7 @@ export interface CatalogPractice {
   price: number;
   cardPrice: number | null;
   providerIds: string[];
+  commissionPct: number | null;
 }
 
 export interface CatalogResponse {
@@ -150,6 +153,7 @@ export interface CatalogResponse {
 
 export interface SaleRow {
   id: string;
+  itemId: string | null;
   itemName: string;
   /** "pendiente": anotado con un nombre que no está en la lista de precios (lo resuelve el admin). */
   kind: "consulta" | "tratamiento" | "producto" | "pendiente";
@@ -162,6 +166,7 @@ export interface SaleRow {
   createdByName: string;
   createdAt: string;
   voidReason: string | null;
+  providerId: string | null;
   providerName: string | null;
   commissionPct: number;
   commissionAmount: number;
@@ -235,4 +240,23 @@ export function ProviderPicker({ value, onChange }: { value: string[]; onChange:
 export function providerNames(ids: string[], sellers: { id: string; name: string }[] | null): string {
   if (!ids.length) return "Todas las médicas";
   return ids.map((id) => sellers?.find((s) => s.id === id)?.name ?? "—").join(", ");
+}
+
+/** "12,5" → 12.5 · "" → null (se usa el % de cada médica). */
+export const parsePct = (s: string): number | null => (s.trim() === "" ? null : Number(s.replace(",", ".")));
+
+/** Campo "% comisión de la médica" de un ítem. Vacío = el % de cada médica (Equipo). */
+export function CommissionField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[13px] text-neutral-400">Comisión de la médica (%)</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/[^\d.,]/g, ""))}
+        inputMode="decimal"
+        placeholder="Vacío = el % de cada médica"
+        className={FIELD}
+      />
+    </label>
+  );
 }

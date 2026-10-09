@@ -175,7 +175,7 @@ function MemberRow({
             </label>
             {m.role === "medico" && (
               <label className="flex flex-col gap-1">
-                <span className="text-[12px] text-neutral-400">Comisión por venta (%)</span>
+                <span className="text-[12px] text-neutral-400">Comisión (%) · salvo que la práctica o el producto tenga la suya</span>
                 <input value={pct} onChange={(e) => setPct(e.target.value.replace(/[^\d.,]/g, ""))} inputMode="decimal" className={FIELD} />
               </label>
             )}
@@ -305,7 +305,7 @@ function NewMemberForm({
         </label>
         {f.role === "medico" && (
           <label className="flex flex-col gap-1">
-            <span className="text-[12px] text-neutral-400">Comisión por venta (%)</span>
+            <span className="text-[12px] text-neutral-400">Comisión (%) · salvo que la práctica o el producto tenga la suya</span>
             <input value={f.pct} onChange={(e) => setF({ ...f, pct: e.target.value.replace(/[^\d.,]/g, "") })} inputMode="decimal" placeholder="Ej. 10" className={FIELD} />
           </label>
         )}

@@ -9,6 +9,8 @@ import {
   CARD,
   FIELD,
   ProviderPicker,
+  CommissionField,
+  parsePct,
   Toast,
   providerNames,
   useSellers,
@@ -246,6 +248,7 @@ function ProductRow({
             {p.low && <Pill className="!py-0 !text-[11px]">stock bajo</Pill>}
             {p.owed > 0 && <Pill className="!py-0 !text-[11px]">vendido sin stock: {p.owed} · cargá el ingreso</Pill>}
             {p.providerIds.length > 0 && <span>· {providerNames(p.providerIds, sellers)}</span>}
+            {p.commissionPct !== null && <span>· comisión {p.commissionPct}%</span>}
           </span>
         </span>
         <span className="flex flex-col items-end text-[14px] leading-tight tabular-nums text-neutral-300">
@@ -302,7 +305,7 @@ function ProductRow({
                 Ingresar lote
               </button>
               <button className={BTN} onClick={() => setPanel("editar")}>
-                Editar precio / médicas
+                Editar precio, médicas y comisión
               </button>
             </div>
           )}
@@ -333,6 +336,7 @@ const Label = ({ children }: { children: React.ReactNode }) => <span className="
 function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: (v: object) => Promise<boolean> }) {
   const [f, setF] = useState({ name: "", price: "", cardPrice: "", minQuantity: "", quantity: "", expiresOn: "", lotCode: "" });
   const [providerIds, setProviderIds] = useState<string[]>([]);
+  const [commission, setCommission] = useState("");
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   const ok = f.name.trim() && f.price.trim();
@@ -368,6 +372,7 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
           <Label>Lote (opcional)</Label>
           <input value={f.lotCode} onChange={set("lotCode")} placeholder="Como figura en la caja" className={FIELD} />
         </label>
+        <CommissionField value={commission} onChange={setCommission} />
       </div>
       <ProviderPicker value={providerIds} onChange={setProviderIds} />
       <div className="flex gap-2">
@@ -385,6 +390,7 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
               expiresOn: f.expiresOn,
               lotCode: f.lotCode,
               providerIds,
+              commissionPct: parsePct(commission),
             });
             setBusy(false);
           }}
@@ -439,7 +445,15 @@ function LotForm({ unit, onCancel, onSubmit }: { unit: string; onCancel: () => v
   );
 }
 
-type ProductPatch = { name?: string; price?: number; cardPrice?: number | null; minQuantity?: number; active?: boolean; providerIds?: string[] };
+type ProductPatch = {
+  name?: string;
+  price?: number;
+  cardPrice?: number | null;
+  minQuantity?: number;
+  active?: boolean;
+  providerIds?: string[];
+  commissionPct?: number | null;
+};
 
 function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () => void; onSubmit: (v: ProductPatch) => Promise<boolean> }) {
   const [f, setF] = useState({
@@ -449,6 +463,7 @@ function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () =
     minQuantity: String(p.minQuantity),
   });
   const [providerIds, setProviderIds] = useState<string[]>(p.providerIds);
+  const [commission, setCommission] = useState(p.commissionPct === null ? "" : String(p.commissionPct));
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-neutral-800 p-3.5">
@@ -469,10 +484,11 @@ function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () =
           <Label>Mínimo</Label>
           <input value={f.minQuantity} onChange={set("minQuantity")} inputMode="numeric" className={FIELD} />
         </label>
+        <CommissionField value={commission} onChange={setCommission} />
       </div>
       <ProviderPicker value={providerIds} onChange={setProviderIds} />
       <div className="flex flex-wrap gap-2">
-        <button className={BTN_DARK} onClick={() => onSubmit({ name: f.name, price: toInt(f.price), cardPrice: toInt(f.cardPrice) ?? null, minQuantity: toInt(f.minQuantity) ?? 0, providerIds })}>
+        <button className={BTN_DARK} onClick={() => onSubmit({ name: f.name, price: toInt(f.price), cardPrice: toInt(f.cardPrice) ?? null, minQuantity: toInt(f.minQuantity) ?? 0, providerIds, commissionPct: parsePct(commission) })}>
           Guardar
         </button>
         <button className={BTN} onClick={onCancel}>

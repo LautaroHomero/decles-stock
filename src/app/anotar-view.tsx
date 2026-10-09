@@ -142,6 +142,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [lastVisit, setLastVisit] = useState<string | null>(null);
+  const [editing, setEditing] = useState<SaleRow[] | null>(null);
 
   // Vista previa en vivo de lo escrito.
   const preview = useMemo(() => {
@@ -402,7 +403,100 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
         <Confirm items={items} draft={draft} setDraft={setDraft} sellers={sellers} isMedico={isMedico} busy={busy} onSave={() => save(draft)} onEdit={() => setMode("idle")} />
       )}
 
-      {mode === "idle" && <Today sales={sales?.sales ?? null} highlight={lastVisit} onOpenClose={onOpenClose} />}
+      {mode === "idle" && <Today sales={sales?.sales ?? null} highlight={lastVisit} onOpenClose={onOpenClose} onEdit={setEditing} />}
+      {editing && (
+        <EditVisit
+          sales={editing}
+          isMedico={isMedico}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            setFlash("Cambios guardados");
+            setTimeout(() => setFlash(null), 1400);
+            refreshSales();
+            refreshCatalog();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Editar algo ya anotado (desde «Hoy» o Ventas). Arma el borrador con lo guardado y al guardar
+ * reemplaza la anotación (el servidor devuelve y vuelve a descontar el stock, y recalcula la comisión).
+ */
+export function EditVisit({ sales, isMedico, onClose, onSaved }: { sales: SaleRow[]; isMedico: boolean; onClose: () => void; onSaved: () => void }) {
+  const [catalog] = usePoll<CatalogResponse>("/api/catalog", 60_000);
+  const [sellersData] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; aliases: string[] }[] }>("/api/sellers", 60_000);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const items: Item[] = useMemo(() => {
+    const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [] }));
+    const products = (catalog?.products ?? [])
+      .filter((p) => p.price !== null && p.priceItemId)
+      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available, providerIds: p.providerIds ?? [] }));
+    return [...practices, ...products];
+  }, [catalog]);
+  const sellers: Seller[] = useMemo(() => (sellersData?.sellers ?? []).map((x) => ({ id: x.providerId, name: x.name, aliases: x.aliases })), [sellersData]);
+  const paid = sales.filter((x) => x.status === "paid");
+  // Borrador inicial armado con lo guardado; lo que se toca después vive en `edited`.
+  const initial = useMemo(() => {
+    if (!catalog) return null;
+    const first = paid[0];
+    const d = emptyDraft("text", first?.providerId ?? null);
+    d.patient = first?.patientName ?? "";
+    d.payment = first?.paymentMethod ?? null;
+    d.lines = paid.map((x) => {
+      const it = x.itemId ? items.find((i) => i.id === x.itemId) : undefined;
+      // Lo guardado manda: si el producto ahora tiene menos stock, igual se puede mantener.
+      const item: Item = it
+        ? { ...it, available: (it.available ?? 0) + (it.kind === "producto" ? x.quantity : 0) }
+        : pendingItem(x.itemName, x.kind === "pendiente" ? x.unitPrice : 0);
+      return { item, qty: x.quantity, sellerId: null };
+    });
+    return d;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog, items]);
+  const [edited, setDraft] = useState<Draft | null>(null);
+  const draft = edited ?? initial;
+  const key = paid[0]?.visitId ?? paid[0]?.id;
+
+  async function save() {
+    if (!draft || !key) return;
+    setBusy(true);
+    setErr("");
+    const r = await fetch(`/api/visits/${key}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        patientName: draft.patient.trim(),
+        providerId: draft.sellerId,
+        paymentMethod: draft.payment,
+        lines: draft.lines.map((l) =>
+          l.item.kind === "pendiente" ? { pendingName: l.item.name, pendingPrice: l.item.price || null, quantity: l.qty } : { itemId: l.item.id, quantity: l.qty },
+        ),
+      }),
+    })
+      .then((x) => x.json())
+      .catch(() => ({ ok: false, error: "No se pudo conectar." }));
+    setBusy(false);
+    if (!r.ok) return setErr(r.error ?? "No se pudo guardar.");
+    onSaved();
+  }
+
+  return (
+    <div className="cl-fade-in fixed inset-0 z-40 overflow-y-auto bg-black/60 px-4 py-10" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="mx-auto w-full max-w-[640px]">
+        {!draft ? (
+          <p className="text-center text-neutral-300">Cargando…</p>
+        ) : (
+          <>
+            <Confirm items={items} draft={draft} setDraft={(d) => setDraft(d)} sellers={sellers} isMedico={isMedico} busy={busy} onSave={save} onEdit={onClose} editing />
+            {err && <p className="mt-3 rounded-xl bg-surface px-4 py-3 text-[14px] text-accent">{err}</p>}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -670,6 +764,7 @@ function Confirm({
   busy,
   onSave,
   onEdit,
+  editing,
 }: {
   items: Item[];
   draft: Draft;
@@ -679,8 +774,11 @@ function Confirm({
   busy: boolean;
   onSave: () => void;
   onEdit: () => void;
+  /** Editando algo ya guardado: cambian los textos de los botones. */
+  editing?: boolean;
 }) {
   const [pickWho, setPickWho] = useState(false);
+  const [adding, setAdding] = useState(false);
   // Renglón no entendido que se está resolviendo: "lista" (buscar) o "pendiente" (anotarlo igual).
   const [fixing, setFixing] = useState<{ k: number; mode: "lista" | "pendiente" } | null>(null);
   const sellerName = (id: string | null) => sellers.find((s) => s.id === id)?.name ?? null;
@@ -721,7 +819,7 @@ function Confirm({
     <section className="flex animate-cl-in flex-col gap-6 rounded-3xl border-2 border-neutral-800 bg-surface p-5 sm:p-7">
       <div className="flex items-center gap-3">
         <span className="rounded-full bg-tag-bg px-3.5 py-1 text-[13px] font-bold text-tag-fg">{isVisit ? "Paciente" : "Venta"}</span>
-        <span className="text-[15px] text-neutral-300">¿Está bien así?</span>
+        <span className="text-[15px] text-neutral-300">{editing ? "Editando lo anotado" : "¿Está bien así?"}</span>
       </div>
 
       {draft.patientUnsure && (
@@ -845,6 +943,22 @@ function Confirm({
           </li>
         ))}
         {!draft.lines.length && !draft.unresolved.length && <li className="text-neutral-400">No quedó nada para anotar.</li>}
+        <li>
+          {adding ? (
+            <SearchItems
+              items={items}
+              sellerId={draft.sellerId}
+              onPick={(it) => {
+                setAdding(false);
+                setDraft({ ...draft, lines: [...draft.lines, { item: it, qty: 1, sellerId: null }] });
+              }}
+            />
+          ) : (
+            <button onClick={() => setAdding(true)} className="py-1 text-[14px] font-semibold text-accent underline-offset-4 hover:underline">
+              + Agregar algo
+            </button>
+          )}
+        </li>
       </ul>
 
       {/* Quién y cómo pagó */}
@@ -910,10 +1024,18 @@ function Confirm({
 
       <div className="flex flex-wrap gap-3">
         <button onClick={onSave} disabled={busy || blocked} className={`${CTA} flex-[2_1_220px]`}>
-          {busy ? "Guardando…" : missingSeller ? "Falta quién" : draft.unresolved.length || anyNotHers || draft.patientUnsure ? "Revisá lo marcado" : "Sí, guardar"}
+          {busy
+            ? "Guardando…"
+            : missingSeller
+              ? "Falta quién"
+              : draft.unresolved.length || anyNotHers || draft.patientUnsure
+                ? "Revisá lo marcado"
+                : editing
+                  ? "Guardar cambios"
+                  : "Sí, guardar"}
         </button>
         <button onClick={onEdit} className={`${GHOST} min-h-[56px] flex-[1_1_160px]`}>
-          Corregir
+          {editing ? "Cancelar" : "Corregir"}
         </button>
       </div>
     </section>
@@ -926,7 +1048,17 @@ function Confirm({
 
 type TodaySale = SaleRow;
 
-function Today({ sales, highlight, onOpenClose }: { sales: TodaySale[] | null; highlight: string | null; onOpenClose: () => void }) {
+function Today({
+  sales,
+  highlight,
+  onOpenClose,
+  onEdit,
+}: {
+  sales: TodaySale[] | null;
+  highlight: string | null;
+  onOpenClose: () => void;
+  onEdit: (rows: SaleRow[]) => void;
+}) {
   const rows = useMemo(() => {
     const paid = (sales ?? []).filter((s) => s.status === "paid");
     const byVisit = new Map<string, TodaySale[]>();
@@ -946,6 +1078,7 @@ function Today({ sales, highlight, onOpenClose }: { sales: TodaySale[] | null; h
         patient: !!patient,
         product: g.some((s) => s.kind === "producto"),
         total: g.reduce((n, s) => n + s.total, 0),
+        rows: g,
       };
     });
   }, [sales]);
@@ -969,18 +1102,21 @@ function Today({ sales, highlight, onOpenClose }: { sales: TodaySale[] | null; h
         <span className="whitespace-nowrap text-[17px] font-bold tabular-nums">{money(total)}</span>
       </div>
       {rows.map((r) => (
-        <div
+        <button
           key={r.key}
-          className={`-mx-2 flex justify-between gap-4 rounded-lg border-b border-neutral-900 px-2 py-3.5 text-[14px] sm:text-[15px] ${r.key === highlight ? "cl-flash-row" : ""}`}
+          onClick={() => onEdit(r.rows)}
+          title="Tocá para editar"
+          className={`-mx-2 flex justify-between gap-4 rounded-lg border-b border-neutral-900 px-2 py-3.5 text-left text-[14px] transition-colors hover:bg-neutral-900 sm:text-[15px] ${r.key === highlight ? "cl-flash-row" : ""}`}
         >
           <span className="min-w-0">
             <span className="mr-3.5 tabular-nums text-neutral-500">{r.time}</span>
             {r.label}
           </span>
           <span className="whitespace-nowrap tabular-nums text-neutral-300">{money(r.total)}</span>
-        </div>
+        </button>
       ))}
       {!rows.length && <p className="py-4 text-[14px] text-neutral-500">Todavía no se anotó nada hoy.</p>}
+      {rows.length > 0 && <p className="pt-2 text-[13px] text-neutral-500">Tocá una fila para corregirla.</p>}
       <button onClick={onOpenClose} className="mt-4 self-start py-2 text-[15px] font-semibold text-accent underline-offset-4 hover:underline">
         Ver el cierre del día →
       </button>

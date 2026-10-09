@@ -4,7 +4,7 @@ import { useState } from "react";
 import { PlusIcon } from "@phosphor-icons/react";
 import { InventarioView } from "./inventario-view";
 import { Pendientes } from "./pendientes";
-import { BTN, BTN_DARK, CARD, FIELD, ProviderPicker, Toast, call, money, providerNames, usePoll, useSellers, useToast } from "./shared";
+import { BTN, BTN_DARK, CARD, CommissionField, FIELD, ProviderPicker, Toast, call, money, parsePct, providerNames, usePoll, useSellers, useToast } from "./shared";
 
 /** Stock: productos (con lotes y vencimientos) o prácticas (solo precio). */
 export function StockSection({ canAdmin }: { canAdmin: boolean }) {
@@ -47,6 +47,7 @@ interface Practice {
   cardPrice: number | null;
   active: boolean;
   providerIds: string[];
+  commissionPct: number | null;
 }
 
 const toInt = (s: string) => (s.trim() === "" ? null : Number(s.replace(/\./g, "").replace(",", ".")));
@@ -59,7 +60,7 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
   const sellers = useSellers();
   const list = data?.practices ?? [];
 
-  async function save(id: string | null, v: { name: string; price: string; cardPrice: string; active?: boolean; providerIds?: string[] }) {
+  async function save(id: string | null, v: { name: string; price: string; cardPrice: string; active?: boolean; providerIds?: string[]; commission?: string }) {
     const price = toInt(v.price);
     if (price === null || !Number.isInteger(price) || price < 0) return showToast("El precio tiene que ser un número entero de pesos.");
     const card = toInt(v.cardPrice);
@@ -70,6 +71,7 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
       cardPrice: card,
       ...(v.active === undefined ? {} : { active: v.active }),
       ...(v.providerIds === undefined ? {} : { providerIds: v.providerIds }),
+      ...(v.commission === undefined ? {} : { commissionPct: parsePct(v.commission) }),
     };
     const r = id ? await call(`/api/practices/${id}`, "PATCH", body) : await call("/api/practices", "POST", body);
     if (!r.ok) return showToast(r.error ?? "No se pudo guardar.");
@@ -84,7 +86,7 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex min-w-[220px] flex-1 flex-col">
           <h1 className="font-display text-[18px] font-medium tracking-[-.01em]">Prácticas</h1>
-          <p className="text-[13px] text-neutral-400">Lo que se hace en la consulta. La médica cobra su % sobre el precio en efectivo.</p>
+          <p className="text-[13px] text-neutral-400">Lo que se hace en la consulta. Comisión: la de la práctica si tiene una, si no la de cada médica (sobre el precio en efectivo).</p>
         </div>
         {canAdmin && editing !== "new" && (
           <button className={`${BTN_DARK} inline-flex items-center gap-1.5`} onClick={() => setEditing("new")}>
@@ -116,7 +118,10 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
                     {p.name}
                     {!p.active && <span className="ml-2 text-[13px] font-normal text-neutral-500">(dada de baja)</span>}
                   </span>
-                  <span className="truncate text-[13.5px] text-neutral-400">{providerNames(p.providerIds, sellers)}</span>
+                  <span className="truncate text-[13.5px] text-neutral-400">
+                    {providerNames(p.providerIds, sellers)}
+                    {p.commissionPct !== null && ` · comisión ${p.commissionPct}%`}
+                  </span>
                 </span>
                 <span className="flex flex-col items-end text-[13.5px] tabular-nums">
                   <span>{money(p.price)}</span>
@@ -138,7 +143,7 @@ function PracticeForm({
   onToggle,
 }: {
   initial?: Practice;
-  onSave: (v: { name: string; price: string; cardPrice: string; providerIds: string[] }) => void;
+  onSave: (v: { name: string; price: string; cardPrice: string; providerIds: string[]; commission: string }) => void;
   onCancel: () => void;
   onToggle?: () => void;
 }) {
@@ -147,6 +152,7 @@ function PracticeForm({
     price: initial ? String(initial.price) : "",
     cardPrice: initial?.cardPrice === null || !initial ? "" : String(initial.cardPrice),
     providerIds: initial?.providerIds ?? ([] as string[]),
+    commission: initial?.commissionPct === null || !initial ? "" : String(initial.commissionPct),
   });
   return (
     <div className={`${CARD} animate-cl-in`}>
@@ -163,6 +169,9 @@ function PracticeForm({
           <span className="text-[13px] text-neutral-400">Precio con tarjeta</span>
           <input value={f.cardPrice} onChange={(e) => setF({ ...f, cardPrice: e.target.value.replace(/[^\d]/g, "") })} inputMode="numeric" placeholder="Vacío = el mismo" className={FIELD} />
         </label>
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <CommissionField value={f.commission} onChange={(commission) => setF({ ...f, commission })} />
       </div>
       <ProviderPicker value={f.providerIds} onChange={(providerIds) => setF({ ...f, providerIds })} />
       <div className="flex flex-wrap gap-2">

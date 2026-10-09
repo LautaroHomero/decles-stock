@@ -31,6 +31,8 @@ export interface PriceItem {
   providerName: string | null;
   stockItemId: string | null;
   active: boolean;
+  /** Decles: % de comisión propio del ítem; null = el de la médica. */
+  commissionPct: number | null;
 }
 
 export interface PriceChange {
@@ -90,6 +92,7 @@ const toItem = (r: Row): PriceItem => ({
   providerName: (r.provider_name as string) ?? null,
   stockItemId: (r.stock_item_id as string) ?? null,
   active: Boolean(r.active),
+  commissionPct: r.commission_pct === null || r.commission_pct === undefined ? null : Number(r.commission_pct),
 });
 
 export async function getPricingRoles(orgId: string): Promise<StaffRole[]> {
@@ -296,6 +299,7 @@ export async function listSales(orgId: string, from: string, to: string, limit =
     SELECT s.*, pr.name AS provider_name, pa.full_name AS patient_name
     FROM sales s LEFT JOIN providers pr ON pr.id = s.provider_id LEFT JOIN patients pa ON pa.id = s.patient_id
     WHERE s.organization_id = ${orgId} AND substr(s.created_at, 1, 10) BETWEEN ${from} AND ${to}
+      AND s.status <> 'edited'
     ORDER BY s.created_at DESC, s.id DESC LIMIT ${limit}`) as unknown as Row[];
   return rows.map(toSale);
 }
@@ -408,4 +412,38 @@ export async function resolvePendingSale(
     WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid'
     RETURNING id`) as unknown as Row[];
   return done.length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Editar una anotación (Decles): la versión vieja queda con status 'edited' (no se lista ni suma).
+// ---------------------------------------------------------------------------
+
+/** Renglones vigentes de una anotación (por visit_id, o la venta suelta si es vieja sin visit_id). */
+export async function listVisitSales(orgId: string, key: string): Promise<Sale[]> {
+  const rows = (await getSql()`
+    SELECT s.*, pr.name AS provider_name, pa.full_name AS patient_name
+    FROM sales s LEFT JOIN providers pr ON pr.id = s.provider_id LEFT JOIN patients pa ON pa.id = s.patient_id
+    WHERE s.organization_id = ${orgId} AND s.status = 'paid'
+      AND (s.visit_id = ${key} OR (s.id = ${key} AND s.visit_id IS NULL))
+    ORDER BY s.created_at, s.id`) as unknown as Row[];
+  return rows.map(toSale);
+}
+
+export async function markSaleEdited(orgId: string, id: string, who: BillingWho): Promise<boolean> {
+  const rows = (await getSql()`
+    UPDATE sales SET status = 'edited', voided_at = ${realNowIso()}, voided_by = ${who.id}, void_reason = ${`Editado por ${who.name}`}
+    WHERE id = ${id} AND organization_id = ${orgId} AND status = 'paid' RETURNING id`) as unknown as Row[];
+  return rows.length > 0;
+}
+
+/** La versión editada conserva la hora original y deja dicho quién la editó. */
+export async function stampVisit(orgId: string, visitId: string, createdAt: string, note: string): Promise<void> {
+  await getSql()`
+    UPDATE sales SET created_at = ${createdAt}, note = ${note}
+    WHERE organization_id = ${orgId} AND visit_id = ${visitId} AND status = 'paid'`;
+}
+
+/** Decles: % de comisión propio del ítem (null = el de la médica). */
+export async function setItemCommission(orgId: string, itemId: string, pct: number | null): Promise<void> {
+  await getSql()`UPDATE price_list_items SET commission_pct = ${pct} WHERE id = ${itemId} AND organization_id = ${orgId}`;
 }

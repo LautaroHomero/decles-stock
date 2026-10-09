@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarBlankIcon, CaretDownIcon, CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
+import { EditVisit } from "./anotar-view";
 import {
   Amount,
   BTN,
@@ -122,6 +123,7 @@ export function VentasView({ actor }: { actor: Actor }) {
     60_000,
   );
   const [toast, showToast] = useToast();
+  const [editing, setEditing] = useState<SaleRow[] | null>(null);
 
   const sales = useMemo(() => data?.sales ?? [], [data]);
   const paid = sales.filter((s) => s.status === "paid");
@@ -193,6 +195,19 @@ export function VentasView({ actor }: { actor: Actor }) {
   return (
     <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-5 pb-20 pt-10 text-[14px] sm:px-6 sm:pt-12">
       <Toast msg={toast} />
+      {editing && (
+        <EditVisit
+          sales={editing}
+          isMedico={isMedico}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            showToast("Cambios guardados.");
+            refresh();
+            refreshComm();
+          }}
+        />
+      )}
 
       <div className="flex flex-wrap items-center gap-4">
         <h1 className="font-display text-[23px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[28px]">Ventas</h1>
@@ -342,7 +357,16 @@ export function VentasView({ actor }: { actor: Actor }) {
           <h2 className="text-[17px] font-bold">Detalle</h2>
           <div className="flex flex-col gap-2.5">
             {visits.map((v) => (
-              <VisitCard key={v.key} v={v} admin={admin} seesCommission={seesCommission} onMethod={setMethod} onVoid={voidVisit} />
+              <VisitCard
+                key={v.key}
+                v={v}
+                admin={admin}
+                seesCommission={seesCommission}
+                canEdit={admin || v.sales[0].createdAt.slice(0, 10) === today}
+                onEdit={() => setEditing(v.sales)}
+                onMethod={setMethod}
+                onVoid={voidVisit}
+              />
             ))}
           </div>
         </section>
@@ -379,12 +403,16 @@ function VisitCard({
   v,
   admin,
   seesCommission,
+  canEdit,
+  onEdit,
   onMethod,
   onVoid,
 }: {
   v: Visit;
   admin: boolean;
   seesCommission: boolean;
+  canEdit: boolean;
+  onEdit: () => void;
   onMethod: (ids: string[], m: Payment) => void;
   onVoid: (ids: string[], reason: string) => void;
 }) {
@@ -423,7 +451,7 @@ function VisitCard({
         {!voided && <Amount cash={cashT} card={cardT} method={pending.length ? null : method} className="text-[14px] font-semibold" />}
       </div>
 
-      {!voided && (pending.length > 0 || admin) && !voiding && (
+      {!voided && (pending.length > 0 || admin || canEdit) && !voiding && (
         <div className="flex flex-wrap items-center gap-2 sm:pl-[52px]">
           {pending.length > 0 && (
             <>
@@ -436,6 +464,11 @@ function VisitCard({
             </>
           )}
           <span className="flex-1" />
+          {canEdit && (
+            <button className={CHIP} onClick={onEdit}>
+              Editar
+            </button>
+          )}
           {admin && (
             <button className={`${CHIP} text-neutral-400`} onClick={() => setVoiding(true)}>
               Anular

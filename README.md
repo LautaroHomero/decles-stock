@@ -55,6 +55,13 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
     lo resuelve arriba de Stock ("Es «X»", elegir de la lista o crearlo con precio); ahí toma precio y comisión.
   - **Sin stock cargado**: se vende igual; el stock queda negativo (`stock_items.owed`) y avisa al admin. El próximo
     ingreso lo compensa solo.
+- **Editar lo anotado**: tocando la fila en «Hoy» o «Editar» en Ventas (paciente, médica, ítems, cantidades, pago). Se
+  reemplaza la anotación (el stock se devuelve y se vuelve a descontar, la comisión se recalcula; la vieja queda con
+  status `edited` y no se lista). Lo del día: cualquiera (la médica, lo suyo); días anteriores: solo el admin.
+- **Comisión por ítem**: cada práctica o producto puede tener su propio % (`price_list_items.commission_pct`, 0012). Si
+  no tiene, se usa el % de la médica. Se congela en la venta.
+- **Catálogo de prueba**: `npm run db:catalogo` carga 14 prácticas y 12 productos (con stock y vencimientos) en el
+  consultorio que ya tengas en la base local. No borra ni duplica.
 - **Quién hace qué**: el admin vincula cada práctica y cada producto a las médicas que lo hacen o venden (Stock →
   editar → "¿Quién lo hace o lo vende?"). Sin marcar = cualquiera. Al anotar a mano, después de elegir la médica se ven
   solo sus ítems; si se escribe algo que no tiene asignado, la confirmación lo marca y el servidor lo rechaza.
@@ -107,7 +114,7 @@ Empezar de cero: `docker compose down -v && npm run db:up && npm run db:migrate 
 ```
 src/lib/db/migrations/   0001_core · 0002_stock · 0003_billing   (= Clavdia)
                          0004_notifications · 0005_accounts_commissions · 0006_user_aliases
-                         0007_payment_methods · 0008_onboarding · 0009_visits · 0010_item_providers · 0011_pending_owed   (nuevas)
+                         0007_payment_methods · 0008_onboarding · 0009_visits · 0010_item_providers · 0011_pending_owed · 0012_item_commission   (nuevas)
 src/lib/auth/            session (cookie firmada + session_version), password (scrypt), actor
 src/lib/domain/
   accounts.ts      primer arranque, login, contraseña (y recuperación por código), equipo (alta/baja/reset/comisión)
@@ -125,7 +132,7 @@ src/lib/domain/
 
 Diferencias concretas contra Clavdia; todo lo demás es igual:
 
-1. **Migraciones nuevas**: `0004` a `0011` (solo agregan tablas/columnas). Prácticas = `price_list_items.kind = 'tratamiento'`
+1. **Migraciones nuevas**: `0004` a `0012` (solo agregan tablas/columnas). Prácticas = `price_list_items.kind = 'tratamiento'`
    (sin stock). `sales.patient_label` (paciente escrito; en Clavdia se puede mapear a `patient_id`) y `sales.visit_id`.
    `price_item_providers` (0010): qué médicas ofrecen cada ítem (distinto de `price_list_items.provider_id` de Clavdia).
    0011: `stock_items.owed` (vendido sin stock) y `sales.kind = 'pendiente'` con `item_id` NULL (se resuelve después).

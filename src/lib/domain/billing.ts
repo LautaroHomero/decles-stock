@@ -264,7 +264,8 @@ export async function recordSale(
     if (!p || p.organizationId !== ctx.orgId) return fail("Profesional no encontrado en este consultorio.", 404);
     if (!p.active) return fail(`${p.name} está dada de baja.`, 409);
     providerId = p.id;
-    commissionPct = p.commissionPct;
+    // Decles: el % propio del ítem manda; si no tiene, el de la médica.
+    commissionPct = item.commissionPct ?? p.commissionPct;
     // Decles: si el ítem tiene profesionales vinculados, solo ellos lo pueden anotar.
     const allowed = await getItemProviders(ctx.orgId, item.id);
     if (allowed.length && !allowed.includes(p.id))
