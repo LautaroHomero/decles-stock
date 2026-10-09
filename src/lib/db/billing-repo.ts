@@ -340,16 +340,31 @@ export async function setItemProviders(orgId: string, itemId: string, providerId
 
 export async function insertPendingSale(
   orgId: string,
-  v: { name: string; quantity: number; providerId: string; patientLabel: string; visitId: string; paymentMethod: PaymentMethod | null; note: string },
+  v: {
+    name: string;
+    quantity: number;
+    providerId: string;
+    patientLabel: string;
+    visitId: string;
+    paymentMethod: PaymentMethod | null;
+    note: string;
+    /** Lo que se cobró por unidad, si la secretaria lo cargó (0 = a definir por el admin). */
+    unitPrice?: number;
+    commissionPct?: number;
+  },
   who: BillingWho,
 ): Promise<string> {
   const id = uid("sal");
+  const unit = v.unitPrice ?? 0;
+  const total = unit * v.quantity;
+  const pct = unit > 0 ? (v.commissionPct ?? 0) : 0;
+  const commission = Math.round((total * pct) / 100);
   await getSql()`
     INSERT INTO sales (id, organization_id, item_id, item_name, kind, quantity, unit_price, total, provider_id, patient_id, note,
                        created_by, created_by_name, source, created_at, commission_pct, commission_amount,
                        payment_method, cash_total, card_total, patient_label, visit_id)
-    VALUES (${id}, ${orgId}, NULL, ${v.name}, 'pendiente', ${v.quantity}, 0, 0, ${v.providerId}, NULL, ${v.note},
-            ${who.id}, ${who.name}, ${who.source}, ${realNowIso()}, 0, 0, ${v.paymentMethod}, 0, 0, ${v.patientLabel}, ${v.visitId})`;
+    VALUES (${id}, ${orgId}, NULL, ${v.name}, 'pendiente', ${v.quantity}, ${unit}, ${total}, ${v.providerId}, NULL, ${v.note},
+            ${who.id}, ${who.name}, ${who.source}, ${realNowIso()}, ${pct}, ${commission}, ${v.paymentMethod}, ${total}, ${total}, ${v.patientLabel}, ${v.visitId})`;
   return id;
 }
 
@@ -369,9 +384,17 @@ export async function resolvePendingSale(
   v: { item: PriceItem; commissionPct: number },
 ): Promise<boolean> {
   const rows = (await getSql()`
-    SELECT quantity, payment_method FROM sales
+    SELECT quantity, payment_method, total FROM sales
     WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid' FOR UPDATE`) as unknown as Row[];
   if (!rows.length) return false;
+  // Si al anotar se cargó lo que se cobró, eso manda: solo se vincula el ítem.
+  if (Number(rows[0].total) > 0) {
+    const kept = (await getSql()`
+      UPDATE sales SET item_id = ${v.item.id}, item_name = ${v.item.name}, kind = ${v.item.kind}
+      WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid'
+      RETURNING id`) as unknown as Row[];
+    return kept.length > 0;
+  }
   const q = Number(rows[0].quantity);
   const method = (rows[0].payment_method as PaymentMethod) ?? null;
   const cashTotal = v.item.amount * q;

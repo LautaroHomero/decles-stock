@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { parseNote } from "@/lib/domain/quick-sale";
-import { BTN, BTN_DARK, FIELD, call, fmtDate, fmtTime, usePoll, type CatalogResponse, type SaleRow } from "./shared";
+import { BTN, BTN_DARK, FIELD, call, fmtDate, fmtTime, money, usePoll, type CatalogResponse, type SaleRow } from "./shared";
 
 /**
  * Pendientes (solo admin): lo que se anotó y no estaba en la lista de precios. Se resuelve
@@ -46,7 +46,8 @@ export function Pendientes({ onChange }: { onChange?: () => void }) {
 function PendingRow({ s, items, onDone }: { s: SaleRow; items: { id: string; name: string; kind: "tratamiento" | "producto" }[]; onDone: () => void }) {
   const [mode, setMode] = useState<"idle" | "pick" | "create">("idle");
   const [pick, setPick] = useState("");
-  const [f, setF] = useState({ kind: "tratamiento" as "tratamiento" | "producto", name: s.itemName, price: "", cardPrice: "" });
+  // Si al anotar se cargó lo que se cobró, se propone como precio de lista.
+  const [f, setF] = useState({ kind: "tratamiento" as "tratamiento" | "producto", name: s.itemName, price: s.unitPrice ? String(s.unitPrice) : "", cardPrice: "" });
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   // Sugerencias: lo más parecido de la lista (mismo intérprete que la hoja).
@@ -79,6 +80,9 @@ function PendingRow({ s, items, onDone }: { s: SaleRow; items: { id: string; nam
         </p>
         <p className="text-[13.5px] text-neutral-400">
           {[s.patientName, s.providerName, `${fmtDate(s.createdAt.slice(0, 10))} ${fmtTime(s.createdAt)}`, `anotó ${s.createdByName}`].filter(Boolean).join(" · ")}
+        </p>
+        <p className="text-[13.5px] text-neutral-300">
+          {s.total > 0 ? `Se cobró ${money(s.total)}: eso queda; solo falta decir qué es.` : "Sin precio: se completa al decir qué es o al crearlo."}
         </p>
       </div>
 

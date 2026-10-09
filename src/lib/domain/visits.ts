@@ -21,7 +21,8 @@ export interface VisitInput {
   patientName?: string;
   providerId?: string | null;
   paymentMethod?: string | null;
-  lines: { itemId?: string; pendingName?: string; quantity?: number; expiresOn?: string | null }[];
+  /** `pendingPrice`: lo que se cobró por unidad de algo no cargado (opcional). */
+  lines: { itemId?: string; pendingName?: string; pendingPrice?: number | null; quantity?: number; expiresOn?: string | null }[];
 }
 
 const clean = (s: unknown) => (typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "");
@@ -38,10 +39,17 @@ export async function recordVisit(
 
   // Para los pendientes la médica se valida acá (los demás renglones los valida recordSale).
   const providerId = actor.role === "medico" ? (actor.activeOrg?.providerId ?? null) : (v.providerId ?? null);
+  let commissionPct = 0;
   if (lines.some((l) => !l.itemId)) {
     if (!providerId) return { ok: false, error: "Elegí qué médica la atendió.", status: 400 };
     const p = await getProvider(providerId);
     if (!p || p.organizationId !== orgId || !p.active) return { ok: false, error: "Profesional no encontrado en este consultorio.", status: 404 };
+    commissionPct = p.commissionPct;
+    for (const l of lines) {
+      const pp = l.pendingPrice;
+      if (pp !== undefined && pp !== null && (typeof pp !== "number" || !Number.isInteger(pp) || pp < 0 || pp > 100_000_000))
+        return { ok: false, error: "El precio tiene que ser un número entero de pesos.", status: 400 };
+    }
   }
   const raw = v.paymentMethod === "transferencia" ? "efectivo" : v.paymentMethod;
   const method: PaymentMethod | null = raw === "efectivo" || raw === "tarjeta" ? raw : null;
@@ -56,11 +64,25 @@ export async function recordVisit(
       const qty = typeof l.quantity === "number" && Number.isInteger(l.quantity) && l.quantity > 0 ? l.quantity : 1;
       const id = await insertPendingSale(
         orgId,
-        { name: clean(l.pendingName).slice(0, 80), quantity: qty, providerId: providerId!, patientLabel: patient, visitId, paymentMethod: method, note: "" },
+        {
+          name: clean(l.pendingName).slice(0, 80),
+          quantity: qty,
+          providerId: providerId!,
+          patientLabel: patient,
+          visitId,
+          paymentMethod: method,
+          note: "",
+          unitPrice: l.pendingPrice ?? 0,
+          commissionPct,
+        },
         who,
       );
       saleIds.push(id);
       pending++;
+      const t = (l.pendingPrice ?? 0) * qty;
+      total += t;
+      cashTotal += t;
+      cardTotal += t;
       continue;
     }
     const r = await recordSale(actor, {

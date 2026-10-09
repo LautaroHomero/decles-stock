@@ -33,10 +33,12 @@ interface Item {
 
 /** ¿Esa médica puede anotar este ítem? (sin vínculos = cualquiera). */
 const allowedFor = (it: Item, sellerId: string | null) => it.kind === "pendiente" || !sellerId || !it.providerIds.length || it.providerIds.includes(sellerId);
-const pendingItem = (name: string): Item => {
+/** Algo no cargado. `price` = lo que se cobró por unidad, si se sabe (0 = lo define el admin). */
+const pendingItem = (name: string, price = 0): Item => {
   const n = name.trim().replace(/\s+/g, " ");
-  return { id: `pend:${n.toLowerCase()}`, name: n.charAt(0).toUpperCase() + n.slice(1), kind: "pendiente", price: 0, cardPrice: null, providerIds: [] };
+  return { id: `pend:${n.toLowerCase()}`, name: n.charAt(0).toUpperCase() + n.slice(1), kind: "pendiente", price, cardPrice: null, providerIds: [] };
 };
+const toPesos = (s: string) => Number(s.replace(/\D/g, "") || 0);
 const normQ = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 interface Seller {
   id: string;
@@ -157,7 +159,9 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
         patientName: draft.patient.trim(),
         providerId: providerId || null,
         paymentMethod: draft.payment,
-        lines: lines.map((l) => (l.item.kind === "pendiente" ? { pendingName: l.item.name, quantity: l.qty } : { itemId: l.item.id, quantity: l.qty })),
+        lines: lines.map((l) => (l.item.kind === "pendiente"
+            ? { pendingName: l.item.name, pendingPrice: l.item.price || null, quantity: l.qty }
+            : { itemId: l.item.id, quantity: l.qty })),
       });
       if (!r.ok) {
         setBusy(false);
@@ -395,14 +399,16 @@ function PickItems({
           <div key={l.item.id} className="flex items-center gap-3 rounded-[18px] border-2 border-dashed border-accent-700 px-5 py-3">
             <span className="min-w-0 flex-1">
               <span className="block text-[16px] font-semibold">{l.item.name}</span>
-              <span className="text-[13px] text-neutral-400">Sin cargar: el admin le pone precio</span>
+              <span className="text-[13px] text-neutral-400">
+                {l.item.price ? `Sin cargar · se cobró ${money(l.item.price)}` : "Sin cargar · el precio lo podés poner al confirmar"}
+              </span>
             </span>
             <button aria-label={`Quitar ${l.item.name}`} onClick={() => toggle(l.item)} className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-neutral-900">
               <XIcon size={18} />
             </button>
           </div>
         ))}
-      <AddPending onAdd={(name) => !picked.has(pendingItem(name).id) && toggle(pendingItem(name))} />
+      <AddPending onAdd={(name, price) => !picked.has(pendingItem(name).id) && toggle(pendingItem(name, price))} />
       <button onClick={onNext} disabled={!n} className={`${CTA} mt-2`}>
         {n ? `Seguir (${n})` : "Marcá al menos uno"}
       </button>
@@ -411,9 +417,16 @@ function PickItems({
 }
 
 /** «¿No está en la lista?»: se anota con el nombre escrito y queda pendiente para el admin. */
-function AddPending({ onAdd, initial = "", compact }: { onAdd: (name: string) => void; initial?: string; compact?: boolean }) {
+function AddPending({ onAdd, initial = "", compact }: { onAdd: (name: string, price: number) => void; initial?: string; compact?: boolean }) {
   const [open, setOpen] = useState(!!initial);
   const [name, setName] = useState(initial);
+  const [price, setPrice] = useState("");
+  const add = () => {
+    onAdd(name, toPesos(price));
+    setName("");
+    setPrice("");
+    setOpen(false);
+  };
   if (!open)
     return (
       <button onClick={() => setOpen(true)} className="self-start py-1 text-[14.5px] font-semibold text-accent underline-offset-4 hover:underline">
@@ -422,25 +435,26 @@ function AddPending({ onAdd, initial = "", compact }: { onAdd: (name: string) =>
     );
   return (
     <div className={`flex flex-col gap-2 ${compact ? "" : "rounded-[18px] border-2 border-neutral-800 p-4"}`}>
-      {!compact && <span className="text-[14px] text-neutral-300">Escribí qué se hizo o vendió. Queda pendiente y el admin le pone precio.</span>}
+      {!compact && <span className="text-[14px] text-neutral-300">Escribí qué se hizo o vendió y, si lo sabés, cuánto se cobró. El admin después lo carga en la lista.</span>}
       <div className="flex flex-wrap gap-2">
         <input
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && name.trim() && (onAdd(name), setName(""), setOpen(false))}
+          onKeyDown={(e) => e.key === "Enter" && name.trim() && add()}
           placeholder="Ej: radiofrecuencia"
           className="min-w-[180px] flex-1 rounded-xl border-2 border-neutral-800 bg-bg px-3 py-2 text-[15px] outline-none focus:border-accent-600"
         />
-        <button
-          disabled={!name.trim()}
-          onClick={() => {
-            onAdd(name);
-            setName("");
-            setOpen(false);
-          }}
-          className={CHIP_ON + " disabled:opacity-40"}
-        >
+        <input
+          value={price}
+          onChange={(e) => setPrice(e.target.value.replace(/[^\d.]/g, ""))}
+          onKeyDown={(e) => e.key === "Enter" && name.trim() && add()}
+          inputMode="numeric"
+          placeholder="Precio $ (opcional)"
+          aria-label="Cuánto se cobró (opcional)"
+          className="w-[170px] rounded-xl border-2 border-neutral-800 bg-bg px-3 py-2 text-[15px] outline-none focus:border-accent-600"
+        />
+        <button disabled={!name.trim()} onClick={add} className={CHIP_ON + " disabled:opacity-40"}>
           Agregar
         </button>
       </div>
@@ -510,7 +524,9 @@ function Confirm({
     : [sellerName(draft.sellerId)].filter(Boolean);
   const cash = draft.lines.reduce((n, l) => n + l.item.price * l.qty, 0);
   const card = draft.lines.reduce((n, l) => n + cardOf(l.item) * l.qty, 0);
-  const pendingCount = draft.lines.filter((l) => l.item.kind === "pendiente").length;
+  const pendingCount = draft.lines.filter((l) => l.item.kind === "pendiente" && !l.item.price).length;
+  const setPrice = (i: number, price: number) =>
+    setDraft({ ...draft, lines: draft.lines.map((l, j) => (j === i ? { ...l, item: { ...l.item, price } } : l)) });
   // Algo que la médica elegida no tiene asignado (el admin lo vincula en Stock).
   const notHers = (l: Line) => !allowedFor(l.item, l.sellerId ?? draft.sellerId);
   const anyNotHers = draft.lines.some(notHers);
@@ -599,7 +615,9 @@ function Confirm({
                 </span>
               )}
               {l.item.kind === "pendiente" && (
-                <span className="block text-[13px] font-normal text-neutral-400">No está cargado: se anota igual y el admin le pone precio.</span>
+                <span className="block text-[13px] font-normal text-neutral-400">
+                  No está cargado: se anota igual y el admin lo agrega a la lista.{l.item.price ? "" : " Si sabés cuánto se cobró, ponelo."}
+                </span>
               )}
               {l.item.kind === "producto" && l.qty > (l.item.available ?? 0) && (
                 <span className="block text-[13px] font-normal text-neutral-400">
@@ -607,9 +625,21 @@ function Confirm({
                 </span>
               )}
             </span>
-            <span className="text-[15px] tabular-nums text-neutral-300">
-              {l.item.kind === "pendiente" ? "a definir" : money((draft.payment === "tarjeta" ? cardOf(l.item) : l.item.price) * l.qty)}
-            </span>
+            {l.item.kind === "pendiente" ? (
+              <label className="flex items-center gap-1 rounded-xl border-2 border-neutral-800 px-2.5 py-1 focus-within:border-accent-600">
+                <span className="text-[15px] text-neutral-400">$</span>
+                <input
+                  value={l.item.price ? l.item.price.toLocaleString("es-AR") : ""}
+                  onChange={(e) => setPrice(i, toPesos(e.target.value))}
+                  inputMode="numeric"
+                  placeholder="precio"
+                  aria-label={`Cuánto se cobró ${l.item.name} (por unidad)`}
+                  className="w-[96px] bg-transparent text-right text-[15px] tabular-nums outline-none placeholder:text-neutral-600"
+                />
+              </label>
+            ) : (
+              <span className="text-[15px] tabular-nums text-neutral-300">{money((draft.payment === "tarjeta" ? cardOf(l.item) : l.item.price) * l.qty)}</span>
+            )}
           </li>
         ))}
         {draft.unresolved.map((u, k) => (
@@ -620,7 +650,7 @@ function Confirm({
             {fixing?.k === k && fixing.mode === "lista" ? (
               <SearchItems items={items} sellerId={u.sellerId ?? draft.sellerId} onPick={(it) => resolve(k, it)} />
             ) : fixing?.k === k && fixing.mode === "pendiente" ? (
-              <AddPending compact initial={u.text} onAdd={(name) => resolve(k, pendingItem(name))} />
+              <AddPending compact initial={u.text} onAdd={(name, price) => resolve(k, pendingItem(name, price))} />
             ) : (
               <div className="flex flex-wrap gap-2">
                 {u.candidates.map((c) => (
