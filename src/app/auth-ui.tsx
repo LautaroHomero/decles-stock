@@ -127,3 +127,52 @@ export function AuthFrame({ subtitle, children }: { subtitle: string; children: 
     </main>
   );
 }
+
+/** Email propio para recuperar la contraseña. Vacío = borrarlo. */
+export function EmailForm({ initial, onDone, skipLabel }: { initial: string; onDone: (email: string) => void; skipLabel?: string }) {
+  const [email, setEmail] = useState(initial);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    const r = await fetch("/api/auth/email", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: email.trim() }),
+    });
+    const d = await r.json().catch(() => ({ ok: false, error: "Error del servidor." }));
+    setBusy(false);
+    if (!d.ok) return setError(d.error ?? "No se pudo guardar.");
+    onDone(d.email ?? "");
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-3">
+      <Field label="Tu email" hint="Si un día te olvidás la contraseña, te llega un código acá. Nadie más lo ve.">
+        <input
+          type="email"
+          autoFocus
+          autoComplete="email"
+          autoCapitalize="none"
+          spellCheck={false}
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="nombre@gmail.com"
+          className={AUTH_FIELD}
+        />
+      </Field>
+      <button type="submit" disabled={busy || (!email.trim() && !initial)} className={AUTH_PRIMARY}>
+        {busy ? "Guardando…" : email.trim() || !initial ? "Guardar email" : "Borrar email"}
+      </button>
+      {skipLabel && (
+        <button type="button" onClick={() => onDone(initial)} className="w-full text-center text-[13px] text-neutral-500 hover:text-fg">
+          {skipLabel}
+        </button>
+      )}
+      <Err msg={error} />
+    </form>
+  );
+}

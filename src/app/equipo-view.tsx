@@ -16,6 +16,7 @@ interface Member {
   mustChangePassword: boolean;
   commissionPct: number;
   aliases: string[];
+  email: string;
 }
 
 const ROLE = { medico: "Médica/o", recepcion: "Secretaría" } as const;
@@ -138,6 +139,7 @@ function MemberRow({
   const [name, setName] = useState(m.name);
   const [pct, setPct] = useState(String(m.commissionPct));
   const [aliases, setAliases] = useState(m.aliases.join(", "));
+  const [email, setEmail] = useState(m.email);
   const [admin, setAdmin] = useState(m.isAdmin);
   const [confirmOff, setConfirmOff] = useState(false);
 
@@ -154,6 +156,7 @@ function MemberRow({
             <span>· {m.username}</span>
             {m.isAdmin && <Pill className="!py-0 !text-[11px]">admin</Pill>}
             {m.mustChangePassword && <Pill className="!py-0 !text-[11px]">contraseña temporal</Pill>}
+            {!m.email && <Pill className="!py-0 !text-[11px]">sin email</Pill>}
           </span>
         </span>
         {m.role === "medico" && <span className="text-[14px] tabular-nums text-neutral-300">{m.commissionPct}%</span>}
@@ -165,6 +168,10 @@ function MemberRow({
             <label className="flex flex-col gap-1">
               <span className="text-[12px] text-neutral-400">Nombre</span>
               <input value={name} onChange={(e) => setName(e.target.value)} className={FIELD} />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[12px] text-neutral-400">Email (para recuperar la contraseña)</span>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoCapitalize="none" placeholder="opcional" className={FIELD} />
             </label>
             {m.role === "medico" && (
               <label className="flex flex-col gap-1">
@@ -190,6 +197,7 @@ function MemberRow({
               onClick={() =>
                 onSave({
                   name,
+                  email,
                   isAdmin: admin,
                   ...(m.role === "medico" ? { commissionPct: Number(pct.replace(",", ".")), aliases } : {}),
                 })
@@ -233,7 +241,7 @@ function NewMemberForm({
   onCreated: (name: string, username: string, password: string) => void;
   onError: (m: string) => void;
 }) {
-  const [f, setF] = useState({ name: "", username: "", role: "medico" as "medico" | "recepcion", pct: "", isAdmin: false });
+  const [f, setF] = useState({ name: "", username: "", role: "medico" as "medico" | "recepcion", pct: "", email: "", isAdmin: false });
   const [busy, setBusy] = useState(false);
   const suggest = (name: string) =>
     name
@@ -252,6 +260,7 @@ function NewMemberForm({
       username: f.username,
       role: f.role,
       isAdmin: f.isAdmin,
+      email: f.email,
       commissionPct: f.role === "medico" ? Number(f.pct.replace(",", ".") || 0) : undefined,
     });
     setBusy(false);
@@ -289,6 +298,10 @@ function NewMemberForm({
         <label className="flex flex-col gap-1">
           <span className="text-[12px] text-neutral-400">Usuario (para entrar)</span>
           <input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase().replace(/\s/g, "") })} autoCapitalize="none" className={FIELD} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[12px] text-neutral-400">Email (opcional)</span>
+          <input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoCapitalize="none" placeholder="Para recuperar la contraseña" className={FIELD} />
         </label>
         {f.role === "medico" && (
           <label className="flex flex-col gap-1">

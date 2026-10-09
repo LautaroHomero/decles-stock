@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AUTH_CARD, AUTH_FIELD, AUTH_PRIMARY, AuthFrame, Err, Field, PasswordInput } from "@/app/auth-ui";
 
@@ -64,7 +65,9 @@ export default function LoginPage() {
         </button>
         <Err msg={error} />
       </form>
-      <p className="text-[13px] text-neutral-500">¿Te olvidaste la contraseña? Pedile al admin del consultorio que te la resetee.</p>
+      <Link href="/recuperar" className="self-start text-[13px] text-neutral-500 hover:text-fg">
+        ¿Te olvidaste la contraseña?
+      </Link>
     </AuthFrame>
   );
 }

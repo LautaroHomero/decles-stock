@@ -9,12 +9,12 @@ export async function GET(req: Request) {
   return respond(await listTeam(actor));
 }
 
-/** Alta (admin): `{ name, username, role, isAdmin?, commissionPct? }` → devuelve la contraseña temporal. */
+/** Alta (admin): `{ name, username, role, isAdmin?, commissionPct?, aliases?, email? }` → devuelve la contraseña temporal. */
 export async function POST(req: Request) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
-  const b = await bodyOf<{ name: string; username: string; role: StaffRole; isAdmin: boolean; commissionPct: number; aliases: string }>(req);
+  const b = await bodyOf<{ name: string; username: string; role: StaffRole; isAdmin: boolean; commissionPct: number; aliases: string; email: string }>(req);
   return respond(
-    await createMember(actor, { name: b.name ?? "", username: b.username ?? "", role: b.role as StaffRole, isAdmin: b.isAdmin, commissionPct: b.commissionPct, aliases: b.aliases }),
+    await createMember(actor, { name: b.name ?? "", username: b.username ?? "", role: b.role as StaffRole, isAdmin: b.isAdmin, commissionPct: b.commissionPct, aliases: b.aliases, email: b.email }),
   );
 }

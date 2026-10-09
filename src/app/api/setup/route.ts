@@ -11,7 +11,7 @@ export async function GET() {
 
 /** Primer arranque: crea el consultorio y su admin, y deja la sesión iniciada. */
 export async function POST(req: Request) {
-  const b = await bodyOf<{ orgName: string; name: string; username: string; password: string; role: StaffRole; commissionPct: number }>(req);
+  const b = await bodyOf<{ orgName: string; name: string; username: string; password: string; role: StaffRole; commissionPct: number; email: string }>(req);
   const r = await setupFirstRun({
     orgName: b.orgName ?? "",
     name: b.name ?? "",
@@ -19,6 +19,7 @@ export async function POST(req: Request) {
     password: b.password ?? "",
     role: b.role as StaffRole,
     commissionPct: b.commissionPct,
+    email: b.email,
   });
   if (!r.ok) return Response.json({ ok: false, error: r.error }, { status: r.status });
   const claims: SessionClaims = { userId: r.userId, role: b.role as StaffRole, activeOrgId: r.orgId, sv: 0 };

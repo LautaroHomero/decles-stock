@@ -32,6 +32,9 @@ services:
       APP_TZ: America/Argentina/Buenos_Aires
       # Se entra por http (esta PC o la red del consultorio). Detrás de HTTPS, poné "true".
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Opcional: Gmail del consultorio para el código de "¿Te olvidaste la contraseña?" (ver DEPLOY.md, paso 3).
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
     ports:
       - "3000:3000"
 

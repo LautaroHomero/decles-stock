@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { KeyIcon, ListChecksIcon, SignOutIcon } from "@phosphor-icons/react";
+import { EnvelopeSimpleIcon, KeyIcon, ListChecksIcon, SignOutIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { ThemeToggle, Wordmark, initials } from "./ui";
 import { Bell } from "./bell";
@@ -9,7 +9,7 @@ import { VenderView } from "./vender-view";
 import { InventarioView } from "./inventario-view";
 import { VentasView } from "./ventas-view";
 import { EquipoView } from "./equipo-view";
-import { ChangePasswordForm } from "./auth-ui";
+import { ChangePasswordForm, EmailForm } from "./auth-ui";
 import { Onboarding } from "./onboarding";
 
 type Section = "vender" | "inventario" | "ventas" | "equipo";
@@ -81,6 +81,7 @@ export function StockApp({ actor }: { actor: Actor }) {
 function AvatarMenu({ actor, onOnboarding }: { actor: Actor; onOnboarding: () => void }) {
   const [open, setOpen] = useState(false);
   const [pw, setPw] = useState(false);
+  const [mail, setMail] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -101,6 +102,14 @@ function AvatarMenu({ actor, onOnboarding }: { actor: Actor; onOnboarding: () =>
           <div className="w-full max-w-[400px] animate-cl-in rounded-2xl bg-surface p-5 text-fg shadow-lg">
             <p className="mb-3 text-[15px] font-medium">Cambiar contraseña</p>
             <ChangePasswordForm onDone={() => setPw(false)} />
+          </div>
+        </div>
+      )}
+      {mail !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onMouseDown={(e) => e.target === e.currentTarget && setMail(null)}>
+          <div className="w-full max-w-[400px] animate-cl-in rounded-2xl bg-surface p-5 text-fg shadow-lg">
+            <p className="mb-3 text-[15px] font-medium">Mi email</p>
+            <EmailForm initial={mail} onDone={() => setMail(null)} skipLabel="Cancelar" />
           </div>
         </div>
       )}
@@ -128,6 +137,18 @@ function AvatarMenu({ actor, onOnboarding }: { actor: Actor; onOnboarding: () =>
             className="mt-3 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-neutral-300 transition-colors hover:bg-accent-900"
           >
             <KeyIcon size={15} /> Cambiar contraseña
+          </button>
+          <button
+            onClick={async () => {
+              setOpen(false);
+              const d = await fetch("/api/auth/email")
+                .then((r) => r.json())
+                .catch(() => ({}));
+              setMail(d.email ?? "");
+            }}
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-neutral-300 transition-colors hover:bg-accent-900"
+          >
+            <EnvelopeSimpleIcon size={15} /> Mi email
           </button>
           {actor.activeOrg?.canAdmin && (
             <button

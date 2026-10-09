@@ -5,8 +5,15 @@ import {
   createOrganization,
   createProvider,
   createUser,
+  bumpResetAttempts,
+  consumeResetCodes,
+  emailTaken,
   getAccount,
+  getAccountByEmail,
   getAccountByUsername,
+  insertResetCode,
+  latestResetCode,
+  resetCodesSince,
   getOrganization,
   listOrgMembers,
   membershipsForUser,
@@ -20,6 +27,8 @@ import {
   setProviderCommission,
   setUserActive,
   setUserAliases,
+  setUserEmail,
+  type Account,
   type OrgMember,
 } from "@/lib/db/repo";
 import { getSql } from "@/lib/db/connection";
@@ -32,6 +41,8 @@ import {
   verifyPassword,
 } from "@/lib/auth/password";
 import type { Actor, StaffRole } from "@/lib/domain/types";
+import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import { mailMode, sendMail } from "@/lib/mail";
 
 /**
  * Cuentas del consultorio: primer arranque, login, cambio de contraseña y el equipo
@@ -73,6 +84,20 @@ function pctProblem(pct: unknown): string | null {
   return null;
 }
 
+/** Email opcional: '' = sin cargar. `null` = inválido. */
+function cleanEmail(raw: unknown): string | null {
+  const e = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (!e) return "";
+  return e.length <= 200 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : null;
+}
+
+async function emailProblem(raw: unknown, exceptUserId?: string): Promise<{ email: string } | { error: string }> {
+  const email = cleanEmail(raw);
+  if (email === null) return { error: "El email no parece válido." };
+  if (await emailTaken(email, exceptUserId)) return { error: "Ese email ya lo usa otra persona del sistema." };
+  return { email };
+}
+
 // ---------------------------------------------------------------------------
 // Primer arranque
 // ---------------------------------------------------------------------------
@@ -89,6 +114,7 @@ export async function setupFirstRun(v: {
   password: string;
   role: StaffRole;
   commissionPct?: number;
+  email?: string;
 }): Promise<Result<{ userId: string; orgId: string }>> {
   const orgName = cleanName(v.orgName);
   const name = cleanName(v.name);
@@ -98,6 +124,8 @@ export async function setupFirstRun(v: {
   if (!ROLES.includes(v.role)) return fail("Elegí si sos médica/o o secretaría.");
   const up = usernameProblem(username) ?? passwordProblem(v.password ?? "", username);
   if (up) return fail(up);
+  const em = cleanEmail(v.email);
+  if (em === null) return fail("El email no parece válido.");
 
   // Lock de la transacción: dos "primer arranque" simultáneos no pueden crear dos admins.
   return getSql().begin(async (tx) => {
@@ -110,6 +138,7 @@ export async function setupFirstRun(v: {
     if (providerId && v.commissionPct) await setProviderCommission(providerId, v.commissionPct);
     await addMembership({ userId: user.id, organizationId: org.id, role: v.role, providerId });
     await setOrgAdmin(org.id, user.id, true);
+    if (em) await setUserEmail(user.id, em);
     return { ok: true as const, userId: user.id, orgId: org.id };
   });
 }
@@ -135,7 +164,7 @@ export async function login(
   const now = new Date();
   if (acc.lockedUntil && new Date(acc.lockedUntil) > now) {
     const min = Math.ceil((new Date(acc.lockedUntil).getTime() - now.getTime()) / 60_000);
-    return fail(`Demasiados intentos. Probá de nuevo en ${min} min o pedile al admin que te resetee la contraseña.`, 429);
+    return fail(`Demasiados intentos. Probá de nuevo en ${min} min o tocá «¿Te olvidaste la contraseña?».`, 429);
   }
   if (!verifyPassword(password, acc.passwordHash, acc.passwordSalt)) {
     await recordLoginFailure(acc.id, MAX_ATTEMPTS, new Date(now.getTime() + LOCK_MINUTES * 60_000).toISOString());
@@ -159,6 +188,108 @@ export async function changeOwnPassword(actor: Actor, current: string, next: str
   // No se suben las sesiones: la actual sigue viva con la nueva contraseña.
   await setPassword(acc.id, hashPassword(next), { mustChange: false, bumpSessions: false });
   return { ok: true };
+}
+
+/** Cada persona carga (o borra) su propio email para recuperar la contraseña. */
+export async function setOwnEmail(actor: Actor, raw: string): Promise<Result<{ email: string }>> {
+  const em = await emailProblem(raw, actor.userId);
+  if ("error" in em) return fail(em.error);
+  await setUserEmail(actor.userId, em.email);
+  return { ok: true, email: em.email };
+}
+
+export async function ownEmail(actor: Actor): Promise<string> {
+  return (await getAccount(actor.userId))?.email ?? "";
+}
+
+// ---------------------------------------------------------------------------
+// "¿Te olvidaste la contraseña?" — código de 6 dígitos por email
+// ---------------------------------------------------------------------------
+//
+//  · La respuesta a "mandame el código" es siempre la misma: no revela quién tiene cuenta ni email.
+//  · Vale solo el último código, 15 min, 5 intentos. Hasta 5 códigos por hora y 1 por minuto.
+//  · Al usarlo: contraseña nueva, se cierran las demás sesiones y se desbloquea la cuenta.
+
+const CODE_MINUTES = 15;
+const CODE_ATTEMPTS = 5;
+const CODES_PER_HOUR = 5;
+const RESEND_SECONDS = 60;
+const BAD_CODE = "El código no es correcto o ya venció. Revisalo o pedí uno nuevo.";
+
+const hashCode = (code: string, salt: string) => createHash("sha256").update(`${salt}:${code}`).digest("hex");
+
+export function recoveryEnabled(): boolean {
+  return mailMode() !== "off";
+}
+
+async function findForRecovery(identifier: string): Promise<Account | undefined> {
+  const id = (identifier ?? "").trim().toLowerCase();
+  if (!id) return undefined;
+  return id.includes("@") ? getAccountByEmail(id) : getAccountByUsername(normalizeUsername(id));
+}
+
+export async function requestPasswordReset(identifier: string): Promise<Result<object>> {
+  if (!recoveryEnabled()) return fail("La recuperación por email no está activada. Pedile al admin que te resetee la contraseña.", 503);
+  if (!(identifier ?? "").trim()) return fail("Escribí tu usuario o tu email.");
+  const acc = await findForRecovery(identifier);
+  if (!acc || !acc.active || !acc.email || !(await membershipsForUser(acc.id)).length) return { ok: true };
+
+  const now = new Date();
+  const recent = await resetCodesSince(acc.id, new Date(now.getTime() - 3600_000).toISOString());
+  if (recent.n >= CODES_PER_HOUR) return { ok: true };
+  if (recent.last && now.getTime() - new Date(recent.last).getTime() < RESEND_SECONDS * 1000) return { ok: true };
+
+  const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+  const salt = randomBytes(16).toString("hex");
+  await consumeResetCodes(acc.id, now.toISOString());
+  await insertResetCode({
+    userId: acc.id,
+    hash: hashCode(code, salt),
+    salt,
+    sentTo: acc.email,
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + CODE_MINUTES * 60_000).toISOString(),
+  });
+  const sent = await sendMail({
+    to: acc.email,
+    subject: `Tu código: ${code}`,
+    text:
+      `Hola, ${acc.name.split(" ")[0]}.\n\n` +
+      `Tu código para elegir una contraseña nueva es:\n\n    ${code}\n\n` +
+      `Vence en ${CODE_MINUTES} minutos. Tu usuario es: ${acc.username}\n\n` +
+      `Si no lo pediste vos, ignorá este mail: tu contraseña no cambia.\n`,
+  });
+  if (!sent) return fail("No se pudo mandar el mail. Probá de nuevo en un rato o pedile al admin que te resetee la contraseña.", 502);
+  return { ok: true };
+}
+
+export async function confirmPasswordReset(
+  identifier: string,
+  code: string,
+  password: string,
+): Promise<Result<{ userId: string; orgId: string; role: StaffRole; sv: number }>> {
+  const acc = await findForRecovery(identifier);
+  const p = passwordProblem(password ?? "", acc?.username ?? "");
+  if (p) return fail(p);
+  const clean = (code ?? "").replace(/\D/g, "");
+  if (!acc || !acc.active || clean.length !== 6) return fail(BAD_CODE);
+
+  const nowIso = new Date().toISOString();
+  const rc = await latestResetCode(acc.id, nowIso);
+  if (!rc) return fail(BAD_CODE);
+  if (rc.attempts >= CODE_ATTEMPTS) return fail("Demasiados intentos con ese código. Pedí uno nuevo.", 429);
+  const a = Buffer.from(hashCode(clean, rc.codeSalt), "hex");
+  const b = Buffer.from(rc.codeHash, "hex");
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    await bumpResetAttempts(rc.id);
+    return fail(BAD_CODE);
+  }
+
+  await consumeResetCodes(acc.id, nowIso);
+  await setPassword(acc.id, hashPassword(password), { mustChange: false, bumpSessions: true });
+  const mems = await membershipsForUser(acc.id);
+  if (!mems.length) return fail("Tu usuario no está en ningún consultorio.", 403);
+  return { ok: true, userId: acc.id, orgId: mems[0].organizationId, role: mems[0].role, sv: acc.sessionVersion + 1 };
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +324,7 @@ async function member(orgId: string, userId: string): Promise<OrgMember | undefi
 
 export async function createMember(
   actor: Actor,
-  v: { name: string; username: string; role: StaffRole; isAdmin?: boolean; commissionPct?: number; aliases?: string | string[] },
+  v: { name: string; username: string; role: StaffRole; isAdmin?: boolean; commissionPct?: number; aliases?: string | string[]; email?: string },
 ): Promise<Result<{ userId: string; username: string; temporaryPassword: string }>> {
   const g = adminOrg(actor);
   if (!g.ok) return g;
@@ -208,6 +339,8 @@ export async function createMember(
   const pct = v.role === "medico" ? (v.commissionPct ?? 0) : 0;
   const pp = pctProblem(pct);
   if (pp) return fail(pp);
+  const em = await emailProblem(v.email);
+  if ("error" in em) return fail(em.error);
 
   const temp = temporaryPassword();
   const user = await createUser({ name, username, role: v.role, password: hashPassword(temp), mustChangePassword: true });
@@ -220,6 +353,7 @@ export async function createMember(
   if (v.isAdmin) await setOrgAdmin(g.orgId, user.id, true);
   const aliases = cleanAliases(v.aliases);
   if (aliases?.length) await setUserAliases(user.id, aliases);
+  if (em.email) await setUserEmail(user.id, em.email);
   return { ok: true, userId: user.id, username, temporaryPassword: temp };
 }
 
@@ -230,7 +364,7 @@ async function activeAdminCount(orgId: string): Promise<number> {
 export async function updateMember(
   actor: Actor,
   userId: string,
-  v: { name?: string; isAdmin?: boolean; commissionPct?: number; active?: boolean; aliases?: string | string[] },
+  v: { name?: string; isAdmin?: boolean; commissionPct?: number; active?: boolean; aliases?: string | string[]; email?: string },
 ): Promise<Result<object>> {
   const g = adminOrg(actor);
   if (!g.ok) return g;
@@ -259,8 +393,11 @@ export async function updateMember(
 
   const aliases = v.aliases === undefined ? undefined : cleanAliases(v.aliases);
   if (aliases === null) return fail("Hasta 10 apodos.");
+  const em = v.email === undefined ? undefined : await emailProblem(v.email, userId);
+  if (em && "error" in em) return fail(em.error);
 
   if (aliases !== undefined) await setUserAliases(userId, aliases);
+  if (em && em.email !== m.email) await setUserEmail(userId, em.email);
   if (name !== undefined && name !== m.name) {
     await renameUser(userId, name);
     if (m.providerId) await renameProvider(m.providerId, name);

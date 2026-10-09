@@ -10,7 +10,7 @@ import { AUTH_CARD, AUTH_FIELD, AUTH_PRIMARY, AuthFrame, Err, Field, PasswordInp
  */
 export default function SetupPage() {
   const router = useRouter();
-  const [f, setF] = useState({ orgName: "", name: "", username: "", password: "", again: "", role: "recepcion" as "recepcion" | "medico" });
+  const [f, setF] = useState({ orgName: "", name: "", username: "", password: "", again: "", email: "", role: "recepcion" as "recepcion" | "medico" });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
@@ -72,6 +72,9 @@ export default function SetupPage() {
         </div>
         <Field label="Usuario" hint="Con esto entrás. Minúsculas, sin espacios.">
           <input value={f.username} onChange={set("username")} autoCapitalize="none" spellCheck={false} placeholder="ej. admin" className={AUTH_FIELD} />
+        </Field>
+        <Field label="Tu email (opcional)" hint="Para recuperar la contraseña si te la olvidás.">
+          <input type="email" value={f.email} onChange={set("email")} autoCapitalize="none" spellCheck={false} placeholder="nombre@gmail.com" className={AUTH_FIELD} />
         </Field>
         <Field label="Contraseña" hint="Al menos 8 caracteres.">
           <PasswordInput value={f.password} onChange={(v) => setF({ ...f, password: v })} autoComplete="new-password" />

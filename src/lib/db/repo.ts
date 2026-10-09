@@ -152,6 +152,8 @@ export interface OrgMember {
   commissionPct: number;
   /** Apodos para la hoja de ventas. */
   aliases: string[];
+  /** Para recuperar la contraseña ('' = sin cargar). */
+  email: string;
 }
 
 /** El equipo del consultorio (activos e inactivos), con admin y comisión. */
@@ -159,7 +161,7 @@ export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
   const org = await getOrganization(orgId);
   const adminIds = new Set(org?.adminIds ?? []);
   const rows = (await getSql()`
-    SELECT u.id AS user_id, u.name, u.username, u.active, u.must_change_password, u.aliases, m.role, m.provider_id, p.commission_pct
+    SELECT u.id AS user_id, u.name, u.username, u.email, u.active, u.must_change_password, u.aliases, m.role, m.provider_id, p.commission_pct
     FROM memberships m
     JOIN users u ON u.id = m.user_id
     LEFT JOIN providers p ON p.id = m.provider_id
@@ -176,6 +178,7 @@ export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
     providerId: (r.provider_id as string) ?? null,
     commissionPct: Number(r.commission_pct ?? 0),
     aliases: ((r.aliases as string) ?? "").split(",").filter(Boolean),
+    email: (r.email as string) ?? "",
   }));
 }
 
@@ -262,6 +265,77 @@ export async function nameTaken(name: string, exceptUserId?: string): Promise<bo
   const [r] = (await getSql()`
     SELECT 1 FROM users WHERE lower(trim(name)) = ${name.trim().toLowerCase()} AND id <> ${exceptUserId ?? ""}`) as unknown as Row[];
   return !!r;
+}
+
+// ---------------------------------------------------------------------------
+// Email y códigos para recuperar la contraseña (tabla pin_reset_codes, la de Clavdia)
+// ---------------------------------------------------------------------------
+
+export async function setUserEmail(userId: string, email: string): Promise<void> {
+  await getSql()`UPDATE users SET email = ${email} WHERE id = ${userId}`;
+}
+
+export async function emailTaken(email: string, exceptUserId?: string): Promise<boolean> {
+  if (!email) return false;
+  const [r] = (await getSql()`
+    SELECT 1 FROM users WHERE lower(trim(email)) = ${email.toLowerCase()} AND id <> ${exceptUserId ?? ""}`) as unknown as Row[];
+  return !!r;
+}
+
+export async function getAccountByEmail(email: string): Promise<Account | undefined> {
+  const [r] = (await getSql()`
+    SELECT * FROM users WHERE lower(trim(email)) = ${email.toLowerCase()} AND trim(email) <> '' AND username <> ''`) as unknown as Row[];
+  return r ? toAccount(r) : undefined;
+}
+
+export interface ResetCode {
+  id: string;
+  codeHash: string;
+  codeSalt: string;
+  attempts: number;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export async function insertResetCode(v: { userId: string; hash: string; salt: string; sentTo: string; createdAt: string; expiresAt: string }): Promise<void> {
+  await getSql()`
+    INSERT INTO pin_reset_codes (id, user_id, code_hash, code_salt, channel, sent_to, created_at, expires_at)
+    VALUES (${uid("prc")}, ${v.userId}, ${v.hash}, ${v.salt}, 'email', ${v.sentTo}, ${v.createdAt}, ${v.expiresAt})`;
+}
+
+/** Códigos pedidos desde `sinceIso` (para el límite por hora y la espera entre envíos). */
+export async function resetCodesSince(userId: string, sinceIso: string): Promise<{ n: number; last: string | null }> {
+  const [r] = (await getSql()`
+    SELECT count(*)::int AS n, max(created_at) AS last FROM pin_reset_codes
+    WHERE user_id = ${userId} AND created_at >= ${sinceIso}`) as unknown as Row[];
+  return { n: Number(r?.n ?? 0), last: (r?.last as string) ?? null };
+}
+
+/** El último código vivo (solo vale el más nuevo). */
+export async function latestResetCode(userId: string, nowIso: string): Promise<ResetCode | undefined> {
+  const [r] = (await getSql()`
+    SELECT * FROM pin_reset_codes
+    WHERE user_id = ${userId} AND consumed_at IS NULL AND expires_at > ${nowIso}
+    ORDER BY created_at DESC LIMIT 1`) as unknown as Row[];
+  return r
+    ? {
+        id: r.id as string,
+        codeHash: r.code_hash as string,
+        codeSalt: r.code_salt as string,
+        attempts: Number(r.attempts ?? 0),
+        createdAt: r.created_at as string,
+        expiresAt: r.expires_at as string,
+      }
+    : undefined;
+}
+
+export async function bumpResetAttempts(codeId: string): Promise<void> {
+  await getSql()`UPDATE pin_reset_codes SET attempts = attempts + 1 WHERE id = ${codeId}`;
+}
+
+/** Al usar uno (o pedir uno nuevo), los anteriores dejan de servir. */
+export async function consumeResetCodes(userId: string, nowIso: string): Promise<void> {
+  await getSql()`UPDATE pin_reset_codes SET consumed_at = ${nowIso} WHERE user_id = ${userId} AND consumed_at IS NULL`;
 }
 
 export async function addMembership(args: {

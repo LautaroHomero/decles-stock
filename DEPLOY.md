@@ -1,14 +1,15 @@
 # Subir Klavdia · Stock a internet (gratis)
 
-Tres servicios, todos con plan gratis:
+Cuatro servicios, todos con plan gratis:
 
 | Qué | Dónde | Para qué |
 | --- | --- | --- |
 | Código | **GitHub** (repo privado) | Guardar el código; Vercel lo toma de ahí |
 | Base de datos | **Supabase** (plan Free) | Postgres. 500 MB y 2 proyectos activos |
 | App | **Vercel** (plan Hobby) | La página que abre el consultorio |
+| Mails | **Gmail** del consultorio | El código para recuperar la contraseña (~500 mails/día) |
 
-Tiempo: ~30 minutos. Necesitás la terminal en `~/Documents/decles-stock`.
+Tiempo: ~40 minutos. Necesitás la terminal en `~/Documents/decles-stock`.
 
 > **Antes de empezar, dos límites de los planes gratis:**
 > - **Vercel Hobby es solo para uso no comercial / personal.** Para que el consultorio lo *pruebe*, alcanza;
@@ -59,18 +60,36 @@ Tiempo: ~30 minutos. Necesitás la terminal en `~/Documents/decles-stock`.
 
 ---
 
-## 3. Vercel: publicar la app
+## 3. Gmail: para que puedan recuperar la contraseña solos
+
+Con esto, en el login aparece *¿Te olvidaste la contraseña?* y llega un código de 6 dígitos al mail de cada persona.
+Conviene un Gmail **del consultorio** (no el personal de nadie), ej. `consultorio.decles@gmail.com`.
+
+1. Entrá con ese Gmail a **myaccount.google.com → Seguridad** y activá la **Verificación en 2 pasos**
+   (Google no da contraseñas de aplicación sin eso).
+2. Andá a **myaccount.google.com/apppasswords** → nombre `Klavdia Stock` → **Crear**.
+   Te muestra 16 letras (`abcd efgh ijkl mnop`). **Copialas**: no se vuelven a mostrar.
+3. Las vas a pegar en Vercel en el paso siguiente (`SMTP_USER` y `SMTP_PASS`).
+
+> Si cambian la contraseña de ese Gmail, Google anula la de aplicación: crear otra y actualizar `SMTP_PASS` en Vercel.
+> Si no lo configurás, la app anda igual: la opción dice "no está activada" y el admin resetea desde Equipo.
+
+---
+
+## 4. Vercel: publicar la app
 
 1. **vercel.com → Add New… → Project → Import** el repo `decles-stock` (la primera vez te pide
    conectar tu GitHub).
 2. Framework: lo detecta solo (**Next.js**). No toques Build ni Output.
-3. **Environment Variables** — agregá estas tres antes de tocar *Deploy*:
+3. **Environment Variables** — agregá estas antes de tocar *Deploy*:
 
    | Nombre | Valor |
    | --- | --- |
    | `DATABASE_URL` | La del **Transaction pooler** (puerto **6543**), con la contraseña puesta |
    | `AUTH_SECRET` | Una clave al azar: en tu terminal corré `openssl rand -base64 48` y pegá el resultado |
    | `CRON_SECRET` | Otra clave al azar distinta (de nuevo `openssl rand -base64 48`) |
+   | `SMTP_USER` | El Gmail del consultorio (paso 3) |
+   | `SMTP_PASS` | La contraseña de aplicación de 16 letras (con o sin espacios) |
 
 4. **Deploy.** En 1–2 minutos te da una URL tipo `decles-stock.vercel.app`.
 5. **Región (recomendado):** *Settings → Functions → Function Region* → **São Paulo (gru1)**, así la app
@@ -78,13 +97,13 @@ Tiempo: ~30 minutos. Necesitás la terminal en `~/Documents/decles-stock`.
 
 ---
 
-## 4. Primer uso
+## 5. Primer uso
 
-1. Abrí la URL de Vercel → aparece **Primer arranque**: nombre del consultorio y la cuenta del admin.
+1. Abrí la URL de Vercel → aparece **Primer arranque**: nombre del consultorio, la cuenta del admin y **tu email**.
 2. Seguí los **Primeros pasos** (productos y precios, stock con vencimientos, médicas con su comisión,
    secretaría, venta de prueba).
 3. Pasale al consultorio la URL. Cada persona entra con el usuario y la contraseña temporal que le da el admin
-   desde **Equipo**, y elige la suya al entrar.
+   desde **Equipo**, elige la suya al entrar y carga su email (para recuperarla sola si se la olvida).
 4. En el celular: abrir la URL → *Compartir → Agregar a inicio* y queda como una app.
 
 El aviso diario de vencimientos ya está configurado (`vercel.json`, una vez por día, ~8 a 9 h de Argentina).
@@ -103,7 +122,9 @@ Lo ves en Vercel → *Settings → Cron Jobs*.
     --no-owner --schema=public > backup-$(date +%F).sql
   ```
   (Si no tenés `pg_dump`: `brew install libpq` y usá `$(brew --prefix libpq)/bin/pg_dump`.)
-- **Si el único admin pierde la contraseña:** desde tu Mac,
+- **Si alguien pierde la contraseña:** *¿Te olvidaste la contraseña?* en el login (si tiene email cargado), o un admin
+  la resetea desde Equipo. **Tené siempre dos admins**: si uno se la olvida, el otro lo resetea.
+- **Si el único admin pierde la contraseña y no tiene email:** desde tu Mac,
   `DATABASE_URL="<session pooler>" npm run user:reset-password -- <usuario>` y te muestra una temporal.
 
 ## Si algo falla
@@ -114,3 +135,5 @@ Lo ves en Vercel → *Settings → Cron Jobs*.
 | "AUTH_SECRET is required in production" en los logs | Falta `AUTH_SECRET` o tiene menos de 32 caracteres |
 | `db:migrate` no conecta | Estás usando la *Direct connection*; usá la del *Session pooler* |
 | La app dejó de andar después de una semana sin uso | Supabase pausó el proyecto: *Restore* en el panel |
+| "No se pudo mandar el mail" | `SMTP_PASS` mal copiada o anulada (cambiaron la contraseña del Gmail): crear otra de aplicación |
+| "La recuperación por email no está activada" | Faltan `SMTP_USER`/`SMTP_PASS` en Vercel (y *Redeploy* después de agregarlas) |

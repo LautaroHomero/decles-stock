@@ -16,11 +16,16 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
 
 ## Login
 
-- **Usuario + contraseña** (scrypt con sal por usuario). Sin emails: funciona sin internet.
+- **Usuario + contraseña** (scrypt con sal por usuario).
 - **Primer arranque**: con la base vacía, la app pide el nombre del consultorio y crea la cuenta del primer admin.
 - **Altas**: el admin crea a la persona y recibe una **contraseña temporal** (se muestra una sola vez). Al entrar,
   la persona elige la suya; hasta entonces no puede hacer nada más.
-- **Olvidó la contraseña**: el admin la resetea desde Equipo (nueva temporal).
+- **Olvidó la contraseña** (sola): *¿Te olvidaste la contraseña?* → usuario o email → llega un **código de 6 dígitos**
+  al mail → elige una nueva y entra. Vale el último código, 15 min, 5 intentos; hasta 5 por hora. Cierra sus otras sesiones
+  y desbloquea la cuenta. Cada persona carga su email al entrar por primera vez, en *Mi email* o el admin en Equipo.
+  Los mails salen de un Gmail del consultorio (`SMTP_USER`/`SMTP_PASS`, ver DEPLOY.md); sin eso, en desarrollo el código
+  sale en la consola de `npm run dev` y en producción la opción avisa que no está activada.
+- **O el admin** la resetea desde Equipo (nueva temporal).
 - **Baja**: lógica (el historial conserva el nombre). Cierra sus sesiones al instante.
 - **Bloqueo**: 5 intentos fallidos → 15 min.
 - **Si el único admin perdió la contraseña**: `npm run user:reset-password -- <usuario>` en la máquina donde corre.
@@ -76,7 +81,7 @@ src/lib/db/migrations/   0001_core · 0002_stock · 0003_billing   (= Clavdia)
                          0007_payment_methods · 0008_onboarding   (nuevas)
 src/lib/auth/            session (cookie firmada + session_version), password (scrypt), actor
 src/lib/domain/
-  accounts.ts      primer arranque, login, contraseña, equipo (alta/baja/reset/comisión)
+  accounts.ts      primer arranque, login, contraseña (y recuperación por código), equipo (alta/baja/reset/comisión)
   stock.ts         = Clavdia (lotes, FEFO, bajas, permisos)
   billing.ts       = Clavdia + médica obligatoria y comisión congelada; resumen de comisiones
   products.ts      producto vendible = stock_item + price_list_item (alta/edición en un paso)
@@ -98,6 +103,8 @@ Diferencias concretas contra Clavdia; todo lo demás es igual:
 4. **`stock_roles`** acá arranca en `'[]'` (solo el admin toca inventario); en Clavdia setearlo así para Decles.
 5. `stock_movements.appointment_id / consultation_id` acá no tienen FK; siempre quedan `NULL`.
 6. Cookie `decles_stock_session` (en Clavdia `clinic_session`).
+7. Recuperar contraseña usa la tabla de Clavdia `pin_reset_codes` (`channel = 'email'`) y `users.email`; mails con
+   nodemailer/SMTP (`src/lib/mail.ts`). En Clavdia se puede cambiar por su envío de mails.
 
 Pasar los datos: dump de `organizations`, `users`, `memberships`, `providers`, `stock_*`, `price_*`, `sales` y
 `notifications` e import en la base de Clavdia (los IDs son TEXT con prefijo y no colisionan).
