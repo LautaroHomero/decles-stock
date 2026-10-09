@@ -40,7 +40,7 @@ async function person(name: string, username: string, role: "recepcion" | "medic
 const admin = await person("Admin Decles", "admin", "recepcion", { admin: true });
 const secretaria = await person("Sofía Gómez", "sofia", "recepcion");
 const laura = await person("Dra. Laura Decles", "laura", "medico", { commission: 10 });
-await person("Dra. Paula Ríos", "paula", "medico", { commission: 8 });
+const paula = await person("Dra. Paula Ríos", "paula", "medico", { commission: 8 });
 
 const adminActor = (await hydrateActor({ userId: admin.id, role: "recepcion", activeOrgId: org.id, sv: 0 }))!;
 const secActor = (await hydrateActor({ userId: secretaria.id, role: "recepcion", activeOrgId: org.id, sv: 0 }))!;
@@ -77,12 +77,44 @@ await getSql()`
 must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, providerId: laura.providerId, paymentMethod: "tarjeta" }), "venta 1");
 must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, providerId: laura.providerId, expiresOn: day(240) }), "venta 2");
 
+// Historial de las últimas 3 semanas para ver Ventas por semana y por mes (fechas corridas a mano).
+{
+  const items = (await getSql()`SELECT id FROM price_list_items WHERE organization_id = ${org.id}`) as unknown as { id: string }[];
+  // Stock extra para que el historial no deje la demo sin unidades.
+  for (const it of await getSql()`SELECT stock_item_id FROM price_list_items WHERE organization_id = ${org.id}`)
+    await addStock(adminActor, { itemId: it.stock_item_id as string, quantity: 20, expiresOn: day(500) });
+  // PRNG con semilla fija (mulberry32): la demo sale igual cada vez.
+  let s = 20261008;
+  const rnd = (n: number) => {
+    s = (s + 0x6d2b79f5) | 0;
+    let x = Math.imul(s ^ (s >>> 15), 1 | s);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return Math.floor((((x ^ (x >>> 14)) >>> 0) / 4294967296) * n);
+  };
+  for (let back = 21; back >= 1; back--) {
+    const n = rnd(4); // 0 a 3 ventas por día
+    for (let k = 0; k < n; k++) {
+      const r = await recordSale(secActor, {
+        itemId: items[rnd(items.length)].id,
+        quantity: 1 + rnd(2),
+        providerId: rnd(2) ? laura.providerId : paula.providerId,
+        paymentMethod: ["efectivo", "tarjeta", null][rnd(3)],
+      });
+      if (r.ok) {
+        const hh = String(9 + rnd(9)).padStart(2, "0");
+        const mm = String(rnd(60)).padStart(2, "0");
+        await getSql()`UPDATE sales SET created_at = ${`${day(-back)}T${hh}:${mm}:00`} WHERE id = ${r.saleId}`;
+      }
+    }
+  }
+}
+
 const created = await refreshStockAlerts(org.id);
 // La demo ya tiene todo cargado: "Primeros pasos" arranca cerrado (se reabre desde el menú de la cuenta).
 await getSql()`UPDATE organizations SET onboarding_done = TRUE WHERE id = ${org.id}`;
 
 console.log(`
-Listo: ${ORG} con 6 productos, 2 ventas y ${created} avisos para las médicas.
+Listo: ${ORG} con 6 productos, 3 semanas de ventas y ${created} avisos.
 Todas las contraseñas de la demo: decles123
 
   Usuario   Rol
