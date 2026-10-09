@@ -8,7 +8,8 @@ import { firstName, greeting, initials } from "./ui";
 import { Toast, call, fmtTime, money, usePoll, useToast, type CatalogResponse, type Payment, type SaleRow } from "./shared";
 
 /**
- * Anotar (diseño «Vender»): lo que pasó en el consultorio en una frase —
+ * Anotar (diseño «Vender»). PRIMERO se elige el profesional (a su nombre quedan las prácticas,
+ * la venta y la comisión); después, lo que pasó en una frase —
  * «María López, la atendió laura, atención y peeling» o «gabriela vendió 2 cremas con tarjeta» —
  * o eligiéndolo de una lista en pasos. Siempre se confirma antes de guardar. Prácticas y
  * productos van juntos (`/api/visits`); los productos descuentan stock solos.
@@ -42,11 +43,21 @@ interface Draft {
   lines: Line[];
   /** Renglones que no se entendieron del todo: con opciones o sin nada. */
   unresolved: { text: string; qty: number; sellerId: string | null; candidates: Item[] }[];
+  /** El texto nombra a otra médica que la elegida: hay que decidir antes de guardar. */
+  namedSeller: string | null;
 }
-type Step = "idle" | "pick" | "who" | "pay" | "confirm" | "done";
+type Step = "idle" | "pick" | "pay" | "confirm" | "done";
 
 const cardOf = (i: Item) => i.cardPrice ?? i.price;
-const emptyDraft = (from: Draft["from"], sellerId: string | null): Draft => ({ from, patient: "", sellerId, payment: null, lines: [], unresolved: [] });
+const emptyDraft = (from: Draft["from"], sellerId: string | null): Draft => ({
+  from,
+  patient: "",
+  sellerId,
+  payment: null,
+  lines: [],
+  unresolved: [],
+  namedSeller: null,
+});
 
 export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: () => void }) {
   const [catalog, refreshCatalog] = usePoll<CatalogResponse>("/api/catalog", 30_000);
@@ -68,6 +79,10 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   );
   // La médica anota a su nombre; con una sola médica en el consultorio, queda elegida sola.
   const fixedSeller = isMedico ? (sellers[0]?.id ?? null) : sellers.length === 1 ? sellers[0].id : null;
+  // El profesional se elige primero y vuelve a pedirse en cada anotación (para no anotarle a la equivocada).
+  const [chosen, setChosen] = useState<string | null>(null);
+  const pro = fixedSeller ?? chosen;
+  const proName = sellers.find((x) => x.id === pro)?.name ?? "";
 
   const [step, setStep] = useState<Step>("idle");
   const [text, setText] = useState("");
@@ -75,21 +90,21 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState("");
 
-  // Pasos del modo manual: qué → quién (si hace falta elegir) → pago.
-  const manualSteps: Step[] = fixedSeller ? ["pick", "pay"] : ["pick", "who", "pay"];
+  // Pasos del modo manual (el profesional ya está elegido): qué → pago.
+  const manualSteps: Step[] = ["pick", "pay"];
   const stepNum = manualSteps.indexOf(step) + 1;
 
   function interpret() {
     const { lines, patient } = parseNote(text, items, sellers);
-    const d = emptyDraft("text", fixedSeller);
+    const d = emptyDraft("text", pro);
     d.patient = patient ?? "";
     for (const l of lines) {
-      if (l.match) d.lines.push({ item: l.match, qty: l.quantity, sellerId: l.seller?.id ?? null });
-      else d.unresolved.push({ text: l.text, qty: l.quantity, sellerId: l.seller?.id ?? null, candidates: l.candidates });
+      if (l.match) d.lines.push({ item: l.match, qty: l.quantity, sellerId: null });
+      else d.unresolved.push({ text: l.text, qty: l.quantity, sellerId: null, candidates: l.candidates });
       if (l.payment) d.payment ??= l.payment;
     }
-    const named = lines.map((l) => l.seller?.id).filter(Boolean) as string[];
-    if (!d.sellerId && named.length) d.sellerId = named[0];
+    // Manda el profesional elegido; si el texto nombra a otra, se pregunta en la confirmación.
+    d.namedSeller = (lines.map((l) => l.seller?.id).find((id) => id && id !== pro) as string | undefined) ?? null;
     if (!d.lines.length && !d.unresolved.length) {
       showToast(patient ? `Anoté a ${patient}. ¿Qué se le hizo? Elegilo de la lista.` : "No encontré qué anotar. Probá elegirlo de la lista.");
       if (patient) {
@@ -103,7 +118,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   }
 
   function startManual() {
-    setDraft(emptyDraft("manual", fixedSeller));
+    setDraft(emptyDraft("manual", pro));
     setStep("pick");
   }
 
@@ -114,26 +129,18 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
 
   async function save() {
     setBusy(true);
-    // Una anotación por médica (si el texto nombró a más de una).
-    const groups = new Map<string, Line[]>();
-    for (const l of draft.lines) {
-      const k = l.sellerId ?? draft.sellerId ?? "";
-      groups.set(k, [...(groups.get(k) ?? []), l]);
-    }
-    for (const [providerId, lines] of groups) {
-      const r = await call("/api/visits", "POST", {
-        patientName: draft.patient.trim(),
-        providerId: providerId || null,
-        paymentMethod: draft.payment,
-        lines: lines.map((l) => ({ itemId: l.item.id, quantity: l.qty })),
-      });
-      if (!r.ok) {
-        setBusy(false);
-        refreshSales();
-        return showToast(r.error ?? "No se pudo anotar.");
-      }
-    }
+    const r = await call("/api/visits", "POST", {
+      patientName: draft.patient.trim(),
+      providerId: draft.sellerId,
+      paymentMethod: draft.payment,
+      lines: draft.lines.map((l) => ({ itemId: l.item.id, quantity: l.qty })),
+    });
     setBusy(false);
+    if (!r.ok) {
+      refreshSales();
+      return showToast(r.error ?? "No se pudo anotar.");
+    }
+    setChosen(null);
     setSaved([draft.patient.trim(), draft.lines.map((l) => `${l.qty > 1 ? `${l.qty} ` : ""}${l.item.name}`).join(", ")].filter(Boolean).join(" · "));
     setText("");
     setStep("done");
@@ -152,32 +159,63 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
           <h1 className="font-display text-[30px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[38px]">
             {greeting()}, {firstName(actor.name)}
           </h1>
-          <div className="flex flex-col gap-3.5">
-            <label htmlFor="anotar" className="text-[22px] font-semibold">
-              ¿Qué querés anotar?
-            </label>
-            <textarea
-              id="anotar"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) interpret();
-              }}
-              placeholder="Ej: María López, la atendió Laura, atención y peeling"
-              className="min-h-[140px] w-full resize-none rounded-[20px] border-2 border-neutral-800 bg-surface p-5 text-[21px] leading-[1.4] text-fg outline-none transition-colors placeholder:text-neutral-600 focus:border-accent-600 sm:text-[22px]"
-            />
-            <p className="text-[16.5px] text-neutral-400">Sirve para pacientes y para ventas. Ej: «Gabriela vendió 2 cremas con tarjeta».</p>
-            <button onClick={interpret} disabled={!text.trim() || loading} className={CTA}>
-              Anotar
-            </button>
-            <button onClick={startManual} disabled={loading} className={`${GHOST} min-h-[60px] gap-3`}>
-              <SquaresFourIcon size={24} /> Prefiero elegirlo de una lista
-            </button>
-          </div>
+
+          {!pro ? (
+            <section className="flex flex-col gap-3.5">
+              <h2 className="text-[22px] font-semibold">¿Quién atiende?</h2>
+              <p className="-mt-2 text-[16.5px] text-neutral-400">Primero el profesional: a su nombre quedan las prácticas, las ventas y la comisión.</p>
+              {sellers.map((x) => (
+                <button key={x.id} onClick={() => setChosen(x.id)} className={OPTION}>
+                  <span className="flex h-[52px] w-[52px] flex-none items-center justify-center rounded-full bg-neutral-900 text-[18px] font-bold">{initials(x.name)}</span>
+                  <span className="text-[22px] font-semibold sm:text-[23px]">{x.name}</span>
+                </button>
+              ))}
+              {loading && <p className="text-neutral-500">Cargando…</p>}
+              {!loading && !sellers.length && <p className="text-neutral-400">No hay médicas activas: el admin las da de alta en Equipo.</p>}
+            </section>
+          ) : (
+            <>
+              <div className="flex items-center gap-4 rounded-[20px] border-2 border-accent-700 bg-surface px-4 py-3">
+                <span className="flex h-12 w-12 flex-none items-center justify-center rounded-full bg-accent text-[17px] font-bold text-on-accent">{initials(proName)}</span>
+                <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                  <span className="text-[15px] text-neutral-400">Atiende</span>
+                  <span className="truncate text-[21px] font-bold">{proName}</span>
+                </span>
+                {!fixedSeller && (
+                  <button onClick={() => setChosen(null)} className="min-h-12 rounded-xl px-3 text-[17px] font-semibold text-accent hover:bg-neutral-900">
+                    Cambiar
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-col gap-3.5">
+                <label htmlFor="anotar" className="text-[22px] font-semibold">
+                  ¿Qué querés anotar?
+                </label>
+                <textarea
+                  id="anotar"
+                  autoFocus
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) interpret();
+                  }}
+                  placeholder="Ej: María López, atención y peeling"
+                  className="min-h-[140px] w-full resize-none rounded-[20px] border-2 border-neutral-800 bg-surface p-5 text-[21px] leading-[1.4] text-fg outline-none transition-colors placeholder:text-neutral-600 focus:border-accent-600 sm:text-[22px]"
+                />
+                <p className="text-[16.5px] text-neutral-400">Sirve para pacientes y para ventas. Ej: «2 cremas pindonga con tarjeta».</p>
+                <button onClick={interpret} disabled={!text.trim() || loading} className={CTA}>
+                  Anotar
+                </button>
+                <button onClick={startManual} disabled={loading} className={`${GHOST} min-h-[60px] gap-3`}>
+                  <SquaresFourIcon size={24} /> Prefiero elegirlo de una lista
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
-      {(step === "pick" || step === "who" || step === "pay") && (
+      {(step === "pick" || step === "pay") && (
         <div className="flex items-center justify-between">
           <button onClick={back} className="flex min-h-12 items-center gap-2 rounded-xl py-2.5 pl-1.5 pr-3.5 text-[19px] font-semibold hover:bg-neutral-900">
             <CaretLeftIcon size={22} weight="bold" /> Volver
@@ -193,28 +231,9 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
           items={items}
           draft={draft}
           setDraft={setDraft}
-          onNext={() => setStep(manualSteps[manualSteps.indexOf("pick") + 1])}
+          proName={proName}
+          onNext={() => setStep("pay")}
         />
-      )}
-
-      {step === "who" && (
-        <section className="flex flex-col gap-3.5">
-          <h1 className="mb-2 text-[30px] font-bold leading-[1.2] sm:text-[32px]">¿Quién la atendió?</h1>
-          {sellers.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => {
-                setDraft({ ...draft, sellerId: s.id });
-                setStep("pay");
-              }}
-              className={OPTION}
-            >
-              <span className="flex h-[52px] w-[52px] flex-none items-center justify-center rounded-full bg-neutral-900 text-[18px] font-bold">{initials(s.name)}</span>
-              <span className="text-[22px] font-semibold sm:text-[23px]">{s.name}</span>
-            </button>
-          ))}
-          {!sellers.length && <p className="text-neutral-400">No hay médicas activas: el admin las da de alta en Equipo.</p>}
-        </section>
       )}
 
       {step === "pay" && (
@@ -284,7 +303,19 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
 // Paso «¿Qué se hizo o se vendió?»: se puede marcar más de uno
 // ---------------------------------------------------------------------------
 
-function PickItems({ items, draft, setDraft, onNext }: { items: Item[]; draft: Draft; setDraft: (d: Draft) => void; onNext: () => void }) {
+function PickItems({
+  items,
+  draft,
+  setDraft,
+  proName,
+  onNext,
+}: {
+  items: Item[];
+  draft: Draft;
+  setDraft: (d: Draft) => void;
+  proName: string;
+  onNext: () => void;
+}) {
   const picked = new Set(draft.lines.map((l) => l.item.id));
   const toggle = (it: Item) =>
     setDraft({
@@ -300,7 +331,7 @@ function PickItems({ items, draft, setDraft, onNext }: { items: Item[]; draft: D
   return (
     <section className="flex flex-col gap-5">
       <div>
-        {draft.patient && <p className="mb-1 text-[20px] text-neutral-300">{draft.patient}</p>}
+        <p className="mb-1 text-[20px] text-neutral-300">{[draft.patient, proName].filter(Boolean).join(" · ")}</p>
         <h1 className="text-[30px] font-bold leading-[1.2] sm:text-[32px]">¿Qué se hizo o se vendió?</h1>
         <p className="mt-1 text-[18px] text-neutral-400">Podés marcar más de uno.</p>
       </div>
@@ -361,14 +392,12 @@ function Confirm({
   onSave: () => void;
   onEdit: () => void;
 }) {
-  const [pickWho, setPickWho] = useState(false);
-  const sellerName = (id: string | null) => sellers.find((s) => s.id === id)?.name ?? null;
+  const sellerName = (id: string | null) => sellers.find((s) => s.id === id)?.name ?? "";
   const isVisit = !!draft.patient.trim() || draft.lines.some((l) => l.item.kind === "practica");
-  const missingSeller = !isMedico && draft.lines.some((l) => !(l.sellerId ?? draft.sellerId));
-  const whoNames = [...new Set(draft.lines.map((l) => sellerName(l.sellerId ?? draft.sellerId)).filter(Boolean))];
+  const missingSeller = !isMedico && !draft.sellerId;
   const cash = draft.lines.reduce((n, l) => n + l.item.price * l.qty, 0);
   const card = draft.lines.reduce((n, l) => n + cardOf(l.item) * l.qty, 0);
-  const blocked = !draft.lines.length || draft.unresolved.length > 0 || missingSeller;
+  const blocked = !draft.lines.length || draft.unresolved.length > 0 || missingSeller || !!draft.namedSeller;
 
   const setQty = (i: number, qty: number) =>
     setDraft({ ...draft, lines: qty <= 0 ? draft.lines.filter((_, j) => j !== i) : draft.lines.map((l, j) => (j === i ? { ...l, qty } : l)) });
@@ -387,6 +416,27 @@ function Confirm({
         <span className="rounded-full bg-tag-bg px-3.5 py-1 text-[15px] font-bold text-tag-fg">{isVisit ? "Paciente" : "Venta"}</span>
         <span className="text-[19px] text-neutral-300">¿Está bien así?</span>
       </div>
+
+      <div className="flex flex-col leading-tight">
+        <span className="text-[15px] text-neutral-400">{isVisit ? "Atiende" : "Vende"}</span>
+        <span className="text-[22px] font-bold sm:text-[24px]">{sellerName(draft.sellerId) || "—"}</span>
+      </div>
+
+      {draft.namedSeller && (
+        <div className="flex flex-col gap-3 rounded-2xl border-2 border-accent-700 p-4">
+          <span className="text-[18px]">
+            En el texto dice <b>{sellerName(draft.namedSeller)}</b>, pero elegiste <b>{sellerName(draft.sellerId)}</b>. ¿A quién se lo anotamos?
+          </span>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setDraft({ ...draft, sellerId: draft.namedSeller, namedSeller: null })} className={CHIP}>
+              {sellerName(draft.namedSeller)}
+            </button>
+            <button onClick={() => setDraft({ ...draft, namedSeller: null })} className={CHIP}>
+              {sellerName(draft.sellerId)}
+            </button>
+          </div>
+        </div>
+      )}
 
       <label className="flex flex-col gap-1">
         <span className="text-[15px] text-neutral-400">Paciente</span>
@@ -442,37 +492,8 @@ function Confirm({
         {!draft.lines.length && !draft.unresolved.length && <li className="text-neutral-400">No quedó nada para anotar.</li>}
       </ul>
 
-      {/* Quién y cómo pagó */}
+      {/* Cómo pagó */}
       <div className="flex flex-col gap-3">
-        {!isMedico && (missingSeller || pickWho) ? (
-          <div className="flex flex-col gap-2">
-            <span className="text-[17px] text-neutral-300">{isVisit ? "¿Quién la atendió?" : "¿Quién lo vendió?"}</span>
-            <div className="flex flex-wrap gap-2">
-              {sellers.map((s) => (
-                <button
-                  key={s.id}
-                  aria-pressed={draft.sellerId === s.id}
-                  onClick={() => {
-                    setDraft({ ...draft, sellerId: s.id, lines: draft.lines.map((l) => ({ ...l, sellerId: null })) });
-                    setPickWho(false);
-                  }}
-                  className={draft.sellerId === s.id && !missingSeller ? CHIP_ON : CHIP}
-                >
-                  {s.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <p className="text-[20px] text-neutral-300">
-            {whoNames.join(" y ") || "—"}
-            {!isMedico && (
-              <button onClick={() => setPickWho(true)} className="ml-3 text-[16px] text-accent underline-offset-4 hover:underline">
-                Cambiar
-              </button>
-            )}
-          </p>
-        )}
         <div className="flex flex-wrap gap-2" role="group" aria-label="¿Cómo pagó?">
           {(
             [
@@ -502,7 +523,7 @@ function Confirm({
 
       <div className="flex flex-wrap gap-3">
         <button onClick={onSave} disabled={busy || blocked} className={`${CTA} flex-[2_1_220px]`}>
-          {busy ? "Guardando…" : missingSeller ? "Falta quién" : draft.unresolved.length ? "Revisá lo marcado" : "Sí, guardar"}
+          {busy ? "Guardando…" : missingSeller ? "Falta el profesional" : draft.namedSeller ? "Elegí a quién se anota" : draft.unresolved.length ? "Revisá lo marcado" : "Sí, guardar"}
         </button>
         <button onClick={onEdit} className={`${GHOST} min-h-[68px] flex-[1_1_160px]`}>
           Corregir

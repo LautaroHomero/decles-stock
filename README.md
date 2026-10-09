@@ -9,7 +9,7 @@ Clavdia cuando salga a producción sin migrar datos a mano.
 | Rol | Puede |
 | --- | --- |
 | **Admin** (cualquier persona marcada como admin) | Equipo: alta y baja de médicas y secretarias, reset de contraseña, % de comisión. Stock: productos con precio, lotes con vencimiento, bajas. Ventas: ver todo, comisiones por médica, anular |
-| **Secretaría** | **Anotar**: escribe lo que pasó ("María López, la atendió Laura, atención y peeling" / "gabriela vendió 2 cremas con tarjeta") o lo elige de una lista en pasos; confirma y listo. Ve el **cierre del día** y Ventas |
+| **Secretaría** | **Anotar**: primero elige el profesional; después escribe lo que pasó ("María López, atención y peeling" / "2 cremas con tarjeta") o lo elige de una lista; confirma y listo. Ve el **cierre del día** y Ventas |
 | **Médica/o** | Anota a su nombre, ve el stock, su comisión, su cierre del día y la **campanita** con vencimientos y stock bajo |
 
 Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
@@ -32,8 +32,9 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
 
 ## Anotar y cierre del día
 
-- **Anotar** (pantalla principal, para todos): un cuadro de texto libre o "Prefiero elegirlo de una lista" (qué se hizo o
-  vendió → quién → cómo pagó). Siempre muestra "¿Está bien así?" con cantidades +/−, paciente editable, médica y total.
+- **Anotar** (pantalla principal, para todos): **primero el profesional** ("¿Quién atiende?"; se vuelve a pedir en cada
+  anotación, la médica anota siempre a su nombre). Después, texto libre o "Prefiero elegirlo de una lista" (qué se hizo o
+  vendió → cómo pagó). Si el texto nombra a otra médica que la elegida, la confirmación pregunta a quién se anota. Siempre muestra "¿Está bien así?" con cantidades +/−, paciente editable, médica y total.
 - El **paciente es solo un nombre** escrito (no hay fichas). Las **prácticas** (atención, peeling…) las carga el admin en
   Stock → Prácticas con precio efectivo y con tarjeta; generan comisión igual que un producto.
 - Todo lo anotado junto se guarda junto (`visit_id`): **o se anota todo o nada** (si no alcanza el stock de un producto, no se
