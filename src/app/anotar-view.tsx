@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { CaretLeftIcon, CheckIcon, MinusIcon, PlusIcon, SquaresFourIcon, XIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
-import { parseNote } from "@/lib/domain/quick-sale";
+import { parseNote, suggest } from "@/lib/domain/quick-sale";
 import { firstName, greeting } from "./ui";
 import { Toast, call, fmtTime, money, usePoll, useToast, type CatalogResponse, type Payment, type SaleRow } from "./shared";
 
@@ -144,8 +144,22 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const [lastVisit, setLastVisit] = useState<string | null>(null);
   const [editing, setEditing] = useState<SaleRow[] | null>(null);
 
+  const box = useRef<HTMLTextAreaElement>(null);
+  // La vista previa usa el texto «diferido»: el tipeo nunca espera a que se interprete.
+  const typed = useDeferredValue(text);
+  // Ayuda para escribir: completar la palabra que se está tipeando (Tab o un toque).
+  const hints = useMemo(() => (items.length ? suggest(text, items, sellers) : []), [text, items, sellers]);
+  const accept = (t: string) => {
+    setText(t);
+    requestAnimationFrame(() => {
+      box.current?.focus();
+      box.current?.setSelectionRange(t.length, t.length);
+    });
+  };
+
   // Vista previa en vivo de lo escrito.
   const preview = useMemo(() => {
+    const text = typed;
     if (!text.trim() || !items.length) return null;
     const d = buildDraft(text, items, sellers, fixedSeller);
     // Lo elegido entre opciones pasa a renglón.
@@ -168,7 +182,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       if (only?.length === 1) d.sellerId = only[0].id;
     }
     return { ...d, sellerId: pickSeller ?? d.sellerId, payment: d.payment ?? pickPay };
-  }, [text, items, sellers, fixedSeller, pickSeller, pickPay, chosen, unsureIs]);
+  }, [typed, items, sellers, fixedSeller, pickSeller, pickPay, chosen, unsureIs]);
   const possible = preview ? sellersFor(preview.lines, sellers) : null;
   const notHers = !!preview && preview.lines.some((l) => !allowedFor(l.item, preview.sellerId));
   const missingSeller = !!preview && !isMedico && !preview.sellerId;
@@ -230,6 +244,8 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
             </label>
             <textarea
               id="anotar"
+              ref={box}
+              autoFocus
               value={text}
               onChange={(e) => {
                 setText(e.target.value);
@@ -241,6 +257,12 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                 }
               }}
               onKeyDown={(e) => {
+                // Tab completa con la primera sugerencia.
+                if (e.key === "Tab" && hints.length) {
+                  e.preventDefault();
+                  accept(hints[0].text);
+                  return;
+                }
                 // Enter guarda (o abre la revisión); Shift+Enter, otro renglón.
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -250,6 +272,24 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
               placeholder="Ej: María López, la atendió Laura, atención y peeling"
               className="min-h-[96px] w-full resize-none rounded-[20px] border-2 border-neutral-800 bg-surface p-5 text-[16px] leading-[1.4] text-fg outline-none transition-colors placeholder:text-neutral-600 focus:border-accent-600 sm:text-[17px]"
             />
+
+            {hints.length > 0 && (
+              <div className="-mt-1 flex flex-wrap items-center gap-2" aria-label="Sugerencias">
+                {hints.map((h, i) => (
+                  <button
+                    key={h.label + i}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => accept(h.text)}
+                    className={`rounded-full border-2 px-3.5 py-1.5 text-[14px] font-semibold transition-colors ${
+                      i === 0 ? "border-accent-600 text-fg" : "border-neutral-800 text-neutral-300 hover:border-accent-600"
+                    }`}
+                  >
+                    {h.label}
+                  </button>
+                ))}
+                <span className="hidden text-[12.5px] text-neutral-500 sm:inline">Tab para completar</span>
+              </div>
+            )}
 
             {preview ? (
               <div className="flex animate-cl-in flex-col gap-3 rounded-[20px] border-2 border-neutral-800 px-5 py-4">

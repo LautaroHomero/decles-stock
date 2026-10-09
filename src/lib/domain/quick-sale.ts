@@ -46,6 +46,14 @@ const PAYMENT_WORDS: Record<string, QuickPayment> = {
   transferencia: "efectivo", transf: "efectivo", transfer: "efectivo", mp: "efectivo", mercadopago: "efectivo",
 };
 
+/** Medio de pago de una palabra, aunque esté mal escrita («tarjta», «efectvo», «trasferencia»). */
+function paymentOf(w: string): QuickPayment | null {
+  if (PAYMENT_WORDS[w]) return PAYMENT_WORDS[w];
+  if (w.length < 5) return null;
+  for (const [k, v] of Object.entries(PAYMENT_WORDS)) if (k.length >= 5 && (near1(w, k) || phon(w) === phon(k))) return v;
+  return null;
+}
+
 export interface QuickLine<P extends QuickProduct = QuickProduct, S extends QuickSeller = QuickSeller> {
   /** El pedazo de texto que generó este renglón. */
   text: string;
@@ -61,6 +69,21 @@ export interface QuickLine<P extends QuickProduct = QuickProduct, S extends Quic
   /** Las palabras útiles del renglón, tal como se escribieron (sin cantidad, médica, pago ni muletillas). */
   rest: string;
 }
+
+/**
+ * Cómo le dicen en el consultorio → palabras del nombre en la lista. Se suman a lo escrito (no lo
+ * reemplazan): «botox» encuentra «Toxina botulínica» y también «Aplicación de botox».
+ */
+const SYNONYMS: Record<string, string[]> = {
+  botox: ["toxina", "botulinica"], toxina: ["botox"], botulinica: ["botox"],
+  prp: ["plasma", "rico", "plaqueta"], plasma: ["prp"],
+  ah: ["acido", "hialuronico"], hialuronico: ["acido"], relleno: ["acido", "hialuronico"],
+  dermapen: ["microneedling"], microneedling: ["dermapen"], microagujas: ["microneedling", "dermapen"],
+  crio: ["crioterapia"], rf: ["radiofrecuencia"], radio: ["radiofrecuencia"],
+  fps: ["protector", "solar"], pantalla: ["protector", "solar"], bloqueador: ["protector", "solar"], protector: ["solar"],
+  vitc: ["vitamina", "c"], consulta: ["atencion"], atencion: ["consulta"], control: ["consulta"],
+  limpieza: ["facial"], electro: ["electrocoagulacion"], hilos: ["tensores"], laser: ["laser"],
+};
 
 const NUMBER_WORDS: Record<string, number> = {
   un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8,
@@ -83,7 +106,14 @@ const FILLER = new Set([
 
 /** Minúsculas, sin tildes, sin puntuación (conserva dígitos). */
 export const normalize = (s: string) =>
-  s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9ñ\s]/g, " ").replace(/\s+/g, " ").trim();
+  s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9ñ\s]/g, " ")
+    .replace(/(\d)([a-zñ])/g, "$1 $2") // «2cremas» → «2 cremas»
+    .replace(/\s+/g, " ")
+    .trim();
 
 /** Singular aproximado: "cremas" → "crema", "protectores" → "protector", "ojos" → "ojo". */
 export function stem(w: string): string {
@@ -91,6 +121,17 @@ export function stem(w: string): string {
   if (w.length > 3 && w.endsWith("s")) return w.slice(0, -1);
   return w;
 }
+
+/** Dos letras vecinas invertidas («peelnig», «trajeta»). */
+function swapped(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const diff: number[] = [];
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diff.push(i);
+  return diff.length === 2 && diff[1] === diff[0] + 1 && a[diff[0]] === b[diff[1]] && a[diff[1]] === b[diff[0]];
+}
+
+/** Una letra de más, de menos, cambiada o dos vecinas invertidas. */
+const near1 = (a: string, b: string) => within1(a, b) || swapped(a, b);
 
 function within1(a: string, b: string): boolean {
   if (Math.abs(a.length - b.length) > 1) return false;
@@ -118,18 +159,21 @@ export function phon(w: string): string {
     .replace(/(.)\1+/g, "$1");
 }
 
-/** Distancia de edición (Levenshtein) cortada en `max` (para no gastar en palabras muy distintas). */
+/** Distancia de edición (con letras vecinas invertidas como un error) cortada en `max`. */
 function editDistance(a: string, b: string, max: number): number {
   if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev2: number[] = [];
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
   for (let i = 1; i <= a.length; i++) {
     const cur = [i];
     let best = i;
     for (let j = 1; j <= b.length; j++) {
       cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) cur[j] = Math.min(cur[j], prev2[j - 2] + 1);
       best = Math.min(best, cur[j]);
     }
     if (best > max) return max + 1;
+    prev2 = prev;
     prev = cur;
   }
   return prev[b.length];
@@ -144,14 +188,23 @@ function wordScore(q: string, p: string): number {
   if (q === p) return 1;
   if (q.length >= 4 && phon(q) === phon(p)) return 0.85;
   if (q.length >= 3 && p.startsWith(q)) return 0.75;
-  if (q.length >= 4 && within1(q, p)) return 0.7;
-  if (q.length >= 4 && within1(phon(q), phon(p))) return 0.65;
-  if (q.length >= 8 && editDistance(q, p, 2) <= 2) return 0.6;
+  if (q.length >= 4 && near1(q, p)) return 0.7;
+  if (q.length >= 4 && near1(phon(q), phon(p))) return 0.65;
+  if (q.length >= 7 && editDistance(q, p, 2) <= 2) return 0.6;
+  // Prefijo con un error («mesoter», «limpiesa fac»): para cuando todavía se está escribiendo.
+  if (q.length >= 5 && p.length > q.length && near1(q, p.slice(0, q.length))) return 0.55;
   return 0;
 }
 
-const productWords = (name: string) =>
-  normalize(name).split(" ").filter((w) => w && !FILLER.has(w)).map(stem);
+const wordsCache = new Map<string, string[]>();
+const productWords = (name: string) => {
+  let w = wordsCache.get(name);
+  if (!w) {
+    w = normalize(name).split(" ").filter((x) => x && !FILLER.has(x)).map(stem);
+    wordsCache.set(name, w);
+  }
+  return w;
+};
 
 /** Puntaje de un producto para las palabras pedidas (0 = no tiene nada que ver). */
 function score(queryWords: string[], name: string): number {
@@ -200,7 +253,14 @@ function parseSegment(seg: string, nameNumbers: Set<string>): { quantity: number
       continue;
     }
     if (w === "media" || w === "medio") continue; // "media docena" → docena × ½
-    if (!FILLER.has(w)) rest.push(stem(w));
+    if (w === "par" && quantity === 1) {
+      quantity = 2; // «un par»
+      continue;
+    }
+    if (!FILLER.has(w)) {
+      rest.push(stem(w));
+      for (const syn of SYNONYMS[w] ?? SYNONYMS[stem(w)] ?? []) rest.push(syn);
+    }
   }
   if (/\bmedia docena\b/.test(normalize(seg))) quantity = 6;
   return { quantity: quantity && quantity > 0 ? quantity : 1, words: rest };
@@ -301,8 +361,9 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
       first ??= seller;
     }
     for (const w of normalize(raw).split(" ")) {
-      if (PAYMENT_WORDS[w]) {
-        pay = PAYMENT_WORDS[w];
+      const pm = paymentOf(w);
+      if (pm) {
+        pay = pm;
         firstPay ??= pay;
         used.add(w);
       }
@@ -330,9 +391,9 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
       if (normalize(raw).split(" ").some((w) => SELLER_CUES.has(w))) continue;
     } else if (!patient) {
       // "Ana Gómez atención": lo que va antes del producto/práctica, si son palabras sueltas, es el paciente.
-      const pw = productWords(best.p.name);
-      const at = toks.findIndex((t) => pw.some((w) => wordScore(stem(t.n), w) > 0));
-      const lead = toks.slice(0, Math.max(at, 0)).filter((t) => !FILLER.has(t.n) && !(t.n in NUMBER_WORDS));
+      // La primera palabra que apunta al producto (directo o por sinónimo: «prp» → plasma).
+      const at = toks.findIndex((t) => score([stem(t.n), ...(SYNONYMS[t.n] ?? [])], best.p.name) > 0);
+      const lead = toks.slice(0, Math.max(at, 0)).filter((t) => !FILLER.has(t.n) && !(t.n in NUMBER_WORDS) && t.n !== "par");
       if (lead.length && lead.length <= 4 && lead.every((t) => NAME_TOKEN.test(t.n))) patient = asName(lead);
     }
     // Match claro: hay uno solo, o el primero le saca ventaja al segundo.
@@ -363,4 +424,91 @@ export function parseQuickSale<P extends QuickProduct, S extends QuickSeller = Q
   sellers: S[] = [],
 ): QuickLine<P, S>[] {
   return parseNote(text, products, sellers).lines;
+}
+
+// ---------------------------------------------------------------------------
+// Autocompletar: sugerencias para la palabra que se está escribiendo
+// ---------------------------------------------------------------------------
+
+export interface Suggestion {
+  /** Lo que se muestra en el botón. */
+  label: string;
+  kind: "item" | "seller" | "payment";
+  /** El texto completo después de aceptar la sugerencia. */
+  text: string;
+}
+
+const SEPARATORS = /\n|,|;|\+|\s+y\s+|\s+e\s+/gi;
+const PAYMENT_TARGETS: [string, string][] = [
+  ["tarjeta", "con tarjeta"],
+  ["efectivo", "en efectivo"],
+  ["transferencia", "por transferencia"],
+];
+
+/**
+ * Qué completar según lo último escrito (nunca cambia nada solo: la secretaria toca o aprieta Tab).
+ *  · producto / práctica: las últimas palabras («crema pin», «peel», «botox»), con errores y sinónimos;
+ *  · médica: «lau» → Laura;  · pago: «tarj» → «con tarjeta».
+ */
+export function suggest<P extends QuickProduct, S extends QuickSeller = QuickSeller>(
+  text: string,
+  products: P[],
+  sellers: S[] = [],
+): Suggestion[] {
+  if (!text.trim() || /[\s,;+]$/.test(text)) return [];
+  let start = 0;
+  for (const m of text.matchAll(SEPARATORS)) start = (m.index ?? 0) + m[0].length;
+  const toks = [...text.slice(start).matchAll(/\S+/g)].map((m) => ({ raw: m[0], n: normalize(m[0]).replace(/ /g, ""), at: start + (m.index ?? 0) }));
+  const last = toks[toks.length - 1];
+  if (!last || last.n.length < 2) return [];
+  const out: Suggestion[] = [];
+  const replaceFrom = (at: number, value: string, sep = ", ") => `${text.slice(0, at)}${value}${sep}`;
+
+  // Pago
+  for (const [word, phrase] of PAYMENT_TARGETS) {
+    if (word.startsWith(last.n) || paymentOf(last.n) === (word === "tarjeta" ? "tarjeta" : "efectivo")) {
+      const prev = toks[toks.length - 2]?.n;
+      const value = prev === "con" || prev === "en" || prev === "por" ? word : phrase;
+      out.push({ label: phrase, kind: "payment", text: replaceFrom(last.at, value, " ") });
+      break;
+    }
+  }
+
+  // Médica
+  for (const s of sellers) {
+    const words = sellerWords(s);
+    if (words.some((w) => w.startsWith(last.n) || (last.n.length >= 3 && nameMatches(last.n, w)))) {
+      const first = normalize(s.name).split(" ").find((w) => !FILLER.has(w) && w.length >= 3) ?? s.name;
+      const display = first.charAt(0).toUpperCase() + first.slice(1);
+      if (normalize(display) !== last.n) out.push({ label: s.name, kind: "seller", text: replaceFrom(last.at, display) });
+    }
+  }
+
+  // Producto / práctica: las palabras finales que no son cantidad, médica, pago ni muletilla.
+  let i = toks.length;
+  while (i > 0) {
+    const t = toks[i - 1];
+    if (/^x?\d{1,3}x?$/.test(t.n) || t.n in NUMBER_WORDS || FILLER.has(t.n) || paymentOf(t.n)) break;
+    if (t !== last && sellers.some((s) => sellerWords(s).some((w) => nameMatches(t.n, w)))) break;
+    i--;
+    if (toks.length - i >= 4) break;
+  }
+  const tail = toks.slice(i);
+  if (tail.length) {
+    const words = tail.flatMap((t) => [stem(t.n), ...(SYNONYMS[t.n] ?? [])]);
+    const typed = normalize(tail.map((t) => t.raw).join(" "));
+    const ranked = products
+      .map((p) => {
+        let sc = score(words, p.name);
+        // Con 2 letras todavía no alcanza para `score`: que empiece igual.
+        if (!sc && last.n.length === 2 && productWords(p.name).some((w) => w.startsWith(last.n))) sc = 0.5;
+        return { p, sc };
+      })
+      .filter((x) => x.sc > 0 && normalize(x.p.name) !== typed)
+      .sort((a, b) => b.sc - a.sc);
+    // Solo las que se parecen de verdad a la mejor (nada de «Gel» para «peel»).
+    const top = ranked.filter((x) => x.sc >= ranked[0]?.sc * 0.8).slice(0, 3);
+    out.unshift(...top.map((x) => ({ label: x.p.name, kind: "item" as const, text: replaceFrom(tail[0].at, x.p.name) })));
+  }
+  return out.slice(0, 4);
 }

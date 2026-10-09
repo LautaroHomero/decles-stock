@@ -45,6 +45,9 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
 - Todo lo anotado junto se guarda junto (`visit_id`): **o se anota todo o nada** (si no alcanza el stock de un producto, no se
   anota ninguna línea).
 - **Cierre del día**: pacientes, prácticas, lo cobrado (por medio de pago) y el detalle por médica. Se imprime.
+- **Ayuda para escribir**: mientras se escribe aparecen sugerencias para completar la palabra (práctica/producto, médica,
+  medio de pago); Tab o un toque la completa. Entiende sinónimos del consultorio (botox → toxina botulínica, prp, crio,
+  rf, fps, dermapen…), letras invertidas («peelnig»), números pegados («2cremas»), «un par» y el pago mal escrito.
 - **Nada se pierde por un error de escritura o de carga**:
   - Tipeo: entiende tildes, plurales, palabras cortadas, una letra de más/menos/cambiada (dos en palabras largas) y
     errores de sonido (v/b, s/z/c, ll/y, h). Si no entiende algo: elegir de opciones, **buscar en la lista**,
