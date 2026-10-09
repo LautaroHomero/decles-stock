@@ -126,6 +126,7 @@ export async function setupFirstRun(v: {
   if (up) return fail(up);
   const em = cleanEmail(v.email);
   if (em === null) return fail("El email no parece válido.");
+  if (!em) return fail("Falta tu email: es para recuperar la contraseña si te la olvidás.");
 
   // Lock de la transacción: dos "primer arranque" simultáneos no pueden crear dos admins.
   return getSql().begin(async (tx) => {
@@ -138,7 +139,7 @@ export async function setupFirstRun(v: {
     if (providerId && v.commissionPct) await setProviderCommission(providerId, v.commissionPct);
     await addMembership({ userId: user.id, organizationId: org.id, role: v.role, providerId });
     await setOrgAdmin(org.id, user.id, true);
-    if (em) await setUserEmail(user.id, em);
+    await setUserEmail(user.id, em);
     return { ok: true as const, userId: user.id, orgId: org.id };
   });
 }

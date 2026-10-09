@@ -3,11 +3,16 @@
 import { useState } from "react";
 import { CheckIcon, CaretDownIcon } from "@phosphor-icons/react";
 import { BTN, BTN_DARK, call, usePoll } from "./shared";
+import { EmailForm } from "./auth-ui";
 
-type StepId = "productos" | "stock" | "medicas" | "secretaria" | "venta";
+type StepId = "email" | "productos" | "stock" | "medicas" | "secretaria" | "venta";
 type Section = "vender" | "inventario" | "ventas" | "equipo";
 
-const STEPS: Record<StepId, { title: string; body: string; cta: string; go: Section }> = {
+const STEPS: Record<StepId, { title: string; body: string; cta?: string; go?: Section }> = {
+  email: {
+    title: "Cargá tu email",
+    body: "Si un día te olvidás la contraseña, te llega un código a este mail para elegir una nueva.",
+  },
   productos: {
     title: "Cargá los productos que venden",
     body: "Nombre, precio en efectivo/transferencia y precio con tarjeta. Si es el mismo, dejá el de tarjeta vacío.",
@@ -22,13 +27,13 @@ const STEPS: Record<StepId, { title: string; body: string; cta: string; go: Sect
   },
   medicas: {
     title: "Sumá a las médicas",
-    body: "Con su usuario y su % de comisión (se calcula sobre el precio en efectivo). Les pasás la contraseña temporal y la cambian al entrar.",
+    body: "Con su usuario, su email y su % de comisión (se calcula sobre el precio en efectivo). Les pasás la contraseña temporal y la cambian al entrar.",
     cta: "Ir a Equipo",
     go: "equipo",
   },
   secretaria: {
     title: "Sumá a la secretaría",
-    body: "Solo ve la pantalla de venta: nombre y precio de cada producto. Nada de stock ni vencimientos.",
+    body: "Con su usuario y su email. Solo ve la pantalla de venta: nombre y precio de cada producto. Nada de stock ni vencimientos.",
     cta: "Ir a Equipo",
     go: "equipo",
   },
@@ -76,7 +81,7 @@ export function Onboarding({ go, reloadKey }: { go: (s: Section) => void; reload
             <p className="text-[13px] text-neutral-400">
               {finished
                 ? "Cada persona entra con su usuario. Las ventas, comisiones y avisos de vencimiento ya funcionan solos."
-                : "Cinco pasos cortos. Cada uno se tilda solo cuando lo hacés."}
+                : "Seis pasos cortos. Cada uno se tilda solo cuando lo hacés."}
             </p>
           </div>
           <button className={finished ? BTN_DARK : BTN} onClick={close}>
@@ -105,10 +110,15 @@ export function Onboarding({ go, reloadKey }: { go: (s: Section) => void; reload
                   <span className={`block text-[14.5px] ${s.done ? "text-neutral-500 line-through decoration-neutral-700" : "font-medium"}`}>
                     {step.title}
                   </span>
-                  {current && <span className="mt-0.5 block text-[13px] leading-snug text-neutral-400">{step.body}</span>}
+                  {current && s.id !== "email" && <span className="mt-0.5 block text-[13px] leading-snug text-neutral-400">{step.body}</span>}
+                  {current && s.id === "email" && (
+                    <span className="mt-3 block max-w-[360px]">
+                      <EmailForm initial="" onDone={refresh} />
+                    </span>
+                  )}
                 </span>
-                {!s.done && (
-                  <button className={current ? BTN_DARK : BTN} onClick={() => go(step.go)}>
+                {!s.done && step.go && (
+                  <button className={current ? BTN_DARK : BTN} onClick={() => go(step.go!)}>
                     {step.cta}
                   </button>
                 )}

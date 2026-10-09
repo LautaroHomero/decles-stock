@@ -73,7 +73,7 @@ export default function SetupPage() {
         <Field label="Usuario" hint="Con esto entrás. Minúsculas, sin espacios.">
           <input value={f.username} onChange={set("username")} autoCapitalize="none" spellCheck={false} placeholder="ej. admin" className={AUTH_FIELD} />
         </Field>
-        <Field label="Tu email (opcional)" hint="Para recuperar la contraseña si te la olvidás.">
+        <Field label="Tu email" hint="Para recuperar la contraseña si te la olvidás.">
           <input type="email" value={f.email} onChange={set("email")} autoCapitalize="none" spellCheck={false} placeholder="nombre@gmail.com" className={AUTH_FIELD} />
         </Field>
         <Field label="Contraseña" hint="Al menos 8 caracteres.">
@@ -84,7 +84,7 @@ export default function SetupPage() {
         </Field>
         <button
           type="submit"
-          disabled={busy || !f.orgName.trim() || !f.name.trim() || !f.username.trim() || f.password.length < 8}
+          disabled={busy || !f.orgName.trim() || !f.name.trim() || !f.email.includes("@") || !f.username.trim() || f.password.length < 8}
           className={AUTH_PRIMARY}
         >
           {busy ? "Configurando…" : "Crear y entrar"}

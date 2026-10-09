@@ -40,7 +40,7 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
 
 ## Primeros pasos (onboarding)
 
-Después del primer arranque, el admin ve un checklist de 5 pasos que se tildan solos al hacerlos: productos con precio,
+Después del primer arranque, el admin ve un checklist de 6 pasos que se tildan solos al hacerlos: su email, productos con precio,
 stock con vencimiento, médicas con comisión, secretaría y una venta de prueba. Se oculta y se reabre desde el menú de la cuenta.
 
 ## Instalación
