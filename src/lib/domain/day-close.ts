@@ -76,7 +76,7 @@ export async function dayClose(actor: Actor, date?: string): Promise<Result<{ cl
     }
     if (s.patientName) p.visits.add(key);
     if (s.kind === "producto") add(p.products, s.itemName, s.quantity);
-    else add(p.practices, s.itemName, s.quantity);
+    else add(p.practices, s.kind === "pendiente" ? `${s.itemName} (sin cargar)` : s.itemName, s.quantity);
     p.total += s.total;
   }
 

@@ -16,6 +16,7 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
   La respuesta a "mandame el código" nunca revela si la cuenta existe.
 - Venta de producto o práctica exige médica (`providerId`); la comisión se congela en `sales.commission_*`.
 - Anotar = `recordVisit` (`domain/visits.ts`): renglones con el mismo `visit_id`, todo o nada. Paciente = texto libre.
+  Lo no cargado = venta `kind 'pendiente'` (resuelve el admin, `domain/pending.ts`); sin stock = `stock_items.owed`.
 - Paleta "Noche y champagne": tokens `--cl-*` en `globals.css`; acción principal `bg-accent text-on-accent`.
 - Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada. `migrate` activa RLS en todas
   las tablas de `public` (bloquea la API REST de Supabase); la app entra como dueña y no le afecta.

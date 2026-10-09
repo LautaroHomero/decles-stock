@@ -1,6 +1,8 @@
 import { listOrgMembers, listOrganizations } from "@/lib/db/repo";
 import { getStockSettings, listStockItems, todayYmd } from "@/lib/db/stock-repo";
+import { listPendingSales } from "@/lib/db/billing-repo";
 import {
+  clearStale,
   clearRecoveredLowStock,
   countUnread,
   insertNotifications,
@@ -15,7 +17,9 @@ import type { Actor } from "@/lib/domain/types";
  * Avisos de stock para la campanita de las médicas y los admins del consultorio:
  *  · un lote vence dentro de `stock_expiry_days` (vence_pronto, una vez por lote);
  *  · un lote con stock ya venció (vencido, una vez por lote);
- *  · un producto quedó bajo su mínimo (stock_bajo; se re-arma cuando se repone).
+ *  · un producto quedó bajo su mínimo (stock_bajo; se re-arma cuando se repone);
+ *  · se vendió sin stock cargado (sin_stock; se va cuando entra el ingreso);
+ *  · solo a los admins: algo anotado que no está en la lista de precios (pendiente; se va al resolverlo).
  *
  * `refreshStockAlerts` es idempotente: lo llaman el cron diario, cada venta / ingreso
  * y la propia campanita (con throttle), así que nunca depende de una sola vía.
@@ -64,7 +68,16 @@ export async function refreshStockAlerts(orgId: string): Promise<number> {
         });
       }
     }
-    if (i.low) {
+    if (i.owed > 0) {
+      alerts.push({
+        kind: "sin_stock",
+        title: `${i.name}: vendido sin stock cargado`,
+        body: `Se vendieron ${units(i.owed, i.unit)} que el sistema no tenía. Cargá el ingreso y se compensa solo.`,
+        refId: i.id,
+        dedupeKey: `sin_stock:${i.id}:${i.owed}`,
+      });
+    }
+    if (i.low && i.owed === 0) {
       alerts.push({
         kind: "stock_bajo",
         title: `${i.name}: stock bajo`,
@@ -75,8 +88,22 @@ export async function refreshStockAlerts(orgId: string): Promise<number> {
     }
   }
 
-  await clearRecoveredLowStock(orgId, items.filter((i) => i.low).map((i) => i.id));
-  return insertNotifications(orgId, recipients, alerts);
+  await clearRecoveredLowStock(orgId, items.filter((i) => i.low && i.owed === 0).map((i) => i.id));
+  await clearStale(orgId, "sin_stock", alerts.filter((a) => a.kind === "sin_stock").map((a) => a.dedupeKey));
+
+  // Pendientes: solo para los admins, que son quienes los resuelven.
+  const admins = members.filter((m) => m.active && m.isAdmin).map((m) => m.userId);
+  const pending = (await listPendingSales(orgId)).map(
+    (s): NewNotification => ({
+      kind: "pendiente",
+      title: `Anotado sin cargar: «${s.itemName}»`,
+      body: [s.patientName, s.providerName, fmt(s.createdAt.slice(0, 10))].filter(Boolean).join(" · ") + ". Vinculalo o crealo en Stock.",
+      refId: s.id,
+      dedupeKey: `pendiente:${s.id}`,
+    }),
+  );
+  await clearStale(orgId, "pendiente", pending.map((p) => p.dedupeKey));
+  return (await insertNotifications(orgId, recipients, alerts)) + (await insertNotifications(orgId, admins, pending));
 }
 
 /** Para el cron: todos los consultorios. */

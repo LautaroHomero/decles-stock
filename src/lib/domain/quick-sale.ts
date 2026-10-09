@@ -100,10 +100,48 @@ function within1(a: string, b: string): boolean {
   return edits + (a.length - i) + (b.length - j) <= 1;
 }
 
+/** Cómo suena en castellano rioplatense: v=b, z/ce/ci=s, ll=y, qu/c/k igual, h muda, sin letras dobles. */
+export function phon(w: string): string {
+  return w
+    .replace(/h/g, "")
+    .replace(/qu/g, "k")
+    .replace(/c([ei])/g, "s$1")
+    .replace(/c/g, "k")
+    .replace(/z/g, "s")
+    .replace(/v/g, "b")
+    .replace(/ll/g, "y")
+    .replace(/(.)\1+/g, "$1");
+}
+
+/** Distancia de edición (Levenshtein) cortada en `max` (para no gastar en palabras muy distintas). */
+function editDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      best = Math.min(best, cur[j]);
+    }
+    if (best > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/**
+ * Qué tanto la palabra escrita `q` se parece a la palabra `p` de un producto:
+ * igual > suena igual («bótox»/«votox», «limpiesa») > prefijo («prot») > una letra de más/menos/cambiada
+ * (desde 4 letras: «botx», «peling») > dos letras (palabras de 8+: «mesoterapya»).
+ */
 function wordScore(q: string, p: string): number {
   if (q === p) return 1;
+  if (q.length >= 4 && phon(q) === phon(p)) return 0.85;
   if (q.length >= 3 && p.startsWith(q)) return 0.75;
-  if (q.length >= 5 && within1(q, p)) return 0.7;
+  if (q.length >= 4 && within1(q, p)) return 0.7;
+  if (q.length >= 4 && within1(phon(q), phon(p))) return 0.65;
+  if (q.length >= 8 && editDistance(q, p, 2) <= 2) return 0.6;
   return 0;
 }
 
@@ -227,6 +265,14 @@ export interface QuickNote<P extends QuickProduct = QuickProduct, S extends Quic
   lines: QuickLine<P, S>[];
   /** Nombre del paciente escrito en el texto (null = no se nombró a nadie). */
   patient: string | null;
+  /**
+   * false = no es seguro que sea un nombre (una sola palabra suelta, que también podría ser algo
+   * que no está cargado, como «radiofrecuencia»): la pantalla pregunta antes de guardar.
+   */
+  patientSure: boolean;
+  /** La primera médica nombrada en el texto (aunque no haya renglones), y el medio de pago. */
+  seller: S | null;
+  payment: QuickPayment | null;
 }
 
 export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickSeller>(
@@ -242,6 +288,7 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
   let pay: QuickPayment | null = null;
   let firstPay: QuickPayment | null = null;
   let patient: string | null = null;
+  let patientSure = true;
   for (const raw of splitSegments(text)) {
     const { seller, used } = findSeller(raw, sellers, productVocab);
     if (seller) {
@@ -269,6 +316,7 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
       const nameToks = toks.filter((t) => !FILLER.has(t.n));
       if (!patient && seller === null && nameToks.length >= 1 && nameToks.length <= 4 && nameToks.every((t) => NAME_TOKEN.test(t.n))) {
         patient = asName(nameToks);
+        patientSure = nameToks.length >= 2;
         continue;
       }
     } else if (!patient) {
@@ -294,7 +342,8 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
     if (!l.seller) l.seller = first;
     if (!l.payment) l.payment = firstPay;
   }
-  return { lines, patient };
+  // Si no se anotó nada más, el «nombre» puede ser justo lo que no está cargado («hilos tensores»).
+  return { lines, patient, patientSure: patientSure && lines.length > 0, seller: first, payment: firstPay };
 }
 
 /** Solo los renglones (compatibilidad con la hoja de ventas original). */

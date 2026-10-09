@@ -45,6 +45,8 @@ export interface StockItem {
   /** Vencimiento más próximo entre los lotes vigentes con stock. */
   nextExpiry: string | null;
   low: boolean;
+  /** Decles: unidades vendidas sin stock cargado (se compensan con el próximo ingreso). */
+  owed: number;
   lots: StockLot[];
 }
 
@@ -90,7 +92,9 @@ const toLot = (r: Row, today: string): StockLot => {
 
 function buildItem(r: Row, lots: StockLot[]): StockItem {
   const live = lots.filter((l) => !l.expired && l.quantity > 0);
-  const available = live.reduce((n, l) => n + l.quantity, 0);
+  // Decles: lo vendido sin stock cargado (`owed`) se resta; puede quedar negativo hasta que entre el ingreso.
+  const owed = Number(r.owed ?? 0);
+  const available = live.reduce((n, l) => n + l.quantity, 0) - owed;
   const expiries = live.map((l) => l.expiresOn).filter((d): d is string => !!d).sort();
   const minQuantity = Number(r.min_quantity ?? 0);
   return {
@@ -105,6 +109,7 @@ function buildItem(r: Row, lots: StockLot[]): StockItem {
     expiredQuantity: lots.filter((l) => l.expired).reduce((n, l) => n + l.quantity, 0),
     nextExpiry: expiries[0] ?? null,
     low: Boolean(r.active) && minQuantity > 0 && available < minQuantity,
+    owed,
     lots: lots.filter((l) => l.quantity > 0),
   };
 }
@@ -188,6 +193,16 @@ export async function addStockLot(
     await tx`
       INSERT INTO stock_movements (id, organization_id, item_id, lot_id, delta, reason, note, actor_id, actor_name, source, created_at)
       VALUES (${uid("stm")}, ${orgId}, ${v.itemId}, ${lotId}, ${v.quantity}, 'ingreso', ${v.note}, ${actor.id}, ${actor.name}, ${actor.source}, ${now})`;
+    // Decles: si se había vendido sin stock cargado, este ingreso lo compensa.
+    const [it] = (await tx`SELECT owed FROM stock_items WHERE id = ${v.itemId} FOR UPDATE`) as unknown as Row[];
+    const settle = Math.min(Number(it?.owed ?? 0), v.quantity);
+    if (settle > 0) {
+      await tx`UPDATE stock_items SET owed = owed - ${settle} WHERE id = ${v.itemId}`;
+      await tx`UPDATE stock_lots SET quantity = quantity - ${settle} WHERE id = ${lotId}`;
+      await tx`
+        INSERT INTO stock_movements (id, organization_id, item_id, lot_id, delta, reason, note, actor_id, actor_name, source, created_at)
+        VALUES (${uid("stm")}, ${orgId}, ${v.itemId}, ${lotId}, ${-settle}, 'ajuste', 'Compensa ventas sin stock cargado', ${actor.id}, ${actor.name}, ${actor.source}, ${now})`;
+    }
   });
   return lotId;
 }
@@ -246,6 +261,18 @@ export async function restoreStockForSale(orgId: string, saleId: string, actor: 
       SELECT item_id, lot_id, delta FROM stock_movements
       WHERE organization_id = ${orgId} AND sale_id = ${saleId} AND delta < 0 AND lot_id IS NOT NULL`) as unknown as Row[];
     let units = 0;
+    // Decles: lo que se había vendido sin stock (sin lote) baja la deuda.
+    const owedMoves = (await tx`
+      SELECT item_id, delta FROM stock_movements
+      WHERE organization_id = ${orgId} AND sale_id = ${saleId} AND delta < 0 AND lot_id IS NULL AND reason = 'uso'`) as unknown as Row[];
+    for (const m of owedMoves) {
+      const back = -Number(m.delta);
+      await tx`UPDATE stock_items SET owed = GREATEST(owed - ${back}, 0) WHERE id = ${m.item_id as string}`;
+      await tx`
+        INSERT INTO stock_movements (id, organization_id, item_id, lot_id, delta, reason, note, actor_id, actor_name, source, sale_id, created_at)
+        VALUES (${uid("stm")}, ${orgId}, ${m.item_id as string}, NULL, ${back}, 'ajuste', 'Anulación de venta sin stock', ${actor.id}, ${actor.name}, ${actor.source}, ${saleId}, ${now})`;
+      units += back;
+    }
     for (const m of moves) {
       const back = -Number(m.delta);
       await tx`UPDATE stock_lots SET quantity = quantity + ${back} WHERE id = ${m.lot_id as string}`;
@@ -303,4 +330,15 @@ export async function listStockMovements(orgId: string, itemId?: string, limit =
     consultationId: (r.consultation_id as string) ?? null,
     createdAt: r.created_at as string,
   }));
+}
+
+/** Decles: vendido sin stock cargado. Suma a `owed` y deja el movimiento (sin lote) atado a la venta. */
+export async function addOwed(orgId: string, v: { itemId: string; quantity: number; saleId: string; note: string }, actor: Actor4Stock): Promise<void> {
+  const now = realNowIso();
+  await getSql().begin(async (tx) => {
+    await tx`UPDATE stock_items SET owed = owed + ${v.quantity} WHERE id = ${v.itemId} AND organization_id = ${orgId}`;
+    await tx`
+      INSERT INTO stock_movements (id, organization_id, item_id, lot_id, delta, reason, note, actor_id, actor_name, source, sale_id, created_at)
+      VALUES (${uid("stm")}, ${orgId}, ${v.itemId}, NULL, ${-v.quantity}, 'uso', ${v.note}, ${actor.id}, ${actor.name}, ${actor.source}, ${v.saleId}, ${now})`;
+  });
 }

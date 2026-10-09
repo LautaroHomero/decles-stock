@@ -373,7 +373,7 @@ function groupVisits(sales: SaleRow[]): Visit[] {
   }));
 }
 
-const itemLabel = (s: SaleRow) => `${s.kind === "producto" || s.quantity > 1 ? `${s.quantity} ` : ""}${s.itemName}`;
+const itemLabel = (s: SaleRow) => `${s.kind === "producto" || s.quantity > 1 ? `${s.quantity} ` : ""}${s.itemName}${s.kind === "pendiente" ? " (sin cargar)" : ""}`;
 
 function VisitCard({
   v,

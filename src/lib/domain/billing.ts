@@ -21,7 +21,7 @@ import {
   type Sale,
 } from "@/lib/db/billing-repo";
 import { realNowIso } from "@/lib/domain/clock";
-import { consumeStockFefo, getStockItem, restoreStockForSale } from "@/lib/db/stock-repo";
+import { addOwed, consumeStockFefo, getStockItem, restoreStockForSale } from "@/lib/db/stock-repo";
 import { getPatient, getProvider } from "@/lib/db/repo";
 import { parseExpiry } from "@/lib/domain/stock";
 import type { Actor, StaffRole } from "@/lib/domain/types";
@@ -216,6 +216,8 @@ export async function recordSale(
     /** Decles: paciente escrito a mano y renglones anotados juntos (ver domain/visits.ts). */
     patientLabel?: string;
     visitId?: string | null;
+    /** Decles: vender aunque el sistema no tenga stock cargado (queda en `owed` y se avisa al admin). */
+    allowNoStock?: boolean;
   },
   source: BillingSource = "manual",
 ): Promise<
@@ -272,7 +274,7 @@ export async function recordSale(
   if (item.stockItemId) {
     const s = await getStockItem(ctx.orgId, item.stockItemId);
     if (!s) return fail("El producto de stock vinculado ya no existe.", 409);
-    if (s.available < quantity)
+    if (s.available < quantity && !v.allowNoStock)
       return fail(`No alcanza el stock de "${s.name}": hay ${s.available} y querés vender ${quantity}.`, 409);
   }
 
@@ -292,7 +294,13 @@ export async function recordSale(
       { itemId: item.stockItemId, quantity, reason: "uso", note: `Venta de ${item.name}`, saleId: id, preferExpiry },
       { id: ctx.who.id, name: ctx.who.name, source },
     );
-    if (r.shortfall > 0) {
+    if (r.shortfall > 0 && v.allowNoStock) {
+      await addOwed(ctx.orgId, { itemId: item.stockItemId, quantity: r.shortfall, saleId: id, note: `Venta de ${item.name} sin stock cargado` }, {
+        id: ctx.who.id,
+        name: ctx.who.name,
+        source,
+      });
+    } else if (r.shortfall > 0) {
       // Otro descuento se coló entre el chequeo y acá: se deshace todo para no vender de más.
       await restoreStockForSale(ctx.orgId, id, { id: ctx.who.id, name: ctx.who.name, source });
       await markSaleVoided(ctx.orgId, id, "Stock insuficiente al confirmar", ctx.who);

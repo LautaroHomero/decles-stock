@@ -127,6 +127,7 @@ export interface CatalogProduct {
   nextExpiry: string | null;
   expiries: { expiresOn: string; quantity: number }[];
   expiredQuantity: number;
+  owed: number;
   lots: { id: string; lotCode: string; quantity: number; expiresOn: string | null; expired: boolean; receivedAt: string }[];
 }
 
@@ -150,7 +151,8 @@ export interface CatalogResponse {
 export interface SaleRow {
   id: string;
   itemName: string;
-  kind: "consulta" | "tratamiento" | "producto";
+  /** "pendiente": anotado con un nombre que no está en la lista de precios (lo resuelve el admin). */
+  kind: "consulta" | "tratamiento" | "producto" | "pendiente";
   patientName: string | null;
   visitId: string | null;
   quantity: number;

@@ -34,6 +34,8 @@ export interface CatalogProduct {
   /** Vencimientos vigentes con stock, para elegir "de cuál vendí". */
   expiries: { expiresOn: string; quantity: number }[];
   expiredQuantity: number;
+  /** Vendido sin stock cargado (se compensa con el próximo ingreso). */
+  owed: number;
   lots: StockItem["lots"];
 }
 
@@ -82,6 +84,7 @@ export async function catalog(actor: Actor): Promise<
       nextExpiry: i.nextExpiry,
       expiries: [...exp.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([expiresOn, quantity]) => ({ expiresOn, quantity })),
       expiredQuantity: i.expiredQuantity,
+      owed: i.owed,
       lots: i.lots,
     };
   });

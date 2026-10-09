@@ -6,7 +6,7 @@ import { getSql } from "./connection";
 
 type Row = Record<string, unknown>;
 
-export type NotificationKind = "vence_pronto" | "vencido" | "stock_bajo";
+export type NotificationKind = "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente";
 
 export interface AppNotification {
   id: string;
@@ -89,4 +89,11 @@ export async function markRead(orgId: string, userId: string, id?: string): Prom
     UPDATE notifications SET read_at = ${realNowIso()}
     WHERE organization_id = ${orgId} AND user_id = ${userId} AND read_at IS NULL
       AND (${id ?? null}::text IS NULL OR id = ${id ?? null})`;
+}
+
+/** Borra los avisos de un tipo que ya no corresponden (lo resuelto deja de mostrarse y puede volver a avisar). */
+export async function clearStale(orgId: string, kind: NotificationKind, keepKeys: string[]): Promise<void> {
+  await getSql()`
+    DELETE FROM notifications
+    WHERE organization_id = ${orgId} AND kind = ${kind} AND NOT (dedupe_key = ANY(${keepKeys}::text[]))`;
 }

@@ -244,6 +244,7 @@ function ProductRow({
             {soon && <Pill className="!py-0 !text-[11px]">por vencer</Pill>}
             {p.expiredQuantity > 0 && <Pill className="!py-0 !text-[11px]">{p.expiredQuantity} vencidas</Pill>}
             {p.low && <Pill className="!py-0 !text-[11px]">stock bajo</Pill>}
+            {p.owed > 0 && <Pill className="!py-0 !text-[11px]">vendido sin stock: {p.owed} · cargá el ingreso</Pill>}
             {p.providerIds.length > 0 && <span>· {providerNames(p.providerIds, sellers)}</span>}
           </span>
         </span>

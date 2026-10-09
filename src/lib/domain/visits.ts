@@ -1,14 +1,18 @@
-import { getPriceItem, markSaleVoided, newVisitId } from "@/lib/db/billing-repo";
-import { getStockItem, restoreStockForSale } from "@/lib/db/stock-repo";
+import { insertPendingSale, markSaleVoided, newVisitId, type PaymentMethod } from "@/lib/db/billing-repo";
+import { restoreStockForSale } from "@/lib/db/stock-repo";
+import { getProvider } from "@/lib/db/repo";
 import { recordSale } from "@/lib/domain/billing";
 import type { Actor } from "@/lib/domain/types";
 
 /**
  * Anotar (Decles): un paciente (nombre escrito, opcional), la médica, las prácticas que se
  * hicieron y/o los productos vendidos, y el medio de pago, en un solo paso. Cada renglón es
- * una `sale` (vía `recordSale`, que valida precio, stock y comisión) y todos comparten
- * `visit_id`. Si un renglón falla, los anteriores se anulan (devuelven el stock): o se
- * anota todo o nada.
+ * una `sale` y todos comparten `visit_id`. O se anota todo o nada.
+ *
+ * Nada de lo que pasó en el consultorio se pierde por falta de carga:
+ *  · un producto sin stock cargado se vende igual (`allowNoStock`): queda debiendo y el admin recibe el aviso;
+ *  · algo que no está en la lista (`pendingName`) se guarda como **pendiente**, sin importe, y el admin
+ *    lo resuelve después (`domain/pending.ts`).
  */
 
 export type Result<T> = ({ ok: true } & T) | { ok: false; error: string; status: number };
@@ -17,50 +21,60 @@ export interface VisitInput {
   patientName?: string;
   providerId?: string | null;
   paymentMethod?: string | null;
-  lines: { itemId: string; quantity?: number; expiresOn?: string | null }[];
+  lines: { itemId?: string; pendingName?: string; quantity?: number; expiresOn?: string | null }[];
 }
+
+const clean = (s: unknown) => (typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "");
 
 export async function recordVisit(
   actor: Actor,
   v: VisitInput,
-): Promise<Result<{ visitId: string; saleIds: string[]; total: number; cashTotal: number; cardTotal: number }>> {
-  const lines = Array.isArray(v.lines) ? v.lines.filter((l) => l && typeof l.itemId === "string") : [];
+): Promise<Result<{ visitId: string; saleIds: string[]; total: number; cashTotal: number; cardTotal: number; pending: number }>> {
+  const lines = Array.isArray(v.lines) ? v.lines.filter((l) => l && (typeof l.itemId === "string" || clean(l.pendingName))) : [];
   if (!lines.length) return { ok: false, error: "No hay nada para anotar: elegí al menos una práctica o un producto.", status: 400 };
   if (lines.length > 30) return { ok: false, error: "Demasiados renglones juntos (máximo 30).", status: 400 };
-
-  // Antes de anotar nada: que alcance el stock de todos los productos (sumando renglones repetidos).
   const orgId = actor.activeOrg?.id;
-  if (!orgId) return { ok: false, error: "No autorizado.", status: 403 };
-  const need = new Map<string, { name: string; qty: number }>();
-  for (const l of lines) {
-    const item = await getPriceItem(orgId, l.itemId);
-    if (!item?.stockItemId) continue; // prácticas o ítems inválidos: los valida recordSale
-    const cur = need.get(item.stockItemId) ?? { name: item.name, qty: 0 };
-    cur.qty += typeof l.quantity === "number" ? l.quantity : 1;
-    need.set(item.stockItemId, cur);
+  if (!orgId || actor.role === "paciente") return { ok: false, error: "No autorizado.", status: 403 };
+
+  // Para los pendientes la médica se valida acá (los demás renglones los valida recordSale).
+  const providerId = actor.role === "medico" ? (actor.activeOrg?.providerId ?? null) : (v.providerId ?? null);
+  if (lines.some((l) => !l.itemId)) {
+    if (!providerId) return { ok: false, error: "Elegí qué médica la atendió.", status: 400 };
+    const p = await getProvider(providerId);
+    if (!p || p.organizationId !== orgId || !p.active) return { ok: false, error: "Profesional no encontrado en este consultorio.", status: 404 };
   }
-  for (const [stockItemId, n] of need) {
-    const s = await getStockItem(orgId, stockItemId);
-    if (s && s.available < n.qty)
-      return { ok: false, error: `No alcanza el stock de "${n.name}": hay ${s.available} y querés anotar ${n.qty}.`, status: 409 };
-  }
+  const raw = v.paymentMethod === "transferencia" ? "efectivo" : v.paymentMethod;
+  const method: PaymentMethod | null = raw === "efectivo" || raw === "tarjeta" ? raw : null;
+  const patient = clean(v.patientName).slice(0, 120);
+  const who = { id: actor.userId, name: actor.name, source: "manual" as const };
 
   const visitId = newVisitId();
   const saleIds: string[] = [];
-  let total = 0, cashTotal = 0, cardTotal = 0;
+  let total = 0, cashTotal = 0, cardTotal = 0, pending = 0;
   for (const l of lines) {
+    if (!l.itemId) {
+      const qty = typeof l.quantity === "number" && Number.isInteger(l.quantity) && l.quantity > 0 ? l.quantity : 1;
+      const id = await insertPendingSale(
+        orgId,
+        { name: clean(l.pendingName).slice(0, 80), quantity: qty, providerId: providerId!, patientLabel: patient, visitId, paymentMethod: method, note: "" },
+        who,
+      );
+      saleIds.push(id);
+      pending++;
+      continue;
+    }
     const r = await recordSale(actor, {
       itemId: l.itemId,
       quantity: l.quantity,
-      providerId: v.providerId,
+      providerId,
       paymentMethod: v.paymentMethod,
       expiresOn: l.expiresOn,
-      patientLabel: v.patientName,
+      patientLabel: patient,
       visitId,
+      allowNoStock: true,
     });
     if (!r.ok) {
       // Deshacer lo que ya se anotó (no es una anulación del usuario: no pide permiso de admin).
-      const who = { id: actor.userId, name: actor.name, source: "manual" as const };
       for (const id of saleIds) {
         await markSaleVoided(orgId, id, "No se pudo anotar todo junto", who);
         await restoreStockForSale(orgId, id, who);
@@ -72,5 +86,5 @@ export async function recordVisit(
     cashTotal += r.cashTotal;
     cardTotal += r.cardTotal;
   }
-  return { ok: true, visitId, saleIds, total, cashTotal, cardTotal };
+  return { ok: true, visitId, saleIds, total, cashTotal, cardTotal, pending };
 }

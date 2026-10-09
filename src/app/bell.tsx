@@ -6,7 +6,7 @@ import { call, usePoll } from "./shared";
 
 interface Notif {
   id: string;
-  kind: "vence_pronto" | "vencido" | "stock_bajo";
+  kind: "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente";
   title: string;
   body: string;
   readAt: string | null;
@@ -17,6 +17,8 @@ const KIND_LABEL: Record<Notif["kind"], string> = {
   vence_pronto: "Vence pronto",
   vencido: "Vencido",
   stock_bajo: "Stock bajo",
+  sin_stock: "Sin stock cargado",
+  pendiente: "Para cargar",
 };
 
 const ago = (iso: string) => {

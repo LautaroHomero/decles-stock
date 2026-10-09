@@ -3,13 +3,16 @@
 import { useState } from "react";
 import { PlusIcon } from "@phosphor-icons/react";
 import { InventarioView } from "./inventario-view";
+import { Pendientes } from "./pendientes";
 import { BTN, BTN_DARK, CARD, FIELD, ProviderPicker, Toast, call, money, providerNames, usePoll, useSellers, useToast } from "./shared";
 
 /** Stock: productos (con lotes y vencimientos) o prácticas (solo precio). */
 export function StockSection({ canAdmin }: { canAdmin: boolean }) {
   const [tab, setTab] = useState<"productos" | "practicas">("productos");
+  const [reload, setReload] = useState(0);
   return (
     <>
+      {canAdmin && <Pendientes onChange={() => setReload((n) => n + 1)} />}
       <div className="mx-auto w-full max-w-[880px] px-4 pt-6 sm:px-6 sm:pt-8">
         <div role="tablist" className="inline-flex rounded-2xl border-2 border-neutral-800 p-1">
           {(
@@ -32,7 +35,7 @@ export function StockSection({ canAdmin }: { canAdmin: boolean }) {
           ))}
         </div>
       </div>
-      {tab === "productos" ? <InventarioView /> : <PracticasView canAdmin={canAdmin} />}
+      {tab === "productos" ? <InventarioView key={reload} /> : <PracticasView key={reload} canAdmin={canAdmin} />}
     </>
   );
 }

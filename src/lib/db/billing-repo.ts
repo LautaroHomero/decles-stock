@@ -12,6 +12,8 @@ type Row = Record<string, unknown>;
 const uid = (p: string) => `${p}_${randomUUID().slice(0, 8)}`;
 
 export type PriceKind = "consulta" | "tratamiento" | "producto";
+/** En `sales.kind`: además "pendiente" (Decles), algo anotado que todavía no está en la lista de precios. */
+export type SaleKind = PriceKind | "pendiente";
 export type BillingSource = "manual" | "agent";
 /** Medio de pago (Decles). "efectivo" incluye transferencia: mismo precio. */
 export type PaymentMethod = "efectivo" | "tarjeta";
@@ -45,7 +47,7 @@ export interface Sale {
   id: string;
   itemId: string | null;
   itemName: string;
-  kind: PriceKind;
+  kind: SaleKind;
   quantity: number;
   unitPrice: number;
   total: number;
@@ -178,7 +180,7 @@ const toSale = (r: Row): Sale => ({
   id: r.id as string,
   itemId: (r.item_id as string) ?? null,
   itemName: r.item_name as string,
-  kind: r.kind as PriceKind,
+  kind: r.kind as SaleKind,
   quantity: Number(r.quantity),
   unitPrice: Number(r.unit_price),
   total: Number(r.total),
@@ -330,4 +332,57 @@ export async function setItemProviders(orgId: string, itemId: string, providerId
     for (const pid of providerIds)
       await tx`INSERT INTO price_item_providers (organization_id, item_id, provider_id) VALUES (${orgId}, ${itemId}, ${pid})`;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Pendientes (Decles): anotado con un nombre que no está en la lista de precios.
+// ---------------------------------------------------------------------------
+
+export async function insertPendingSale(
+  orgId: string,
+  v: { name: string; quantity: number; providerId: string; patientLabel: string; visitId: string; paymentMethod: PaymentMethod | null; note: string },
+  who: BillingWho,
+): Promise<string> {
+  const id = uid("sal");
+  await getSql()`
+    INSERT INTO sales (id, organization_id, item_id, item_name, kind, quantity, unit_price, total, provider_id, patient_id, note,
+                       created_by, created_by_name, source, created_at, commission_pct, commission_amount,
+                       payment_method, cash_total, card_total, patient_label, visit_id)
+    VALUES (${id}, ${orgId}, NULL, ${v.name}, 'pendiente', ${v.quantity}, 0, 0, ${v.providerId}, NULL, ${v.note},
+            ${who.id}, ${who.name}, ${who.source}, ${realNowIso()}, 0, 0, ${v.paymentMethod}, 0, 0, ${v.patientLabel}, ${v.visitId})`;
+  return id;
+}
+
+export async function listPendingSales(orgId: string): Promise<Sale[]> {
+  const rows = (await getSql()`
+    SELECT s.*, pr.name AS provider_name, NULL AS patient_name
+    FROM sales s LEFT JOIN providers pr ON pr.id = s.provider_id
+    WHERE s.organization_id = ${orgId} AND s.kind = 'pendiente' AND s.status = 'paid'
+    ORDER BY s.created_at`) as unknown as Row[];
+  return rows.map(toSale);
+}
+
+/** Completa un pendiente con el ítem real (precio, comisión). Devuelve false si ya no estaba pendiente. */
+export async function resolvePendingSale(
+  orgId: string,
+  saleId: string,
+  v: { item: PriceItem; commissionPct: number },
+): Promise<boolean> {
+  const rows = (await getSql()`
+    SELECT quantity, payment_method FROM sales
+    WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid' FOR UPDATE`) as unknown as Row[];
+  if (!rows.length) return false;
+  const q = Number(rows[0].quantity);
+  const method = (rows[0].payment_method as PaymentMethod) ?? null;
+  const cashTotal = v.item.amount * q;
+  const cardTotal = (v.item.cardAmount ?? v.item.amount) * q;
+  const unit = method === "tarjeta" ? (v.item.cardAmount ?? v.item.amount) : v.item.amount;
+  const commission = Math.round((cashTotal * v.commissionPct) / 100);
+  const done = (await getSql()`
+    UPDATE sales SET item_id = ${v.item.id}, item_name = ${v.item.name}, kind = ${v.item.kind}, unit_price = ${unit},
+      total = ${unit * q}, cash_total = ${cashTotal}, card_total = ${cardTotal},
+      commission_pct = ${v.commissionPct}, commission_amount = ${commission}
+    WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid'
+    RETURNING id`) as unknown as Row[];
+  return done.length > 0;
 }
