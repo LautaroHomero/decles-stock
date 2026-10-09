@@ -63,7 +63,8 @@ export function usePoll<T>(url: string, everyMs: number): [T | null, () => void]
         window.location.href = "/login";
         return;
       }
-      const d = (await r.json()) as T;
+      // Un error del servidor sin JSON (p. ej. falta correr una migración) se muestra en vez de quedar «Cargando…».
+      const d = (await r.json().catch(() => ({ ok: false, error: `Error del servidor (${r.status}). Revisá la terminal de next dev.` }))) as T;
       if (alive.current) setData(d);
     } catch {
       /* sin red: se reintenta en el próximo ciclo */
