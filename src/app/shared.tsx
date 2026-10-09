@@ -14,7 +14,7 @@ export const FIELD =
   "w-full rounded-xl border-2 border-neutral-800 bg-surface px-3 py-2 text-[15px] text-fg placeholder:text-neutral-600 focus:border-accent-600 focus:outline-none";
 /** Acción principal grande (se toca con el dedo). */
 export const BTN_BIG =
-  "inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-5 text-[18px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:pointer-events-none disabled:opacity-40";
+  "inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-5 text-[15px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:pointer-events-none disabled:opacity-40";
 
 export const money = (n: number) => `$\u00a0${n.toLocaleString("es-AR")}`;
 

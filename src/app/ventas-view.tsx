@@ -191,11 +191,11 @@ export function VentasView({ actor }: { actor: Actor }) {
   ].filter(Boolean);
 
   return (
-    <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-5 pb-20 pt-10 text-[17px] sm:px-6 sm:pt-12">
+    <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-5 pb-20 pt-10 text-[14px] sm:px-6 sm:pt-12">
       <Toast msg={toast} />
 
       <div className="flex flex-wrap items-center gap-4">
-        <h1 className="font-display text-[30px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[38px]">Ventas</h1>
+        <h1 className="font-display text-[23px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[28px]">Ventas</h1>
         <span className="flex-1" />
         <div className="flex rounded-2xl border-2 border-neutral-800 p-1" role="tablist" aria-label="Período">
           {periods.map(([id, text]) => (
@@ -204,7 +204,7 @@ export function VentasView({ actor }: { actor: Actor }) {
               role="tab"
               aria-selected={period === id}
               onClick={() => pick(id)}
-              className={`min-h-11 rounded-xl px-5 text-[16px] font-semibold transition-colors ${
+              className={`min-h-11 rounded-xl px-5 text-[13.5px] font-semibold transition-colors ${
                 period === id ? "bg-accent text-on-accent" : "text-neutral-400 hover:text-fg"
               }`}
             >
@@ -225,7 +225,7 @@ export function VentasView({ actor }: { actor: Actor }) {
               onClick={() => setCalOpen((o) => !o)}
               aria-expanded={calOpen}
               aria-label="Elegir un día en el calendario"
-              className="mx-auto flex min-h-12 max-w-full items-center justify-center gap-2.5 rounded-xl px-4 text-[20px] font-semibold transition-colors hover:bg-neutral-900"
+              className="mx-auto flex min-h-12 max-w-full items-center justify-center gap-2.5 rounded-xl px-4 text-[15px] font-semibold transition-colors hover:bg-neutral-900"
             >
               <CalendarBlankIcon size={20} className="shrink-0 text-neutral-400" />
               <span className="truncate">{label(period, from, to)}</span>
@@ -249,7 +249,7 @@ export function VentasView({ actor }: { actor: Actor }) {
           </button>
         </div>
         {!isCurrent && (
-          <button onClick={() => setAnchor(today)} className="py-1 text-[16px] font-semibold text-accent underline-offset-4 hover:underline">
+          <button onClick={() => setAnchor(today)} className="py-1 text-[13.5px] font-semibold text-accent underline-offset-4 hover:underline">
             Volver a {period === "dia" ? "hoy" : period === "semana" ? "esta semana" : "este mes"}
           </button>
         )}
@@ -258,11 +258,11 @@ export function VentasView({ actor }: { actor: Actor }) {
       {/* Lo cobrado */}
       <section className="flex flex-col gap-5 rounded-[24px] bg-surface p-6">
         <div className="flex flex-col gap-1">
-          <span className="text-[17px] text-neutral-400">Cobrado</span>
-          <span className="font-display text-[36px] font-medium leading-none tracking-[-.02em] tabular-nums sm:text-[42px]">
+          <span className="text-[14px] text-neutral-400">Cobrado</span>
+          <span className="font-display text-[28px] font-medium leading-none tracking-[-.02em] tabular-nums sm:text-[32px]">
             {data ? money(total) : "…"}
           </span>
-          <span className="text-[17px] text-neutral-300">{data ? (paid.length ? counts.join(" · ") : "No se anotó nada.") : " "}</span>
+          <span className="text-[14px] text-neutral-300">{data ? (paid.length ? counts.join(" · ") : "No se anotó nada.") : " "}</span>
         </div>
         {paid.length > 0 && (
           <div className="grid grid-cols-1 gap-4 border-t border-neutral-800 pt-5 sm:grid-cols-3">
@@ -280,9 +280,9 @@ export function VentasView({ actor }: { actor: Actor }) {
 
       {seesCommission && comm?.rows && comm.rows.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-[22px] font-bold">{admin ? "Comisiones" : "Tu comisión"}</h2>
+          <h2 className="text-[17px] font-bold">{admin ? "Comisiones" : "Tu comisión"}</h2>
           <div className="overflow-x-auto rounded-[20px] border-2 border-neutral-800 px-5">
-            <table className="w-full text-[16px]">
+            <table className="w-full text-[13.5px]">
               <thead>
                 <tr className="text-left text-[13px] font-bold uppercase tracking-[.06em] text-neutral-500">
                   <th className="py-3 font-bold">Médica</th>
@@ -314,21 +314,21 @@ export function VentasView({ actor }: { actor: Actor }) {
       {/* Mes / semana: día por día */}
       {period !== "dia" && days.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-[22px] font-bold">Día por día</h2>
+          <h2 className="text-[17px] font-bold">Día por día</h2>
           <div className="flex flex-col">
             {days.map(([d, x]) => (
               <button
                 key={d}
                 onClick={() => openDay(d)}
-                className="flex min-h-[64px] items-center gap-4 border-b border-neutral-900 px-1 text-left transition-colors hover:bg-neutral-900"
+                className="flex min-h-[44px] items-center gap-4 border-b border-neutral-900 px-1 text-left transition-colors hover:bg-neutral-900"
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[18px] font-semibold">{d === today ? "Hoy" : cap(dayName(d))}</span>
-                  <span className="text-[15px] text-neutral-400">
+                  <span className="block text-[14px] font-semibold">{d === today ? "Hoy" : cap(dayName(d))}</span>
+                  <span className="text-[13px] text-neutral-400">
                     {x.visits.size} {x.visits.size === 1 ? "anotación" : "anotaciones"}
                   </span>
                 </span>
-                <span className="text-[18px] font-semibold tabular-nums">{money(x.total)}</span>
+                <span className="text-[14px] font-semibold tabular-nums">{money(x.total)}</span>
                 <CaretRightIcon size={18} className="text-neutral-500" />
               </button>
             ))}
@@ -339,7 +339,7 @@ export function VentasView({ actor }: { actor: Actor }) {
       {/* Día: el detalle */}
       {period === "dia" && data && visits.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-[22px] font-bold">Detalle</h2>
+          <h2 className="text-[17px] font-bold">Detalle</h2>
           <div className="flex flex-col gap-2.5">
             {visits.map((v) => (
               <VisitCard key={v.key} v={v} admin={admin} seesCommission={seesCommission} onMethod={setMethod} onVoid={voidVisit} />
@@ -404,11 +404,11 @@ function VisitCard({
   return (
     <div className={`flex flex-col gap-3 rounded-[20px] bg-surface px-5 py-4 ${voided ? "opacity-50" : ""}`}>
       <div className="flex items-start gap-4">
-        <span className="pt-0.5 text-[16px] tabular-nums text-neutral-500">{v.time}</span>
+        <span className="pt-0.5 text-[13.5px] tabular-nums text-neutral-500">{v.time}</span>
         <span className="min-w-0 flex-1">
-          <span className={`block text-[19px] font-semibold leading-snug ${voided ? "line-through" : ""}`}>{v.patient ?? items}</span>
-          {v.patient && <span className={`block text-[16.5px] text-neutral-300 ${voided ? "line-through" : ""}`}>{items}</span>}
-          <span className="mt-0.5 block text-[15px] text-neutral-400">
+          <span className={`block text-[15px] font-semibold leading-snug ${voided ? "line-through" : ""}`}>{v.patient ?? items}</span>
+          {v.patient && <span className={`block text-[13.5px] text-neutral-300 ${voided ? "line-through" : ""}`}>{items}</span>}
+          <span className="mt-0.5 block text-[13px] text-neutral-400">
             {[
               first.providerName ?? "Sin médica",
               !voided && method ? PAYMENT_LABEL[method] : null,
@@ -420,14 +420,14 @@ function VisitCard({
               .join(" · ")}
           </span>
         </span>
-        {!voided && <Amount cash={cashT} card={cardT} method={pending.length ? null : method} className="text-[18px] font-semibold" />}
+        {!voided && <Amount cash={cashT} card={cardT} method={pending.length ? null : method} className="text-[14px] font-semibold" />}
       </div>
 
       {!voided && (pending.length > 0 || admin) && !voiding && (
         <div className="flex flex-wrap items-center gap-2 sm:pl-[52px]">
           {pending.length > 0 && (
             <>
-              <span className="text-[15px] text-neutral-400">¿Cómo pagó?</span>
+              <span className="text-[13px] text-neutral-400">¿Cómo pagó?</span>
               {(["efectivo", "tarjeta"] as Payment[]).map((m) => (
                 <button key={m} className={CHIP} onClick={() => onMethod(pending, m)}>
                   {PAYMENT_LABEL[m]}
@@ -460,13 +460,13 @@ function VisitCard({
 
 const NAV =
   "flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border-2 border-neutral-800 text-fg transition-colors hover:bg-neutral-900 disabled:opacity-25 disabled:hover:bg-transparent";
-const CHIP = "rounded-full border-2 border-neutral-800 px-3.5 py-1.5 text-[15px] font-semibold transition-colors hover:border-accent-600";
+const CHIP = "rounded-full border-2 border-neutral-800 px-3.5 py-1.5 text-[13px] font-semibold transition-colors hover:border-accent-600";
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
-      <span className="truncate text-[15px] text-neutral-400">{label}</span>
-      <span className="truncate text-[21px] font-semibold tabular-nums">{value}</span>
+      <span className="truncate text-[13px] text-neutral-400">{label}</span>
+      <span className="truncate text-[16px] font-semibold tabular-nums">{value}</span>
       {sub && <span className="text-[14px] leading-snug text-neutral-500">{sub}</span>}
     </div>
   );
@@ -491,7 +491,7 @@ function DayBars({ from, to, today, sales, onPick }: { from: string; to: string;
 
   return (
     <div className="flex flex-col gap-2 border-t border-neutral-800 pt-4">
-      <div className="flex h-6 items-baseline justify-between text-[15px]">
+      <div className="flex h-6 items-baseline justify-between text-[13px]">
         {shown ? (
           <>
             <span className="text-neutral-300">{cap(dayName(shown.d))}</span>
@@ -604,7 +604,7 @@ function Calendar({
         <button aria-label="Mes anterior" onClick={() => move(-1)} className={CAL_NAV}>
           <CaretLeftIcon size={14} />
         </button>
-        <span className="flex-1 text-center text-[17px] font-semibold">{cap(`${MONTH[f.getMonth()]} ${f.getFullYear()}`)}</span>
+        <span className="flex-1 text-center text-[14px] font-semibold">{cap(`${MONTH[f.getMonth()]} ${f.getFullYear()}`)}</span>
         <button aria-label="Mes siguiente" onClick={() => move(1)} disabled={!canNext} className={CAL_NAV}>
           <CaretRightIcon size={14} />
         </button>
@@ -624,7 +624,7 @@ function Calendar({
               disabled={d > today}
               onClick={() => onPick(d)}
               title={totals.has(d) ? money(totals.get(d)!) : "Sin ventas"}
-              className={`relative mx-auto flex h-10 w-10 flex-col items-center justify-center rounded-full text-[15px] tabular-nums transition-colors disabled:opacity-25 ${
+              className={`relative mx-auto flex h-10 w-10 flex-col items-center justify-center rounded-full text-[13px] tabular-nums transition-colors disabled:opacity-25 ${
                 d === selected ? "bg-accent text-on-accent" : d === today ? "border border-neutral-600 text-fg hover:bg-accent-900" : "text-neutral-200 hover:bg-accent-900"
               }`}
             >
@@ -642,7 +642,7 @@ function Calendar({
         </span>
         <span className="tabular-nums">{data ? `Mes: ${money(monthTotal)}` : "…"}</span>
       </div>
-      <button onClick={() => onPick(today)} className="mt-2 min-h-11 w-full rounded-xl text-[15px] font-semibold text-neutral-200 transition-colors hover:bg-neutral-900">
+      <button onClick={() => onPick(today)} className="mt-2 min-h-11 w-full rounded-xl text-[13px] font-semibold text-neutral-200 transition-colors hover:bg-neutral-900">
         Ir a hoy
       </button>
     </div>

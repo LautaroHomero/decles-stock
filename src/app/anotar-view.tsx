@@ -149,16 +149,16 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const loading = !catalog || !sellersData;
 
   return (
-    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-7 px-5 pb-20 pt-10 text-[19px] leading-[1.45] sm:px-6 sm:pt-14">
+    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-7 px-5 pb-20 pt-10 text-[15px] leading-[1.45] sm:px-6 sm:pt-14">
       <Toast msg={toast} />
 
       {step === "idle" && (
         <div className="flex flex-col gap-7">
-          <h1 className="font-display text-[30px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[38px]">
+          <h1 className="font-display text-[23px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[28px]">
             {greeting()}, {firstName(actor.name)}
           </h1>
           <div className="flex flex-col gap-3.5">
-            <label htmlFor="anotar" className="text-[22px] font-semibold">
+            <label htmlFor="anotar" className="text-[17px] font-semibold">
               ¿Qué querés anotar?
             </label>
             <textarea
@@ -169,13 +169,13 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) interpret();
               }}
               placeholder="Ej: María López, la atendió Laura, atención y peeling"
-              className="min-h-[140px] w-full resize-none rounded-[20px] border-2 border-neutral-800 bg-surface p-5 text-[21px] leading-[1.4] text-fg outline-none transition-colors placeholder:text-neutral-600 focus:border-accent-600 sm:text-[22px]"
+              className="min-h-[110px] w-full resize-none rounded-[20px] border-2 border-neutral-800 bg-surface p-5 text-[16px] leading-[1.4] text-fg outline-none transition-colors placeholder:text-neutral-600 focus:border-accent-600 sm:text-[17px]"
             />
-            <p className="text-[16.5px] text-neutral-400">Sirve para pacientes y para ventas. Ej: «Gabriela vendió 2 cremas con tarjeta».</p>
+            <p className="text-[13.5px] text-neutral-400">Sirve para pacientes y para ventas. Ej: «Gabriela vendió 2 cremas con tarjeta».</p>
             <button onClick={interpret} disabled={!text.trim() || loading} className={CTA}>
               Anotar
             </button>
-            <button onClick={startManual} disabled={loading} className={`${GHOST} min-h-[60px] gap-3`}>
+            <button onClick={startManual} disabled={loading} className={`${GHOST} min-h-[44px] gap-3`}>
               <SquaresFourIcon size={24} /> Prefiero elegirlo de una lista
             </button>
           </div>
@@ -184,10 +184,10 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
 
       {(step === "pick" || step === "who" || step === "pay") && (
         <div className="flex items-center justify-between">
-          <button onClick={back} className="flex min-h-12 items-center gap-2 rounded-xl py-2.5 pl-1.5 pr-3.5 text-[19px] font-semibold hover:bg-neutral-900">
+          <button onClick={back} className="flex min-h-12 items-center gap-2 rounded-xl py-2.5 pl-1.5 pr-3.5 text-[15px] font-semibold hover:bg-neutral-900">
             <CaretLeftIcon size={22} weight="bold" /> Volver
           </button>
-          <span className="text-[18px] text-neutral-400">
+          <span className="text-[14px] text-neutral-400">
             Paso {stepNum} de {manualSteps.length}
           </span>
         </div>
@@ -205,7 +205,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
 
       {step === "who" && (
         <section className="flex flex-col gap-3.5">
-          <h1 className="mb-2 text-[30px] font-bold leading-[1.2] sm:text-[32px]">¿Quién la atendió?</h1>
+          <h1 className="mb-2 text-[23px] font-bold leading-[1.2] sm:text-[24px]">¿Quién la atendió?</h1>
           {sellers.map((s) => (
             <button
               key={s.id}
@@ -215,8 +215,8 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
               }}
               className={OPTION}
             >
-              <span className="flex h-[52px] w-[52px] flex-none items-center justify-center rounded-full bg-neutral-900 text-[18px] font-bold">{initials(s.name)}</span>
-              <span className="text-[22px] font-semibold sm:text-[23px]">{s.name}</span>
+              <span className="flex h-[44px] w-[44px] flex-none items-center justify-center rounded-full bg-neutral-900 text-[14px] font-bold">{initials(s.name)}</span>
+              <span className="text-[17px] font-semibold sm:text-[17px]">{s.name}</span>
             </button>
           ))}
           {!sellers.length && <p className="text-neutral-400">No hay médicas activas: el admin las da de alta en Equipo.</p>}
@@ -225,7 +225,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
 
       {step === "pay" && (
         <section className="flex flex-col gap-3.5">
-          <h1 className="mb-2 text-[30px] font-bold leading-[1.2] sm:text-[32px]">¿Cómo pagó?</h1>
+          <h1 className="mb-2 text-[23px] font-bold leading-[1.2] sm:text-[24px]">¿Cómo pagó?</h1>
           {(
             [
               ["efectivo", "Efectivo o transferencia", <MoneyIcon key="m" size={32} />],
@@ -241,7 +241,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
               className={OPTION}
             >
               {icon}
-              <span className="text-[22px] font-semibold sm:text-[23px]">{label}</span>
+              <span className="text-[17px] font-semibold sm:text-[17px]">{label}</span>
             </button>
           ))}
           <button
@@ -249,7 +249,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
               setDraft({ ...draft, payment: null });
               setStep("confirm");
             }}
-            className={`${GHOST} min-h-[64px]`}
+            className={`${GHOST} min-h-[44px]`}
           >
             Todavía no sé
           </button>
@@ -270,11 +270,11 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
 
       {step === "done" && (
         <div className="flex animate-cl-in flex-col items-center gap-4 py-6 text-center">
-          <span className="flex h-[72px] w-[72px] items-center justify-center rounded-full bg-success text-on-success">
+          <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full bg-success text-on-success">
             <CheckIcon size={36} weight="bold" />
           </span>
-          <p className="text-[28px] font-bold">¡Listo, anotado!</p>
-          {saved && <p className="max-w-[520px] text-[19px] text-neutral-300">{saved}</p>}
+          <p className="text-[21px] font-bold">¡Listo, anotado!</p>
+          {saved && <p className="max-w-[520px] text-[15px] text-neutral-300">{saved}</p>}
           <button onClick={() => setStep("idle")} className={`${CTA} mt-2 px-9`}>
             Anotar otra
           </button>
@@ -320,9 +320,9 @@ function PickItems({
   return (
     <section className="flex flex-col gap-5">
       <div>
-        {(draft.patient || proName) && <p className="mb-1 text-[20px] text-neutral-300">{[draft.patient, proName].filter(Boolean).join(" · ")}</p>}
-        <h1 className="text-[30px] font-bold leading-[1.2] sm:text-[32px]">¿Qué se hizo o se vendió?</h1>
-        <p className="mt-1 text-[18px] text-neutral-400">Podés marcar más de uno.</p>
+        {(draft.patient || proName) && <p className="mb-1 text-[15px] text-neutral-300">{[draft.patient, proName].filter(Boolean).join(" · ")}</p>}
+        <h1 className="text-[23px] font-bold leading-[1.2] sm:text-[24px]">¿Qué se hizo o se vendió?</h1>
+        <p className="mt-1 text-[14px] text-neutral-400">Podés marcar más de uno.</p>
       </div>
       {groups.map((g) => (
         <div key={g.title} className="flex flex-col gap-3">
@@ -337,13 +337,13 @@ function PickItems({
                   onClick={() => toggle(it)}
                   disabled={out && !on}
                   aria-pressed={on}
-                  className={`flex min-h-[80px] items-center justify-between gap-3 rounded-[18px] border-2 px-5 py-3.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  className={`flex min-h-[60px] items-center justify-between gap-3 rounded-[18px] border-2 px-5 py-3.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                     on ? "border-fg bg-fg text-bg" : "border-neutral-800 bg-surface hover:border-accent"
                   }`}
                 >
                   <span className="flex flex-col">
-                    <span className="text-[21px] font-semibold leading-tight">{it.name}</span>
-                    <span className={`text-[16px] ${on ? "opacity-70" : "text-neutral-400"}`}>{out ? "sin stock" : money(it.price)}</span>
+                    <span className="text-[16px] font-semibold leading-tight">{it.name}</span>
+                    <span className={`text-[13.5px] ${on ? "opacity-70" : "text-neutral-400"}`}>{out ? "sin stock" : money(it.price)}</span>
                   </span>
                   {on && <CheckIcon size={26} weight="bold" className="flex-none" />}
                 </button>
@@ -411,17 +411,17 @@ function Confirm({
   return (
     <section className="flex animate-cl-in flex-col gap-6 rounded-3xl border-2 border-neutral-800 bg-surface p-5 sm:p-7">
       <div className="flex items-center gap-3">
-        <span className="rounded-full bg-tag-bg px-3.5 py-1 text-[15px] font-bold text-tag-fg">{isVisit ? "Paciente" : "Venta"}</span>
-        <span className="text-[19px] text-neutral-300">¿Está bien así?</span>
+        <span className="rounded-full bg-tag-bg px-3.5 py-1 text-[13px] font-bold text-tag-fg">{isVisit ? "Paciente" : "Venta"}</span>
+        <span className="text-[15px] text-neutral-300">¿Está bien así?</span>
       </div>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[15px] text-neutral-400">Paciente</span>
+        <span className="text-[13px] text-neutral-400">Paciente</span>
         <input
           value={draft.patient}
           onChange={(e) => setDraft({ ...draft, patient: e.target.value })}
           placeholder="Nombre (opcional)"
-          className="border-b-2 border-neutral-800 bg-transparent pb-1 text-[28px] font-bold leading-tight outline-none placeholder:font-semibold placeholder:text-neutral-600 focus:border-accent-600 sm:text-[32px]"
+          className="border-b-2 border-neutral-800 bg-transparent pb-1 text-[21px] font-bold leading-tight outline-none placeholder:font-semibold placeholder:text-neutral-600 focus:border-accent-600 sm:text-[24px]"
         />
       </label>
 
@@ -433,7 +433,7 @@ function Confirm({
               <button onClick={() => setQty(i, l.qty - 1)} aria-label={l.qty === 1 ? `Quitar ${l.item.name}` : "Uno menos"} className={ROUND}>
                 {l.qty === 1 ? <XIcon size={18} weight="bold" /> : <MinusIcon size={18} weight="bold" />}
               </button>
-              <span className="min-w-8 text-center text-[26px] font-bold tabular-nums">{l.qty}</span>
+              <span className="min-w-8 text-center text-[19px] font-bold tabular-nums">{l.qty}</span>
               <button
                 onClick={() => setQty(i, l.qty + 1)}
                 disabled={l.item.kind === "producto" && l.qty >= (l.item.available ?? 0)}
@@ -443,22 +443,22 @@ function Confirm({
                 <PlusIcon size={18} weight="bold" />
               </button>
             </span>
-            <span className="min-w-0 flex-1 text-[23px] font-bold leading-tight sm:text-[26px]">
+            <span className="min-w-0 flex-1 text-[17px] font-bold leading-tight sm:text-[19px]">
               {l.item.name}
               {notHers(l) && (
-                <span className="block text-[16px] font-semibold text-accent">
+                <span className="block text-[13.5px] font-semibold text-accent">
                   {sellerName(l.sellerId ?? draft.sellerId)} no tiene asignado esto. Quitalo o cambiá la médica.
                 </span>
               )}
             </span>
-            <span className="text-[19px] tabular-nums text-neutral-300">
+            <span className="text-[15px] tabular-nums text-neutral-300">
               {money((draft.payment === "tarjeta" ? cardOf(l.item) : l.item.price) * l.qty)}
             </span>
           </li>
         ))}
         {draft.unresolved.map((u, k) => (
           <li key={`u-${k}`} className="flex flex-col gap-2 rounded-2xl border-2 border-dashed border-neutral-700 p-4">
-            <span className="text-[18px] text-neutral-300">
+            <span className="text-[14px] text-neutral-300">
               {u.candidates.length ? <>«{u.text}»: ¿cuál?</> : <>No entendí «{u.text}».</>}
             </span>
             <div className="flex flex-wrap gap-2">
@@ -480,7 +480,7 @@ function Confirm({
       <div className="flex flex-col gap-3">
         {!isMedico && (missingSeller || pickWho) ? (
           <div className="flex flex-col gap-2">
-            <span className="text-[17px] text-neutral-300">{isVisit ? "¿Quién la atendió?" : "¿Quién lo vendió?"}</span>
+            <span className="text-[14px] text-neutral-300">{isVisit ? "¿Quién la atendió?" : "¿Quién lo vendió?"}</span>
             <div className="flex flex-wrap gap-2">
               {sellers.map((s) => (
                 <button
@@ -498,10 +498,10 @@ function Confirm({
             </div>
           </div>
         ) : (
-          <p className="text-[20px] text-neutral-300">
+          <p className="text-[15px] text-neutral-300">
             {whoNames.join(" y ") || "—"}
             {!isMedico && (
-              <button onClick={() => setPickWho(true)} className="ml-3 text-[16px] text-accent underline-offset-4 hover:underline">
+              <button onClick={() => setPickWho(true)} className="ml-3 text-[13.5px] text-accent underline-offset-4 hover:underline">
                 Cambiar
               </button>
             )}
@@ -523,22 +523,22 @@ function Confirm({
               {label}
             </button>
           ))}
-          {!draft.payment && <span className="self-center text-[15px] text-neutral-500">Cómo pagó: opcional</span>}
+          {!draft.payment && <span className="self-center text-[13px] text-neutral-500">Cómo pagó: opcional</span>}
         </div>
       </div>
 
       <div>
-        <p className="font-display text-[34px] font-medium tracking-[-.02em] tabular-nums sm:text-[40px]">
+        <p className="font-display text-[26px] font-medium tracking-[-.02em] tabular-nums sm:text-[30px]">
           {money(draft.payment === "tarjeta" ? card : cash)}
         </p>
-        {!draft.payment && card !== cash && <p className="text-[17px] text-neutral-400">o {money(card)} si paga con tarjeta</p>}
+        {!draft.payment && card !== cash && <p className="text-[14px] text-neutral-400">o {money(card)} si paga con tarjeta</p>}
       </div>
 
       <div className="flex flex-wrap gap-3">
         <button onClick={onSave} disabled={busy || blocked} className={`${CTA} flex-[2_1_220px]`}>
           {busy ? "Guardando…" : missingSeller ? "Falta quién" : draft.unresolved.length || anyNotHers ? "Revisá lo marcado" : "Sí, guardar"}
         </button>
-        <button onClick={onEdit} className={`${GHOST} min-h-[68px] flex-[1_1_160px]`}>
+        <button onClick={onEdit} className={`${GHOST} min-h-[56px] flex-[1_1_160px]`}>
           Corregir
         </button>
       </div>
@@ -581,7 +581,7 @@ function Today({ sales, onOpenClose }: { sales: TodaySale[] | null; onOpenClose:
   return (
     <section className="mt-6 flex flex-col">
       <div className="flex items-baseline justify-between gap-3 border-b border-neutral-800 pb-3">
-        <span className="text-[20px] text-neutral-300">
+        <span className="text-[15px] text-neutral-300">
           Hoy
           {rows.length > 0 && (
             <span className="text-neutral-500">
@@ -590,10 +590,10 @@ function Today({ sales, onOpenClose }: { sales: TodaySale[] | null; onOpenClose:
             </span>
           )}
         </span>
-        <span className="whitespace-nowrap text-[22px] font-bold tabular-nums">{money(total)}</span>
+        <span className="whitespace-nowrap text-[17px] font-bold tabular-nums">{money(total)}</span>
       </div>
       {rows.map((r) => (
-        <div key={r.key} className="flex justify-between gap-4 border-b border-neutral-900 py-3.5 text-[18px] sm:text-[19px]">
+        <div key={r.key} className="flex justify-between gap-4 border-b border-neutral-900 py-3.5 text-[14px] sm:text-[15px]">
           <span className="min-w-0">
             <span className="mr-3.5 tabular-nums text-neutral-500">{r.time}</span>
             {r.label}
@@ -601,8 +601,8 @@ function Today({ sales, onOpenClose }: { sales: TodaySale[] | null; onOpenClose:
           <span className="whitespace-nowrap tabular-nums text-neutral-300">{money(r.total)}</span>
         </div>
       ))}
-      {!rows.length && <p className="py-4 text-[18px] text-neutral-500">Todavía no se anotó nada hoy.</p>}
-      <button onClick={onOpenClose} className="mt-4 self-start py-2 text-[19px] font-semibold text-accent underline-offset-4 hover:underline">
+      {!rows.length && <p className="py-4 text-[14px] text-neutral-500">Todavía no se anotó nada hoy.</p>}
+      <button onClick={onOpenClose} className="mt-4 self-start py-2 text-[15px] font-semibold text-accent underline-offset-4 hover:underline">
         Ver el cierre del día →
       </button>
     </section>
@@ -610,12 +610,12 @@ function Today({ sales, onOpenClose }: { sales: TodaySale[] | null; onOpenClose:
 }
 
 const CTA =
-  "flex min-h-[68px] items-center justify-center rounded-[18px] bg-accent px-6 text-[21px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:cursor-not-allowed disabled:bg-neutral-900 disabled:text-neutral-500 sm:text-[22px]";
+  "flex min-h-[56px] items-center justify-center rounded-[18px] bg-accent px-6 text-[16px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:cursor-not-allowed disabled:bg-neutral-900 disabled:text-neutral-500 sm:text-[17px]";
 const GHOST =
-  "flex items-center justify-center rounded-[18px] border-2 border-neutral-800 px-5 text-[20px] font-semibold text-fg transition-colors hover:bg-neutral-900";
+  "flex items-center justify-center rounded-[18px] border-2 border-neutral-800 px-5 text-[15px] font-semibold text-fg transition-colors hover:bg-neutral-900";
 const OPTION =
-  "flex min-h-[84px] items-center gap-[18px] rounded-[18px] border-2 border-neutral-800 bg-surface px-5 py-3.5 text-left text-fg transition-colors hover:border-accent";
+  "flex min-h-[64px] items-center gap-[18px] rounded-[18px] border-2 border-neutral-800 bg-surface px-5 py-3.5 text-left text-fg transition-colors hover:border-accent";
 const ROUND =
-  "flex h-[52px] w-[52px] items-center justify-center rounded-full border-2 border-neutral-700 text-fg transition-colors hover:bg-neutral-900 disabled:opacity-30";
-const CHIP = "rounded-full border-2 border-neutral-700 px-4 py-2 text-[17px] font-semibold transition-colors hover:border-accent";
-const CHIP_ON = "rounded-full border-2 border-accent bg-accent px-4 py-2 text-[17px] font-bold text-on-accent";
+  "flex h-[44px] w-[44px] items-center justify-center rounded-full border-2 border-neutral-700 text-fg transition-colors hover:bg-neutral-900 disabled:opacity-30";
+const CHIP = "rounded-full border-2 border-neutral-700 px-4 py-2 text-[14px] font-semibold transition-colors hover:border-accent";
+const CHIP_ON = "rounded-full border-2 border-accent bg-accent px-4 py-2 text-[14px] font-bold text-on-accent";

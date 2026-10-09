@@ -23,7 +23,7 @@ export function StockSection({ canAdmin }: { canAdmin: boolean }) {
               role="tab"
               aria-selected={tab === id}
               onClick={() => setTab(id)}
-              className={`min-h-11 rounded-xl px-5 text-[15.5px] font-semibold transition-colors ${
+              className={`min-h-11 rounded-xl px-5 text-[13.5px] font-semibold transition-colors ${
                 tab === id ? "bg-accent text-on-accent" : "text-neutral-400 hover:text-fg"
               }`}
             >
@@ -80,8 +80,8 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
       <Toast msg={toast} />
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex min-w-[220px] flex-1 flex-col">
-          <h1 className="font-display text-[24px] font-medium tracking-[-.01em]">Prácticas</h1>
-          <p className="text-[15px] text-neutral-400">Lo que se hace en la consulta. La médica cobra su % sobre el precio en efectivo.</p>
+          <h1 className="font-display text-[18px] font-medium tracking-[-.01em]">Prácticas</h1>
+          <p className="text-[13px] text-neutral-400">Lo que se hace en la consulta. La médica cobra su % sobre el precio en efectivo.</p>
         </div>
         {canAdmin && editing !== "new" && (
           <button className={`${BTN_DARK} inline-flex items-center gap-1.5`} onClick={() => setEditing("new")}>
@@ -93,9 +93,9 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
       {editing === "new" && <PracticeForm onSave={(v) => save(null, v)} onCancel={() => setEditing(null)} />}
 
       {!data ? (
-        <p className="text-[15px] text-neutral-500">Cargando…</p>
+        <p className="text-[13px] text-neutral-500">Cargando…</p>
       ) : !list.length ? (
-        <p className="text-[16px] text-neutral-400">{canAdmin ? "Todavía no hay prácticas. Agregá la primera (ej. «Atención»)." : "Todavía no hay prácticas cargadas."}</p>
+        <p className="text-[13.5px] text-neutral-400">{canAdmin ? "Todavía no hay prácticas. Agregá la primera (ej. «Atención»)." : "Todavía no hay prácticas cargadas."}</p>
       ) : (
         <div className="flex flex-col gap-2">
           {list.map((p) =>
@@ -109,13 +109,13 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
                 className={`flex items-center gap-4 rounded-2xl bg-surface px-5 py-4 text-left shadow-sm transition-colors enabled:hover:bg-neutral-900 ${p.active ? "" : "opacity-50"}`}
               >
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-[17px] font-semibold">
+                  <span className="truncate text-[14px] font-semibold">
                     {p.name}
                     {!p.active && <span className="ml-2 text-[13px] font-normal text-neutral-500">(dada de baja)</span>}
                   </span>
                   <span className="truncate text-[13.5px] text-neutral-400">{providerNames(p.providerIds, sellers)}</span>
                 </span>
-                <span className="flex flex-col items-end text-[16px] tabular-nums">
+                <span className="flex flex-col items-end text-[13.5px] tabular-nums">
                   <span>{money(p.price)}</span>
                   {p.cardPrice !== null && p.cardPrice !== p.price && <span className="text-[13px] text-neutral-500">tarjeta {money(p.cardPrice)}</span>}
                 </span>

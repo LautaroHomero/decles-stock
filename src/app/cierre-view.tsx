@@ -47,18 +47,18 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
   const pay = c?.byPayment;
 
   return (
-    <div className="cl-print-area mx-auto flex w-full max-w-[720px] flex-col gap-8 px-5 pb-20 pt-10 text-[19px] leading-[1.45] sm:px-6 sm:pt-14">
+    <div className="cl-print-area mx-auto flex w-full max-w-[720px] flex-col gap-8 px-5 pb-20 pt-10 text-[15px] leading-[1.45] sm:px-6 sm:pt-14">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="mb-1.5 text-[19px] text-neutral-400">{longDate(date)}</p>
-          <h1 className="font-display text-[30px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[38px]">Cierre del día</h1>
+          <p className="mb-1.5 text-[15px] text-neutral-400">{longDate(date)}</p>
+          <h1 className="font-display text-[23px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[28px]">Cierre del día</h1>
         </div>
         <div className="cl-no-print flex items-center gap-1">
           <button onClick={() => setDate(shift(date, -1))} aria-label="Día anterior" className={NAV}>
             <CaretLeftIcon size={20} weight="bold" />
           </button>
           {date !== today && (
-            <button onClick={() => setDate(today)} className="min-h-12 rounded-xl px-3 text-[17px] font-semibold hover:bg-neutral-900">
+            <button onClick={() => setDate(today)} className="min-h-12 rounded-xl px-3 text-[14px] font-semibold hover:bg-neutral-900">
               Hoy
             </button>
           )}
@@ -79,7 +79,7 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
           </div>
 
           {pay && c.total > 0 && (
-            <p className="-mt-3 text-[17px] text-neutral-400">
+            <p className="-mt-3 text-[14px] text-neutral-400">
               {[
                 pay.efectivo ? `Efectivo o transf. ${money(pay.efectivo)}` : null,
                 pay.tarjeta ? `Tarjeta ${money(pay.tarjeta)}` : null,
@@ -93,16 +93,16 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
           )}
 
           <section className="flex flex-col gap-3">
-            <h2 className="text-[24px] font-bold">Por médica</h2>
+            <h2 className="text-[18px] font-bold">Por médica</h2>
             {c.providers.map((p) => (
               <div key={p.providerId ?? "-"} className="flex flex-col gap-2.5 rounded-[20px] border-2 border-neutral-800 px-6 py-5">
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className="text-[22px] font-bold sm:text-[23px]">{p.name}</span>
-                  <span className="whitespace-nowrap text-[20px] font-semibold sm:text-[21px]">{plural(p.patients, "paciente", "pacientes")}</span>
+                  <span className="text-[17px] font-bold sm:text-[17px]">{p.name}</span>
+                  <span className="whitespace-nowrap text-[15px] font-semibold sm:text-[16px]">{plural(p.patients, "paciente", "pacientes")}</span>
                 </div>
-                {p.practices.length > 0 && <p className="text-[18px] text-neutral-300 sm:text-[19px]">{counts(p.practices)}</p>}
-                {p.products.length > 0 && <p className="text-[18px] text-neutral-300 sm:text-[19px]">Vendió: {counts(p.products)}</p>}
-                <p className="text-[18px] tabular-nums text-neutral-400">{money(p.total)}</p>
+                {p.practices.length > 0 && <p className="text-[14px] text-neutral-300 sm:text-[15px]">{counts(p.practices)}</p>}
+                {p.products.length > 0 && <p className="text-[14px] text-neutral-300 sm:text-[15px]">Vendió: {counts(p.products)}</p>}
+                <p className="text-[14px] tabular-nums text-neutral-400">{money(p.total)}</p>
               </div>
             ))}
             {!c.providers.length && <p className="text-neutral-500">No se anotó nada este día.</p>}
@@ -125,11 +125,11 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
 function Stat({ big, label, small }: { big: string; label: string; small?: boolean }) {
   return (
     <div className="rounded-[20px] bg-surface p-5 sm:p-[22px]">
-      <div className={`font-display font-medium tabular-nums ${small ? "text-[26px] leading-[1.45] sm:text-[28px]" : "text-[40px] leading-tight"}`}>{big}</div>
-      <div className="text-[18px] text-neutral-300">{label}</div>
+      <div className={`font-display font-medium tabular-nums ${small ? "text-[19px] leading-[1.45] sm:text-[21px]" : "text-[30px] leading-tight"}`}>{big}</div>
+      <div className="text-[14px] text-neutral-300">{label}</div>
     </div>
   );
 }
 
 const NAV = "flex h-12 w-12 items-center justify-center rounded-xl hover:bg-neutral-900 disabled:opacity-30";
-const BIG = "flex min-h-16 flex-[1_1_240px] items-center justify-center rounded-[18px] px-6 text-[20px] font-bold transition-[filter,background]";
+const BIG = "flex min-h-13 flex-[1_1_240px] items-center justify-center rounded-[18px] px-6 text-[15px] font-bold transition-[filter,background]";
