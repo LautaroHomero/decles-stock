@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CaretLeftIcon, CheckIcon, CreditCardIcon, MinusIcon, MoneyIcon, PlusIcon, SquaresFourIcon, XIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { parseNote } from "@/lib/domain/quick-sale";
@@ -39,6 +39,16 @@ const pendingItem = (name: string, price = 0): Item => {
   return { id: `pend:${n.toLowerCase()}`, name: n.charAt(0).toUpperCase() + n.slice(1), kind: "pendiente", price, cardPrice: null, providerIds: [] };
 };
 const toPesos = (s: string) => Number(s.replace(/\D/g, "") || 0);
+
+/**
+ * Médicas que pueden hacer TODO lo anotado (según lo que vinculó el admin). `null` = cualquiera
+ * (nada de lo anotado tiene vínculos). Si queda una sola, es ella: no hace falta preguntar.
+ */
+function sellersFor(lines: { item: Item }[], all: Seller[]): Seller[] | null {
+  const bound = lines.map((l) => l.item).filter((i) => i.kind !== "pendiente" && i.providerIds.length);
+  if (!bound.length) return null;
+  return all.filter((s) => bound.every((i) => i.providerIds.includes(s.id)));
+}
 const normQ = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 interface Seller {
   id: string;
@@ -117,6 +127,9 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       if (l.payment) d.payment ??= l.payment;
     }
     if (!d.sellerId && seller) d.sellerId = seller.id;
+    // «botox» y el botox solo lo hace Laura → es Laura (sin preguntar).
+    const only = sellersFor(d.lines, sellers);
+    if (!d.sellerId && only?.length === 1) d.sellerId = only[0].id;
     d.payment ??= payment;
     if (!d.lines.length && !d.unresolved.length && d.patientUnsure) {
       // «radiofrecuencia, laura»: ¿es la paciente o lo que se hizo? Se pregunta en la confirmación.
@@ -518,7 +531,13 @@ function Confirm({
   const [fixing, setFixing] = useState<{ k: number; mode: "lista" | "pendiente" } | null>(null);
   const sellerName = (id: string | null) => sellers.find((s) => s.id === id)?.name ?? null;
   const isVisit = !!draft.patient.trim() || draft.lines.some((l) => l.item.kind !== "producto");
-  const missingSeller = !isMedico && draft.lines.some((l) => !(l.sellerId ?? draft.sellerId));
+  const possible = sellersFor(draft.lines, sellers);
+  // Si lo anotado lo puede hacer una sola médica, es ella.
+  const inferred = !draft.sellerId && possible?.length === 1 ? possible[0].id : null;
+  useEffect(() => {
+    if (inferred) setDraft({ ...draft, sellerId: inferred });
+  }, [inferred, draft, setDraft]);
+  const missingSeller = !isMedico && !inferred && draft.lines.some((l) => !(l.sellerId ?? draft.sellerId));
   const whoNames = draft.lines.length
     ? [...new Set(draft.lines.map((l) => sellerName(l.sellerId ?? draft.sellerId)).filter(Boolean))]
     : [sellerName(draft.sellerId)].filter(Boolean);
@@ -680,7 +699,7 @@ function Confirm({
           <div className="flex flex-col gap-2">
             <span className="text-[14px] text-neutral-300">{isVisit ? "¿Quién la atendió?" : "¿Quién lo vendió?"}</span>
             <div className="flex flex-wrap gap-2">
-              {sellers.map((s) => (
+              {(possible?.length ? possible : sellers).map((s) => (
                 <button
                   key={s.id}
                   aria-pressed={draft.sellerId === s.id}
