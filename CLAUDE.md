@@ -19,7 +19,7 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
   Lo no cargado = venta `kind 'pendiente'` (resuelve el admin, `domain/pending.ts`); sin stock = `stock_items.owed`.
 - Diseño monocromo (negro y blanco, Inter): tokens `--cl-*` en `globals.css`; acción principal `bg-accent text-on-accent`.
 - Planilla (`planilla-view.tsx`, se ve en Ventas → Día): la hoja en papel de la secretaria. Áreas = `providers.area`; fila = visita con
-  `amount`/`commission` manuales (`applyManualAmounts`), «Atención» sin práctica (`generic`), `sales.observations` = productos.
+  `amount`/`commission` manuales (`applyManualAmounts`), «Atención» sin práctica (`generic`). Fila = paciente · qué pagó (práctica/producto) · médica · pagó $ · medio (+ $K fuera de Médicos).
   Ingresos extras = `expenses.direction 'ingreso'`; caja al cambio = `day_cash`. Pago: efectivo | transferencia | tarjeta.
 - Egresos de plata: tabla `expenses` (`domain/expenses.ts`), los anota secretaría/admin; texto «pagué 5000 de luz» → `expense-note.ts`.
 - Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada. `migrate` activa RLS en todas
