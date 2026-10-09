@@ -35,7 +35,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const [sellersData] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; area: Area }[] }>("/api/sellers", 60_000);
   const [egr, refreshEgr] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}`, 30_000);
   const [ing, refreshIng] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}&direction=ingreso`, 30_000);
-  const [cash, refreshCash] = usePoll<{ ok: boolean; cash: { amount: number | null } }>(`/api/day-cash?date=${date}`, 60_000);
+  const [cash, refreshCash] = usePoll<{ ok: boolean; cash: { opening: number | null; amount: number | null } }>(`/api/day-cash?date=${date}`, 60_000);
   const [toast, showToast] = useToast();
   const [form, setForm] = useState<{ direction: "egreso" | "ingreso"; expense?: Expense } | null>(null);
 
@@ -52,7 +52,8 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const kTotal = rows.reduce((n, r) => n + r.k, 0);
   const byMethod = (m: Payment | null) => rows.filter((r) => r.method === m).reduce((n, r) => n + r.total, 0);
   const efectivo = byMethod("efectivo");
-  const esperado = efectivo + inTotal - egTotal;
+  const opening = cash?.ok ? cash.cash.opening : null;
+  const esperado = (opening ?? 0) + efectivo + inTotal - egTotal;
   const contado = cash?.ok ? cash.cash.amount : null;
   const decles = cobrado - kTotal + inTotal - egTotal;
 
@@ -120,7 +121,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
           <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-neutral-800 sm:grid-cols-3">
             <Big label="Cobrado" value={money(cobrado)} sub={`${rows.filter((r) => r.patient).length} pacientes`} />
             <Big label="Queda para Decles" value={fmtSigned(decles)} sub="cobrado − profesionales ± extras" border />
-            <Big label="Efectivo que debería haber" value={fmtSigned(esperado)} sub={contado === null ? "falta contar la caja" : diffText(contado - esperado)} border />
+            <Big label="Efectivo que debería haber" value={fmtSigned(esperado)} sub={opening === null ? "falta el cambio al iniciar" : contado === null ? "falta contar la caja" : diffText(contado - esperado)} border />
           </div>
 
           {/* Por profesional */}
@@ -166,12 +167,24 @@ export function CierreSheet({ actor }: { actor: Actor }) {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Card title="Caja">
               <div className="flex flex-col px-4 pb-3">
-                <Line label="Efectivo cobrado" value={money(efectivo)} />
+                <CashInput
+                  key={`o:${date}:${opening ?? ""}`}
+                  label="Cambio al iniciar"
+                  amount={opening}
+                  canEdit={canEdit}
+                  onSave={async (v) => {
+                    const r = await call("/api/day-cash", "PUT", { date, opening: v });
+                    if (!r.ok) return showToast(r.error ?? "No se pudo guardar.");
+                    refreshCash();
+                  }}
+                />
+                <Line label="+ Efectivo cobrado" value={money(efectivo)} />
                 <Line label="+ Ingresos extras" value={money(inTotal)} />
                 <Line label="− Egresos extras" value={money(egTotal)} />
                 <Line label="Debería haber" value={fmtSigned(esperado)} strong />
                 <CashInput
                   key={`${date}:${contado ?? ""}`}
+                  label="Contado al cambio"
                   amount={contado}
                   canEdit={canEdit}
                   onSave={async (amount) => {
@@ -320,7 +333,7 @@ function Line({ label, value, strong, muted }: { label: string; value: string; s
   );
 }
 
-function CashInput({ amount, canEdit, onSave }: { amount: number | null; canEdit: boolean; onSave: (n: number | null) => void }) {
+function CashInput({ label, amount, canEdit, onSave }: { label: string; amount: number | null; canEdit: boolean; onSave: (n: number | null) => void }) {
   const [v, setV] = useState(amount === null ? "" : String(amount));
   const save = () => {
     const n = v.trim() === "" ? null : num(v);
@@ -328,7 +341,7 @@ function CashInput({ amount, canEdit, onSave }: { amount: number | null; canEdit
   };
   return (
     <label className="flex items-center justify-between gap-4 border-t border-neutral-900 py-1.5">
-      <span className="text-neutral-300">Contado al cambio</span>
+      <span className="text-neutral-300">{label}</span>
       <input
         value={v ? `$ ${num(v).toLocaleString("es-AR")}` : ""}
         disabled={!canEdit}

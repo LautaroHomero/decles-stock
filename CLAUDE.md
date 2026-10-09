@@ -20,7 +20,7 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
 - Diseño monocromo (negro y blanco, Inter): tokens `--cl-*` en `globals.css`; acción principal `bg-accent text-on-accent`.
 - Planilla: `planilla-view.tsx` = Ventas → Día (filas por área); `cierre-sheet.tsx` = Cierre (números del día, por profesional, ingresos/egresos extras, caja, medios de pago). Áreas = `providers.area`; fila = visita con
   `amount`/`commission` manuales (`applyManualAmounts`), «Atención» sin práctica (`generic`). Fila = paciente · qué pagó (práctica/producto) · médica · pagó $ · medio (+ $K fuera de Médicos).
-  Ingresos extras = `expenses.direction 'ingreso'`; caja al cambio = `day_cash`. Pago: efectivo | transferencia | tarjeta.
+  Ingresos extras = `expenses.direction 'ingreso'`; caja = `day_cash` (`opening` = cambio al iniciar, se le pregunta a la secretaria al entrar — `opening-cash.tsx`; `amount` = contado al cambio). Pago: efectivo | transferencia | tarjeta.
 - Egresos de plata: tabla `expenses` (`domain/expenses.ts`), los anota secretaría/admin; texto «pagué 5000 de luz» → `expense-note.ts`.
 - Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada. `migrate` activa RLS en todas
   las tablas de `public` (bloquea la API REST de Supabase); la app entra como dueña y no le afecta.

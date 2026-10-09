@@ -12,6 +12,7 @@ import { VentasView } from "./ventas-view";
 import { EquipoView } from "./equipo-view";
 import { ChangePasswordForm, EmailForm } from "./auth-ui";
 import { Onboarding } from "./onboarding";
+import { OpeningCashPrompt } from "./opening-cash";
 
 type Section = "vender" | "cierre" | "inventario" | "ventas" | "equipo";
 
@@ -69,6 +70,7 @@ export function StockApp({ actor }: { actor: Actor }) {
         <AvatarMenu actor={actor} onOnboarding={() => setOnbKey((k) => k + 1)} />
       </header>
 
+      {actor.role === "recepcion" && <OpeningCashPrompt />}
       <main className="min-h-0 flex-1 overflow-y-auto print:overflow-visible">
         {isAdmin && section !== "cierre" && <Onboarding go={go} reloadKey={onbKey} />}
         {section === "vender" && <AnotarView actor={actor} onOpenClose={() => go("cierre")} />}

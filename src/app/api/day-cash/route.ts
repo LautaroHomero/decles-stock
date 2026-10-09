@@ -8,10 +8,10 @@ export async function GET(req: Request) {
   return respond(await getDayCash(actor, new URL(req.url).searchParams.get("date") ?? undefined));
 }
 
-/** `{ date?, amount }` (amount null = borrar). */
+/** `{ date?, opening?, amount? }`: cambio al iniciar y/o lo contado al cambio (null = borrar). */
 export async function PUT(req: Request) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
-  const b = await bodyOf<{ date: string; amount: number | null }>(req);
-  return respond(await setDayCash(actor, b.date, b.amount));
+  const b = await bodyOf<{ date: string; opening: number | null; amount: number | null }>(req);
+  return respond(await setDayCash(actor, b.date, { opening: b.opening, amount: b.amount }));
 }
