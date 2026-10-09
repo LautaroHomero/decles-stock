@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
-import { localToday, money, usePoll } from "./shared";
+import { money, usePoll, useToday } from "./shared";
 
 interface CloseCount {
   name: string;
@@ -40,8 +40,11 @@ const counts = (list: CloseCount[]) => list.map((c) => `${c.name} ${c.quantity}`
 
 /** Cierre del día (diseño «Cierre del día»): pacientes, prácticas, lo cobrado y el detalle por médica. Se imprime. */
 export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
-  const today = localToday();
-  const [date, setDate] = useState(today);
+  const today = useToday();
+  // null = «hoy»: a la medianoche pasa solo al día nuevo. Una fecha elegida a mano se respeta.
+  const [picked, setPicked] = useState<string | null>(null);
+  const date = picked ?? today;
+  const setDate = (d: string) => setPicked(d === today ? null : d);
   const [data] = usePoll<{ ok: boolean; close: DayClose; error?: string }>(`/api/day-close?date=${date}`, 60_000);
   const c = data?.ok && data.close.date === date ? data.close : null;
   const pay = c?.byPayment;

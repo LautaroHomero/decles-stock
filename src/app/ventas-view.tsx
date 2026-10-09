@@ -10,6 +10,7 @@ import {
   BTN_DARK,
   FIELD,
   PAYMENT_LABEL,
+  useToday,
   Toast,
   call,
   fmtTime,
@@ -98,7 +99,7 @@ export function VentasView({ actor }: { actor: Actor }) {
   const admin = !!actor.activeOrg?.canAdmin;
   const isMedico = actor.role === "medico";
   const seesCommission = admin || isMedico;
-  const today = localToday();
+  const today = useToday();
   const periods: [Period, string][] = seesCommission
     ? [
         ["dia", "Día"],
@@ -111,7 +112,13 @@ export function VentasView({ actor }: { actor: Actor }) {
       ];
 
   const [period, setPeriod] = useState<Period>("dia");
-  const [anchor, setAnchor] = useState(today);
+  // null = el período actual: a la medianoche pasa solo al día (o mes) nuevo.
+  const [anchorPicked, setAnchorPicked] = useState<string | null>(null);
+  const anchor = anchorPicked ?? today;
+  const setAnchor = (v: string | ((a: string) => string)) => {
+    const next = typeof v === "function" ? v(anchor) : v;
+    setAnchorPicked(next === today ? null : next);
+  };
   const [calOpen, setCalOpen] = useState(false);
   const { from, to } = rangeOf(period, anchor);
   const isCurrent = from <= today && today <= to;

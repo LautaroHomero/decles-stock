@@ -260,3 +260,13 @@ export function CommissionField({ value, onChange }: { value: string; onChange: 
     </label>
   );
 }
+
+/** Fecha de hoy que cambia sola a la medianoche (la pantalla puede quedar abierta toda la noche). */
+export function useToday(): string {
+  const [today, setToday] = useState(localToday);
+  useEffect(() => {
+    const id = setInterval(() => setToday((t) => (t === localToday() ? t : localToday())), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  return today;
+}
