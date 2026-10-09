@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
+import type { Actor } from "@/lib/domain/types";
 import { money, usePoll, useToday } from "./shared";
+import { PlanillaView } from "./planilla-view";
 
 interface CloseCount {
   name: string;
@@ -43,7 +45,13 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 const counts = (list: CloseCount[]) => list.map((c) => `${c.name} ${c.quantity}`).join(" · ");
 
 /** Cierre del día (diseño «Cierre del día»): pacientes, prácticas, lo cobrado y el detalle por médica. Se imprime. */
-export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
+export function CierreView({ actor, onOpenSales }: { actor: Actor; onOpenSales: () => void }) {
+  // Secretaría y admin: el cierre con la forma de la planilla en papel. La médica sigue viendo su resumen.
+  if (actor.role !== "medico") return <PlanillaView actor={actor} part="cierre" />;
+  return <CierreMedica onOpenSales={onOpenSales} />;
+}
+
+function CierreMedica({ onOpenSales }: { onOpenSales: () => void }) {
   const today = useToday();
   // null = «hoy»: a la medianoche pasa solo al día nuevo. Una fecha elegida a mano se respeta.
   const [picked, setPicked] = useState<string | null>(null);

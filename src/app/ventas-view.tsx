@@ -306,7 +306,7 @@ export function VentasView({ actor }: { actor: Actor }) {
         )}
       </div>
 
-      {sheet && <PlanillaView actor={actor} date={anchor} bare />}
+      {sheet && <PlanillaView actor={actor} date={anchor} part="lista" />}
 
       {/* Lo cobrado */}
       {!sheet && (

@@ -141,16 +141,20 @@ function itemsIn(text: string, practices: Item[], products: Item[]): Picked[] {
 }
 
 /**
- * `date` controlado (Ventas → Día) o propio. `bare`: sin el encabezado (título, fecha, Imprimir), cuando
- * la pantalla que la contiene ya los tiene.
+ * La planilla del día en dos partes, como el papel:
+ *  · `lista` (Ventas → Día): las filas por área (paciente, qué pagó, médica, cuánto). Fecha controlada por Ventas.
+ *  · `cierre` (Cierre): ingresos y egresos extras, caja al cambio, totales por profesional y el resumen diario.
  */
-export function PlanillaView({ actor, date: dateProp, bare }: { actor: Actor; date?: string; bare?: boolean }) {
+export function PlanillaView({ actor, date: dateProp, part }: { actor: Actor; date?: string; part: "lista" | "cierre" }) {
+  const bare = part === "lista";
   const today = useToday();
   const [picked, setPicked] = useState<string | null>(null);
   const date = dateProp ?? picked ?? today;
   const setDate = (d: string) => setPicked(d === today ? null : d);
   const admin = !!actor.activeOrg?.canAdmin;
   const canEdit = admin || date === today;
+  // Ingresos, egresos y caja: secretaría y admin.
+  const canMoney = canEdit && actor.role !== "medico";
 
   const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[] }>(`/api/sales?from=${date}&to=${date}&limit=500`, 30_000);
   const [catalog, refreshCatalog] = usePoll<CatalogResponse>("/api/catalog", 60_000);
@@ -213,7 +217,7 @@ export function PlanillaView({ actor, date: dateProp, bare }: { actor: Actor; da
 
       {!bare && (
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="font-display text-[22px] font-medium tracking-[-.01em]">Planilla</h1>
+        <h1 className="font-display text-[22px] font-medium tracking-[-.01em]">Cierre del día</h1>
         <div className="flex items-center gap-1 text-[14px]">
           <span className="text-neutral-400">Fecha:</span>
           <button aria-label="Día anterior" onClick={() => setDate(shift(date, -1))} className={`${NAV} cl-no-print`}>
@@ -237,13 +241,15 @@ export function PlanillaView({ actor, date: dateProp, bare }: { actor: Actor; da
       )}
       {!canEdit && <p className="cl-no-print -mt-3 text-[13px] text-neutral-500">Lo de días anteriores lo corrige el admin.</p>}
 
+      {!bare && (
+      <>
       {/* Ingresos extras · Egresos extras · Caja */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_1fr_220px]">
         <MoneyList
           title="Ingresos extras"
           list={ingresos}
           total={inTotal}
-          canEdit={canEdit}
+          canEdit={canMoney}
           onAdd={() => setForm({ direction: "ingreso" })}
           onOpen={(e) => setForm({ direction: "ingreso", expense: e })}
         />
@@ -251,14 +257,14 @@ export function PlanillaView({ actor, date: dateProp, bare }: { actor: Actor; da
           title="Egresos extras"
           list={egresos}
           total={egTotal}
-          canEdit={canEdit}
+          canEdit={canMoney}
           onAdd={() => setForm({ direction: "egreso" })}
           onOpen={(e) => setForm({ direction: "egreso", expense: e })}
         />
         <CashBox
           key={`${date}:${cash?.cash?.amount ?? ""}`}
           amount={cash?.ok ? cash.cash.amount : null}
-          canEdit={canEdit}
+          canEdit={canMoney}
           onSave={async (amount) => {
             const r = await call("/api/day-cash", "PUT", { date, amount });
             if (!r.ok) return showToast(r.error ?? "No se pudo guardar.");
@@ -267,9 +273,14 @@ export function PlanillaView({ actor, date: dateProp, bare }: { actor: Actor; da
         />
       </div>
 
-      {!sales || !catalog || !sellersData ? (
-        <p className="text-neutral-500">Cargando…</p>
-      ) : (
+      {sales && sellersData && (
+        <Totals sections={sections} rows={rows} sellers={sellers} areaOf={areaOf} />
+      )}
+      </>
+      )}
+
+      {bare && (!sales || !catalog || !sellersData) && <p className="text-neutral-500">Cargando…</p>}
+      {bare && sales && catalog && sellersData && (
         sections.map((a) => (
           <AreaSection
             key={a.id}
@@ -287,6 +298,7 @@ export function PlanillaView({ actor, date: dateProp, bare }: { actor: Actor; da
       )}
 
       {/* Resumen diario */}
+      {!bare && (
       <section className="flex flex-col gap-2 rounded-xl border border-neutral-800 p-4">
         <h2 className="text-[12px] font-medium uppercase tracking-[.08em] text-neutral-400">Resumen diario</h2>
         <div className="grid grid-cols-1 gap-x-10 gap-y-1 md:grid-cols-2">
@@ -317,7 +329,86 @@ export function PlanillaView({ actor, date: dateProp, bare }: { actor: Actor; da
           </div>
         </div>
       </section>
+      )}
     </div>
+  );
+}
+
+/** Cierre: por área, cada profesional con sus pacientes, lo cobrado, su parte ($K) y lo de Decles. */
+function Totals({
+  sections,
+  rows,
+  sellers,
+  areaOf,
+}: {
+  sections: (typeof AREAS)[number][];
+  rows: Row[];
+  sellers: Seller[];
+  areaOf: (id: string | null) => Area;
+}) {
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="overflow-x-auto rounded-xl border border-neutral-800">
+        <table className="w-full min-w-[620px] border-collapse text-[13.5px]">
+          <thead>
+            <tr className="border-b border-neutral-800 text-left text-[11.5px] uppercase tracking-[.06em] text-neutral-500">
+              <th className="px-3 py-2 font-medium">Profesional</th>
+              <th className="px-3 py-2 text-right font-medium">Pacientes</th>
+              <th className="px-3 py-2 text-right font-medium">Cobrado</th>
+              <th className="px-3 py-2 text-right font-medium">$ Profesional</th>
+              <th className="px-3 py-2 text-right font-medium">$ Decles</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sections.map((a) => {
+              const rs = rows.filter((r) => areaOf(r.providerId) === a.id);
+              const ids = [...new Set(rs.map((r) => r.providerId))];
+              const sum = (list: Row[]) => ({
+                pac: list.filter((r) => r.patient).length,
+                total: list.reduce((n, r) => n + r.total, 0),
+                k: list.reduce((n, r) => n + r.k, 0),
+              });
+              const t = sum(rs);
+              return (
+                <Fragment key={a.id}>
+                  <tr className="border-b border-neutral-900 bg-surface">
+                    <td colSpan={5} className="px-3 py-1.5 text-[11.5px] font-medium uppercase tracking-[.08em] text-neutral-400">
+                      {a.title}
+                    </td>
+                  </tr>
+                  {ids.map((id) => {
+                    const s = sum(rs.filter((r) => r.providerId === id));
+                    return (
+                      <tr key={id ?? "-"} className="border-b border-neutral-900">
+                        <td className="px-3 py-1.5">{sellers.find((x) => x.id === id)?.name ?? rs.find((r) => r.providerId === id)?.sales[0].providerName ?? "—"}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{s.pac}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{money(s.total)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{money(s.k)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{fmtSigned(s.total - s.k)}</td>
+                      </tr>
+                    );
+                  })}
+                  {!ids.length && (
+                    <tr className="border-b border-neutral-900">
+                      <td colSpan={5} className="px-3 py-1.5 text-neutral-600">
+                        —
+                      </td>
+                    </tr>
+                  )}
+                  <tr className="border-b border-neutral-800 font-medium">
+                    <td className="px-3 py-1.5 text-neutral-400">total {a.title.toLowerCase()}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{t.pac}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{money(t.total)}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{money(t.k)}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{fmtSigned(t.total - t.k)}</td>
+                  </tr>
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

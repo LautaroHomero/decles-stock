@@ -72,7 +72,7 @@ export function StockApp({ actor }: { actor: Actor }) {
       <main className="min-h-0 flex-1 overflow-y-auto print:overflow-visible">
         {isAdmin && section !== "cierre" && <Onboarding go={go} reloadKey={onbKey} />}
         {section === "vender" && <AnotarView actor={actor} onOpenClose={() => go("cierre")} />}
-        {section === "cierre" && <CierreView onOpenSales={() => go("ventas")} />}
+        {section === "cierre" && <CierreView actor={actor} onOpenSales={() => go("ventas")} />}
         {section === "inventario" && (isAdmin || isMedico) && <StockSection canAdmin={isAdmin} />}
         {section === "ventas" && <VentasView actor={actor} />}
         {section === "equipo" && isAdmin && <EquipoView actor={actor} />}
