@@ -314,3 +314,21 @@
     border-color: #999 !important;
   }
 }
+
+/* «¡Registrado!»: el tilde aparece, late una vez y la pantalla vuelve sola al inicio. */
+@keyframes cl-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  55% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); }
+}
+@keyframes cl-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes cl-flash-row {
+  0% { background: var(--cl-a800); }
+  100% { background: transparent; }
+}
+.cl-pop { animation: cl-pop 0.45s cubic-bezier(.2,.9,.3,1.2) both; }
+.cl-fade-in { animation: cl-fade-in 0.2s ease both; }
+.cl-flash-row { animation: cl-flash-row 2.4s ease-out both; }

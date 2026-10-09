@@ -58,12 +58,17 @@ export interface QuickLine<P extends QuickProduct = QuickProduct, S extends Quic
   seller: S | null;
   /** Medio de pago escrito en el texto; null = el elegido en pantalla o sin cargar. */
   payment: QuickPayment | null;
+  /** Las palabras útiles del renglón, tal como se escribieron (sin cantidad, médica, pago ni muletillas). */
+  rest: string;
 }
 
 const NUMBER_WORDS: Record<string, number> = {
   un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8,
   nueve: 9, diez: 10, once: 11, doce: 12, docena: 12, quince: 15, veinte: 20,
 };
+
+/** Palabras que anuncian a la profesional ("la atendió la Dra. …"). */
+const SELLER_CUES = new Set(["atendio", "atendi", "atendida", "atendido", "atiende", "dra", "dr", "doctora", "doctor", "lic", "licenciada"]);
 
 const FILLER = new Set([
   "vendi", "vendimos", "vendio", "vendieron", "vender", "venta", "ventas", "se", "me", "le", "les",
@@ -305,6 +310,8 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
     const toks = tokens(raw).filter((t) => !used.has(t.n));
     const { quantity, words } = parseSegment(toks.map((t) => t.n).join(" "), nameNumbers);
     if (!words.length) continue; // "vendí", "Laura:" o un número suelto
+    const restToks = toks.filter((t) => !FILLER.has(t.n) && !(t.n in NUMBER_WORDS) && !/^x?\d{1,3}x?$/.test(t.n));
+    const rest = restToks.map((t) => t.raw).join(" ");
     const ranked = products
       .map((p) => ({ p, s: score(words, p.name) }))
       .filter((x) => x.s > 0)
@@ -319,6 +326,8 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
         patientSure = nameToks.length >= 2;
         continue;
       }
+      // «la atendió la Dra. Fernández» con una médica que no existe: no es algo que se hizo.
+      if (normalize(raw).split(" ").some((w) => SELLER_CUES.has(w))) continue;
     } else if (!patient) {
       // "Ana Gómez atención": lo que va antes del producto/práctica, si son palabras sueltas, es el paciente.
       const pw = productWords(best.p.name);
@@ -335,6 +344,7 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
       candidates: clear ? [] : ranked.slice(0, 4).map((x) => x.p),
       seller: current,
       payment: pay,
+      rest,
     });
   }
   // "2 cremas pindonga, laura": lo anterior a la primera médica nombrada también es suyo. Igual el pago.

@@ -3,7 +3,8 @@ import type { Role } from "@/lib/domain/types";
 
 // Distinto de Clavdia ("clinic_session"): las cookies no distinguen puerto y en local corren las dos apps.
 export const SESSION_COOKIE = "decles_stock_session";
-const MAX_AGE_SECONDS = 60 * 60 * 12; // 12h
+// 30 días: la PC del consultorio queda logueada. Una baja o un reset de contraseña la corta igual (session_version).
+const MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
 /** What actually lives in the signed cookie — the full Actor is rehydrated per request. */
 export interface SessionClaims {

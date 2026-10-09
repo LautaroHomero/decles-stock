@@ -27,13 +27,19 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
   sale en la consola de `npm run dev` y en producción la opción avisa que no está activada.
 - **O el admin** la resetea desde Equipo (nueva temporal).
 - **Baja**: lógica (el historial conserva el nombre). Cierra sus sesiones al instante.
+- **Sesión**: 30 días en cada equipo (una baja o un reset la cortan al instante).
 - **Bloqueo**: 5 intentos fallidos → 15 min.
 - **Si el único admin perdió la contraseña**: `npm run user:reset-password -- <usuario>` en la máquina donde corre.
 
 ## Anotar y cierre del día
 
-- **Anotar** (pantalla principal, para todos): un cuadro de texto libre o "Prefiero elegirlo de una lista" (qué se hizo o
-  vendió → quién → cómo pagó). Siempre muestra "¿Está bien así?" con cantidades +/−, paciente editable, médica y total.
+- **Anotar** (pantalla principal, para todos), con la menor cantidad de toques:
+  - Texto libre con **vista previa en vivo** (paciente, médica, ítems, total). Si está todo claro: **Guardar** (o Enter),
+    un solo toque. Lo dudoso se contesta ahí mismo con un toque («¿cuál crema?», «¿es la paciente?», «¿quién la atendió?»).
+    "Editar detalles" abre la revisión completa (cantidades, precio de lo no cargado), opcional.
+  - "Prefiero elegirlo de una lista": **una sola pantalla** — médica, ítems (con +/−), pago opcional, Guardar.
+  - Al guardar: animación «¡Registrado!» y vuelve solo al inicio, con la fila nueva resaltada en «Hoy».
+  - Si lo anotado es de una sola médica (vínculos del admin), la pone sola.
 - El **paciente es solo un nombre** escrito (no hay fichas). Las **prácticas** (atención, peeling…) las carga el admin en
   Stock → Prácticas con precio efectivo y con tarjeta; generan comisión igual que un producto.
 - Todo lo anotado junto se guarda junto (`visit_id`): **o se anota todo o nada** (si no alcanza el stock de un producto, no se

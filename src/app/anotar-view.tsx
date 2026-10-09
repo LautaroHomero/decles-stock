@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CaretLeftIcon, CheckIcon, CreditCardIcon, MinusIcon, MoneyIcon, PlusIcon, SquaresFourIcon, XIcon } from "@phosphor-icons/react";
+import { CaretLeftIcon, CheckIcon, MinusIcon, PlusIcon, SquaresFourIcon, XIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { parseNote } from "@/lib/domain/quick-sale";
-import { firstName, greeting, initials } from "./ui";
+import { firstName, greeting } from "./ui";
 import { Toast, call, fmtTime, money, usePoll, useToast, type CatalogResponse, type Payment, type SaleRow } from "./shared";
 
 /**
@@ -72,7 +72,6 @@ interface Draft {
   /** El paciente salió de una sola palabra suelta: puede ser algo no cargado («radiofrecuencia»). Se pregunta. */
   patientUnsure: boolean;
 }
-type Step = "idle" | "pick" | "who" | "pay" | "confirm" | "done";
 
 const cardOf = (i: Item) => i.cardPrice ?? i.price;
 const emptyDraft = (from: Draft["from"], sellerId: string | null): Draft => ({
@@ -84,6 +83,31 @@ const emptyDraft = (from: Draft["from"], sellerId: string | null): Draft => ({
   unresolved: [],
   patientUnsure: false,
 });
+
+/** Lo escrito → borrador. Lo que no se encuentra en la lista queda como pendiente (lo resuelve el admin). */
+function buildDraft(text: string, items: Item[], sellers: Seller[], fixedSeller: string | null): Draft {
+  const { lines, patient, patientSure, seller, payment } = parseNote(text, items, sellers);
+  const d = emptyDraft("text", fixedSeller);
+  d.patient = patient ?? "";
+  d.patientUnsure = !!patient && !patientSure;
+  for (const l of lines) {
+    if (l.match) d.lines.push({ item: l.match, qty: l.quantity, sellerId: l.seller?.id ?? null });
+    else if (l.candidates.length) d.unresolved.push({ text: l.text, qty: l.quantity, sellerId: l.seller?.id ?? null, candidates: l.candidates });
+    else if (l.rest) d.lines.push({ item: pendingItem(l.rest), qty: l.quantity, sellerId: l.seller?.id ?? null });
+    if (l.payment) d.payment ??= l.payment;
+  }
+  if (!d.sellerId && seller) d.sellerId = seller.id;
+  // «peeling» y el peeling solo lo hace Laura → es Laura (sin preguntar).
+  const only = sellersFor(d.lines, sellers);
+  if (!d.sellerId && only?.length === 1) d.sellerId = only[0].id;
+  d.payment ??= payment;
+  return d;
+}
+
+const lineCash = (l: Line) => l.item.price * l.qty;
+const lineCard = (l: Line) => cardOf(l.item) * l.qty;
+const summaryOf = (d: Draft) =>
+  [d.patient.trim(), d.lines.map((l) => `${l.qty > 1 ? `${l.qty} ` : ""}${l.item.name}`).join(", ")].filter(Boolean).join(" · ");
 
 export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: () => void }) {
   const [catalog, refreshCatalog] = usePoll<CatalogResponse>("/api/catalog", 30_000);
@@ -106,251 +130,324 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   // La médica anota a su nombre; con una sola médica en el consultorio, queda elegida sola.
   const fixedSeller = isMedico ? (sellers[0]?.id ?? null) : sellers.length === 1 ? sellers[0].id : null;
 
-  const [step, setStep] = useState<Step>("idle");
+  const [mode, setMode] = useState<"idle" | "manual" | "confirm">("idle");
   const [text, setText] = useState("");
+  // Lo que se toca en la vista previa (si el texto no lo dice).
+  const [pickSeller, setPickSeller] = useState<string | null>(null);
+  const [pickPay, setPickPay] = useState<Payment | null>(null);
+  // Respuestas tocadas en la vista previa: «crema» → cuál, y si el nombre dudoso es la paciente.
+  const [chosen, setChosen] = useState<Record<string, string>>({});
+  const [unsureIs, setUnsureIs] = useState<"patient" | "item" | null>(null);
   const [draft, setDraft] = useState<Draft>(emptyDraft("text", null));
   const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState("");
+  const [flash, setFlash] = useState<string | null>(null);
+  const [lastVisit, setLastVisit] = useState<string | null>(null);
 
-  // Pasos del modo manual: primero quién atendió (si hay que elegir), después qué y el pago.
-  const manualSteps: Step[] = fixedSeller ? ["pick", "pay"] : ["who", "pick", "pay"];
-  const stepNum = manualSteps.indexOf(step) + 1;
-
-  function interpret() {
-    const { lines, patient, patientSure, seller, payment } = parseNote(text, items, sellers);
-    const d = emptyDraft("text", fixedSeller);
-    d.patient = patient ?? "";
-    d.patientUnsure = !!patient && !patientSure;
-    for (const l of lines) {
-      if (l.match) d.lines.push({ item: l.match, qty: l.quantity, sellerId: l.seller?.id ?? null });
-      else d.unresolved.push({ text: l.text, qty: l.quantity, sellerId: l.seller?.id ?? null, candidates: l.candidates });
-      if (l.payment) d.payment ??= l.payment;
-    }
-    if (!d.sellerId && seller) d.sellerId = seller.id;
-    // «botox» y el botox solo lo hace Laura → es Laura (sin preguntar).
-    const only = sellersFor(d.lines, sellers);
-    if (!d.sellerId && only?.length === 1) d.sellerId = only[0].id;
-    d.payment ??= payment;
-    if (!d.lines.length && !d.unresolved.length && d.patientUnsure) {
-      // «radiofrecuencia, laura»: ¿es la paciente o lo que se hizo? Se pregunta en la confirmación.
-      setDraft(d);
-      setStep("confirm");
-      return;
-    }
-    if (!d.lines.length && !d.unresolved.length) {
-      showToast(patient ? `Anoté a ${patient}. ¿Qué se le hizo? Elegilo de la lista.` : "No encontré qué anotar. Probá elegirlo de la lista.");
-      if (patient) {
-        setDraft({ ...d, from: "manual" });
-        setStep(d.sellerId ? "pick" : manualSteps[0]);
+  // Vista previa en vivo de lo escrito.
+  const preview = useMemo(() => {
+    if (!text.trim() || !items.length) return null;
+    const d = buildDraft(text, items, sellers, fixedSeller);
+    // Lo elegido entre opciones pasa a renglón.
+    for (const u of [...d.unresolved]) {
+      const it = items.find((i) => i.id === chosen[u.text]);
+      if (it) {
+        d.lines.push({ item: it, qty: u.qty, sellerId: null });
+        d.unresolved = d.unresolved.filter((x) => x !== u);
       }
-      return;
     }
-    setDraft(d);
-    setStep("confirm");
-  }
+    if (d.patientUnsure && unsureIs === "patient") d.patientUnsure = false;
+    if (d.patientUnsure && unsureIs === "item") {
+      const it = items.find((i) => normQ(i.name) === normQ(d.patient));
+      d.lines.push({ item: it ?? pendingItem(d.patient), qty: 1, sellerId: null });
+      d.patient = "";
+      d.patientUnsure = false;
+    }
+    if (!d.sellerId) {
+      const only = sellersFor(d.lines, sellers);
+      if (only?.length === 1) d.sellerId = only[0].id;
+    }
+    return { ...d, sellerId: pickSeller ?? d.sellerId, payment: d.payment ?? pickPay };
+  }, [text, items, sellers, fixedSeller, pickSeller, pickPay, chosen, unsureIs]);
+  const possible = preview ? sellersFor(preview.lines, sellers) : null;
+  const notHers = !!preview && preview.lines.some((l) => !allowedFor(l.item, preview.sellerId));
+  const missingSeller = !!preview && !isMedico && !preview.sellerId;
+  const nothing = !!preview && !preview.lines.length && !preview.unresolved.length && !preview.patientUnsure;
+  // Lo que falta contestar en la vista previa (todo se resuelve ahí, con un toque).
+  const pendingQ = !!preview && (preview.unresolved.length > 0 || preview.patientUnsure);
+  const canSave = !!preview && !nothing && !missingSeller && !notHers && !pendingQ;
 
-  function startManual() {
-    setDraft(emptyDraft("manual", fixedSeller));
-    setStep(manualSteps[0]);
-  }
-
-  function back() {
-    const i = manualSteps.indexOf(step);
-    setStep(i > 0 ? manualSteps[i - 1] : "idle");
-  }
-
-  async function save() {
+  async function save(d: Draft) {
     setBusy(true);
-    // Una anotación por médica (si el texto nombró a más de una).
-    const groups = new Map<string, Line[]>();
-    for (const l of draft.lines) {
-      const k = l.sellerId ?? draft.sellerId ?? "";
-      groups.set(k, [...(groups.get(k) ?? []), l]);
-    }
-    for (const [providerId, lines] of groups) {
-      const r = await call("/api/visits", "POST", {
-        patientName: draft.patient.trim(),
-        providerId: providerId || null,
-        paymentMethod: draft.payment,
-        lines: lines.map((l) => (l.item.kind === "pendiente"
-            ? { pendingName: l.item.name, pendingPrice: l.item.price || null, quantity: l.qty }
-            : { itemId: l.item.id, quantity: l.qty })),
-      });
-      if (!r.ok) {
-        setBusy(false);
-        refreshSales();
-        return showToast(r.error ?? "No se pudo anotar.");
-      }
-    }
+    const r = await call("/api/visits", "POST", {
+      patientName: d.patient.trim(),
+      providerId: d.sellerId,
+      paymentMethod: d.payment,
+      lines: d.lines.map((l) =>
+        l.item.kind === "pendiente" ? { pendingName: l.item.name, pendingPrice: l.item.price || null, quantity: l.qty } : { itemId: l.item.id, quantity: l.qty },
+      ),
+    });
     setBusy(false);
-    const nPending = draft.lines.filter((l) => l.item.kind === "pendiente").length;
-    setSaved(
-      [draft.patient.trim(), draft.lines.map((l) => `${l.qty > 1 ? `${l.qty} ` : ""}${l.item.name}`).join(", ")].filter(Boolean).join(" · ") +
-        (nPending ? `. ${nPending === 1 ? "Lo que no estaba cargado le llega" : "Lo que no estaba cargado les llega"} al admin para ponerle precio.` : ""),
-    );
+    if (!r.ok) {
+      refreshSales();
+      return showToast(r.error ?? "No se pudo anotar.");
+    }
+    // ¡Registrado! → animación y de vuelta al inicio, listo para la próxima.
+    setFlash(summaryOf(d));
+    setLastVisit(String(r.visitId ?? ""));
     setText("");
-    setStep("done");
+    setPickSeller(null);
+    setPickPay(null);
+    setChosen({});
+    setUnsureIs(null);
+    setMode("idle");
     refreshSales();
     refreshCatalog();
+    setTimeout(() => setFlash(null), 1400);
+  }
+
+  function go() {
+    if (preview && canSave && !busy) save(preview);
   }
 
   const loading = !catalog || !sellersData;
+  const cash = preview?.lines.reduce((n, l) => n + lineCash(l), 0) ?? 0;
+  const card = preview?.lines.reduce((n, l) => n + lineCard(l), 0) ?? 0;
 
   return (
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-7 px-5 pb-20 pt-10 text-[15px] leading-[1.45] sm:px-6 sm:pt-14">
       <Toast msg={toast} />
+      {flash !== null && <Registered summary={flash} onClose={() => setFlash(null)} />}
 
-      {step === "idle" && (
-        <div className="flex flex-col gap-7">
+      {mode === "idle" && (
+        <div className="flex flex-col gap-6">
           <h1 className="font-display text-[23px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[28px]">
             {greeting()}, {firstName(actor.name)}
           </h1>
-          <div className="flex flex-col gap-3.5">
+          <div className="flex flex-col gap-3">
             <label htmlFor="anotar" className="text-[17px] font-semibold">
               ¿Qué querés anotar?
             </label>
             <textarea
               id="anotar"
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                if (!e.target.value.trim()) {
+                  setChosen({});
+                  setUnsureIs(null);
+                  setPickSeller(null);
+                  setPickPay(null);
+                }
+              }}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) interpret();
+                // Enter guarda (o abre la revisión); Shift+Enter, otro renglón.
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  go();
+                }
               }}
               placeholder="Ej: María López, la atendió Laura, atención y peeling"
-              className="min-h-[110px] w-full resize-none rounded-[20px] border-2 border-neutral-800 bg-surface p-5 text-[16px] leading-[1.4] text-fg outline-none transition-colors placeholder:text-neutral-600 focus:border-accent-600 sm:text-[17px]"
+              className="min-h-[96px] w-full resize-none rounded-[20px] border-2 border-neutral-800 bg-surface p-5 text-[16px] leading-[1.4] text-fg outline-none transition-colors placeholder:text-neutral-600 focus:border-accent-600 sm:text-[17px]"
             />
-            <p className="text-[13.5px] text-neutral-400">Sirve para pacientes y para ventas. Ej: «Gabriela vendió 2 cremas con tarjeta».</p>
-            <button onClick={interpret} disabled={!text.trim() || loading} className={CTA}>
-              Anotar
+
+            {preview ? (
+              <div className="flex animate-cl-in flex-col gap-3 rounded-[20px] border-2 border-neutral-800 px-5 py-4">
+                {preview.patient && !preview.patientUnsure && (
+                  <p className="text-[15px]">
+                    <span className="text-neutral-400">Paciente </span>
+                    <b>{preview.patient}</b>
+                  </p>
+                )}
+                {preview.patientUnsure && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[14px]">
+                      <b>«{preview.patient}»</b> es…
+                    </span>
+                    <button onClick={() => setUnsureIs("patient")} className={CHIP}>
+                      la paciente
+                    </button>
+                    <button onClick={() => setUnsureIs("item")} className={CHIP}>
+                      lo que se hizo o vendió
+                    </button>
+                  </div>
+                )}
+                {(preview.lines.length > 0 || preview.unresolved.length > 0) && (
+                  <ul className="flex flex-col gap-1">
+                    {preview.lines.map((l, i) => (
+                      <li key={i} className="flex items-baseline justify-between gap-3 text-[15px]">
+                        <span>
+                          {l.qty > 1 && <span className="tabular-nums text-neutral-400">{l.qty} × </span>}
+                          <b className="font-semibold">{l.item.name}</b>
+                          {l.item.kind === "pendiente" && <span className="text-[13px] text-neutral-400"> · no está cargado, va como pendiente</span>}
+                          {!allowedFor(l.item, preview.sellerId) && <span className="text-[13px] text-accent"> · no es de esa médica</span>}
+                          {l.item.kind === "producto" && l.qty > (l.item.available ?? 0) && (
+                            <span className="text-[13px] text-neutral-400"> · sin stock cargado, se avisa al admin</span>
+                          )}
+                        </span>
+                        <span className="whitespace-nowrap tabular-nums text-neutral-300">
+                          {l.item.kind === "pendiente" ? "—" : money(preview.payment === "tarjeta" ? lineCard(l) : lineCash(l))}
+                        </span>
+                      </li>
+                    ))}
+                    {preview.unresolved.map((u, k) => (
+                      <li key={`u${k}`} className="flex flex-wrap items-center gap-2 py-1">
+                        <span className="text-[14px]">«{u.text}»: ¿cuál?</span>
+                        {(u.candidates.some((c) => allowedFor(c, preview.sellerId)) ? u.candidates.filter((c) => allowedFor(c, preview.sellerId)) : u.candidates).map((c) => (
+                          <button key={c.id} onClick={() => setChosen({ ...chosen, [u.text]: c.id })} className={CHIP}>
+                            {c.name}
+                          </button>
+                        ))}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {nothing && <p className="text-[14px] text-neutral-400">Falta qué se hizo o se vendió.</p>}
+
+                {/* Quién: lo dice el texto, se deduce o se toca acá */}
+                {!isMedico &&
+                  (preview.sellerId && !pickSeller && !notHers ? (
+                    <p className="text-[14px] text-neutral-400">
+                      Atiende <span className="text-fg">{sellers.find((x) => x.id === preview.sellerId)?.name}</span>
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`text-[14px] ${notHers ? "text-accent" : "text-neutral-400"}`}>
+                        {notHers ? "Eso no lo hace la médica nombrada. ¿Quién la atendió?" : "¿Quién la atendió?"}
+                      </span>
+                      {(possible?.length ? possible : sellers).map((x) => (
+                        <button key={x.id} onClick={() => setPickSeller(pickSeller === x.id ? null : x.id)} className={pickSeller === x.id ? CHIP_ON : CHIP}>
+                          {x.name}
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+
+                {/* Pago: opcional */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {(
+                    [
+                      ["efectivo", "Efectivo o transf."],
+                      ["tarjeta", "Tarjeta"],
+                    ] as const
+                  ).map(([m, label]) => (
+                    <button
+                      key={m}
+                      aria-pressed={preview.payment === m}
+                      onClick={() => setPickPay(pickPay === m ? null : m)}
+                      className={preview.payment === m ? CHIP_ON : CHIP}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  {!preview.payment && <span className="text-[13px] text-neutral-500">pago opcional</span>}
+                </div>
+              </div>
+            ) : (
+              <p className="text-[13.5px] text-neutral-400">Sirve para pacientes y para ventas. Ej: «Gabriela vendió 2 cremas con tarjeta».</p>
+            )}
+
+            <button onClick={go} disabled={!canSave || busy || loading} className={CTA}>
+              {busy
+                ? "Guardando…"
+                : !preview
+                  ? "Guardar"
+                  : nothing
+                    ? "Falta qué se hizo"
+                    : pendingQ
+                      ? "Tocá la opción correcta"
+                      : missingSeller || notHers
+                        ? "Elegí quién la atendió"
+                        : `Guardar · ${money(preview.payment === "tarjeta" ? card : cash)}`}
             </button>
-            <button onClick={startManual} disabled={loading} className={`${GHOST} min-h-[44px] gap-3`}>
-              <SquaresFourIcon size={24} /> Prefiero elegirlo de una lista
+            {preview && !nothing && (
+              <button
+                onClick={() => {
+                  setDraft(preview);
+                  setMode("confirm");
+                }}
+                className="-mt-1 self-center py-1 text-[13.5px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline"
+              >
+                Editar detalles (cantidades, precio de lo no cargado)
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setDraft(emptyDraft("manual", fixedSeller));
+                setMode("manual");
+              }}
+              disabled={loading}
+              className={`${GHOST} min-h-[44px] gap-3`}
+            >
+              <SquaresFourIcon size={22} /> Prefiero elegirlo de una lista
             </button>
           </div>
         </div>
       )}
 
-      {(step === "pick" || step === "who" || step === "pay") && (
-        <div className="flex items-center justify-between">
-          <button onClick={back} className="flex min-h-12 items-center gap-2 rounded-xl py-2.5 pl-1.5 pr-3.5 text-[15px] font-semibold hover:bg-neutral-900">
-            <CaretLeftIcon size={22} weight="bold" /> Volver
-          </button>
-          <span className="text-[14px] text-neutral-400">
-            Paso {stepNum} de {manualSteps.length}
-          </span>
-        </div>
-      )}
-
-      {step === "pick" && (
-        <PickItems
+      {mode === "manual" && (
+        <ManualView
           items={items}
-          draft={draft}
-          setDraft={setDraft}
-          proName={sellers.find((x) => x.id === draft.sellerId)?.name ?? ""}
-          onNext={() => setStep("pay")}
-        />
-      )}
-
-      {step === "who" && (
-        <section className="flex flex-col gap-3.5">
-          <h1 className="mb-2 text-[23px] font-bold leading-[1.2] sm:text-[24px]">¿Quién la atendió?</h1>
-          {sellers.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => {
-                setDraft({ ...draft, sellerId: s.id });
-                setStep("pick");
-              }}
-              className={OPTION}
-            >
-              <span className="flex h-[44px] w-[44px] flex-none items-center justify-center rounded-full bg-neutral-900 text-[14px] font-bold">{initials(s.name)}</span>
-              <span className="text-[17px] font-semibold sm:text-[17px]">{s.name}</span>
-            </button>
-          ))}
-          {!sellers.length && <p className="text-neutral-400">No hay médicas activas: el admin las da de alta en Equipo.</p>}
-        </section>
-      )}
-
-      {step === "pay" && (
-        <section className="flex flex-col gap-3.5">
-          <h1 className="mb-2 text-[23px] font-bold leading-[1.2] sm:text-[24px]">¿Cómo pagó?</h1>
-          {(
-            [
-              ["efectivo", "Efectivo o transferencia", <MoneyIcon key="m" size={32} />],
-              ["tarjeta", "Tarjeta", <CreditCardIcon key="c" size={32} />],
-            ] as const
-          ).map(([m, label, icon]) => (
-            <button
-              key={m}
-              onClick={() => {
-                setDraft({ ...draft, payment: m });
-                setStep("confirm");
-              }}
-              className={OPTION}
-            >
-              {icon}
-              <span className="text-[17px] font-semibold sm:text-[17px]">{label}</span>
-            </button>
-          ))}
-          <button
-            onClick={() => {
-              setDraft({ ...draft, payment: null });
-              setStep("confirm");
-            }}
-            className={`${GHOST} min-h-[44px]`}
-          >
-            Todavía no sé
-          </button>
-        </section>
-      )}
-
-      {step === "confirm" && (
-        <Confirm
-          items={items}
-          draft={draft}
-          setDraft={setDraft}
           sellers={sellers}
           isMedico={isMedico}
+          fixedSeller={fixedSeller}
+          draft={draft}
+          setDraft={setDraft}
           busy={busy}
-          onSave={save}
-          onEdit={() => setStep(draft.from === "manual" ? manualSteps[0] : "idle")}
+          onBack={() => setMode("idle")}
+          onSave={() => save(draft)}
         />
       )}
 
-      {step === "done" && (
-        <div className="flex animate-cl-in flex-col items-center gap-4 py-6 text-center">
-          <span className="flex h-[56px] w-[56px] items-center justify-center rounded-full bg-success text-on-success">
-            <CheckIcon size={36} weight="bold" />
-          </span>
-          <p className="text-[21px] font-bold">¡Listo, anotado!</p>
-          {saved && <p className="max-w-[520px] text-[15px] text-neutral-300">{saved}</p>}
-          <button onClick={() => setStep("idle")} className={`${CTA} mt-2 px-9`}>
-            Anotar otra
-          </button>
-        </div>
+      {mode === "confirm" && (
+        <Confirm items={items} draft={draft} setDraft={setDraft} sellers={sellers} isMedico={isMedico} busy={busy} onSave={() => save(draft)} onEdit={() => setMode("idle")} />
       )}
 
-      {(step === "idle" || step === "done") && <Today sales={sales?.sales ?? null} onOpenClose={onOpenClose} />}
+      {mode === "idle" && <Today sales={sales?.sales ?? null} highlight={lastVisit} onOpenClose={onOpenClose} />}
     </div>
   );
 }
 
+/** «¡Registrado!»: tilde animado y vuelve solo al inicio. */
+function Registered({ summary, onClose }: { summary: string; onClose: () => void }) {
+  return (
+    <button
+      onClick={onClose}
+      aria-live="polite"
+      className="cl-fade-in fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-bg/85 px-6 text-center backdrop-blur-sm"
+    >
+      <span className="cl-pop flex h-24 w-24 items-center justify-center rounded-full bg-success text-on-success shadow-lg">
+        <CheckIcon size={52} weight="bold" />
+      </span>
+      <span className="text-[24px] font-bold">¡Registrado!</span>
+      {summary && <span className="max-w-[480px] text-[15px] text-neutral-300">{summary}</span>}
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------------------
-// Paso «¿Qué se hizo o se vendió?»: se puede marcar más de uno
+// Modo lista: una sola pantalla (quién → qué → pago opcional → Guardar)
 // ---------------------------------------------------------------------------
 
-function PickItems({
+function ManualView({
   items,
+  sellers,
+  isMedico,
+  fixedSeller,
   draft,
   setDraft,
-  proName,
-  onNext,
+  busy,
+  onBack,
+  onSave,
 }: {
   items: Item[];
+  sellers: Seller[];
+  isMedico: boolean;
+  fixedSeller: string | null;
   draft: Draft;
   setDraft: (d: Draft) => void;
-  proName: string;
-  onNext: () => void;
+  busy: boolean;
+  onBack: () => void;
+  onSave: () => void;
 }) {
   const picked = new Set(draft.lines.map((l) => l.item.id));
   const toggle = (it: Item) =>
@@ -358,73 +455,130 @@ function PickItems({
       ...draft,
       lines: picked.has(it.id) ? draft.lines.filter((l) => l.item.id !== it.id) : [...draft.lines, { item: it, qty: 1, sellerId: null }],
     });
-  // Solo lo que hace / vende la profesional elegida.
-  const mine = items.filter((i) => allowedFor(i, draft.sellerId));
+  const setQty = (id: string, qty: number) =>
+    setDraft({ ...draft, lines: qty <= 0 ? draft.lines.filter((l) => l.item.id !== id) : draft.lines.map((l) => (l.item.id === id ? { ...l, qty } : l)) });
+  const chooseSeller = (id: string) =>
+    // Al cambiar de médica se sacan los ítems que no son suyos.
+    setDraft({ ...draft, sellerId: id, lines: draft.lines.filter((l) => allowedFor(l.item, id)) });
+
+  const mine = draft.sellerId ? items.filter((i) => allowedFor(i, draft.sellerId)) : items;
   const groups = [
     { title: "Prácticas", list: mine.filter((i) => i.kind === "practica") },
     { title: "Productos", list: mine.filter((i) => i.kind === "producto") },
   ].filter((g) => g.list.length);
-  const n = draft.lines.length;
+  const cash = draft.lines.reduce((n, l) => n + lineCash(l), 0);
+  const card = draft.lines.reduce((n, l) => n + lineCard(l), 0);
+  const missingSeller = !isMedico && !draft.sellerId;
 
   return (
-    <section className="flex flex-col gap-5">
-      <div>
-        {(draft.patient || proName) && <p className="mb-1 text-[15px] text-neutral-300">{[draft.patient, proName].filter(Boolean).join(" · ")}</p>}
-        <h1 className="text-[23px] font-bold leading-[1.2] sm:text-[24px]">¿Qué se hizo o se vendió?</h1>
-        <p className="mt-1 text-[14px] text-neutral-400">Podés marcar más de uno.</p>
+    <section className="flex flex-col gap-6">
+      <div className="flex items-center justify-between">
+        <button onClick={onBack} className="flex min-h-11 items-center gap-2 rounded-xl py-2 pl-1.5 pr-3.5 text-[15px] font-semibold hover:bg-neutral-900">
+          <CaretLeftIcon size={20} weight="bold" /> Volver
+        </button>
+        <input
+          value={draft.patient}
+          onChange={(e) => setDraft({ ...draft, patient: e.target.value })}
+          placeholder="Paciente (opcional)"
+          aria-label="Paciente (opcional)"
+          className="w-[220px] rounded-xl border-2 border-neutral-800 bg-surface px-3 py-2 text-[15px] outline-none focus:border-accent-600"
+        />
       </div>
-      {groups.map((g) => (
-        <div key={g.title} className="flex flex-col gap-3">
-          {groups.length > 1 && <h2 className="text-[13px] font-bold uppercase tracking-[.08em] text-neutral-500">{g.title}</h2>}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {g.list.map((it) => {
-              const on = picked.has(it.id);
-              const out = it.kind === "producto" && (it.available ?? 0) <= 0;
-              return (
-                <button
-                  key={it.id}
-                  onClick={() => toggle(it)}
-                  aria-pressed={on}
-                  className={`flex min-h-[60px] items-center justify-between gap-3 rounded-[18px] border-2 px-5 py-3.5 text-left transition-colors ${
-                    on ? "border-fg bg-fg text-bg" : "border-neutral-800 bg-surface hover:border-accent"
-                  }`}
-                >
-                  <span className="flex flex-col">
-                    <span className="text-[16px] font-semibold leading-tight">{it.name}</span>
-                    <span className={`text-[13.5px] ${on ? "opacity-70" : "text-neutral-400"}`}>{money(it.price)}
-                      {out && " · sin stock cargado"}</span>
-                  </span>
-                  {on && <CheckIcon size={26} weight="bold" className="flex-none" />}
-                </button>
-              );
-            })}
+
+      {!fixedSeller && (
+        <div className="flex flex-col gap-2.5">
+          <h2 className="text-[17px] font-bold">¿Quién la atendió?</h2>
+          <div className="flex flex-wrap gap-2">
+            {sellers.map((x) => (
+              <button key={x.id} onClick={() => chooseSeller(x.id)} aria-pressed={draft.sellerId === x.id} className={`${draft.sellerId === x.id ? CHIP_ON : CHIP} !px-5 !py-2.5 !text-[15px]`}>
+                {x.name}
+              </button>
+            ))}
           </div>
         </div>
-      ))}
-      {!groups.length && (
-        <p className="text-neutral-400">
-          {proName ? `${proName} no tiene prácticas ni productos asignados.` : "Todavía no hay prácticas ni productos con precio."} Los carga el admin en Stock.
-        </p>
       )}
-      {draft.lines
-        .filter((l) => l.item.kind === "pendiente")
-        .map((l) => (
-          <div key={l.item.id} className="flex items-center gap-3 rounded-[18px] border-2 border-dashed border-accent-700 px-5 py-3">
-            <span className="min-w-0 flex-1">
-              <span className="block text-[16px] font-semibold">{l.item.name}</span>
-              <span className="text-[13px] text-neutral-400">
-                {l.item.price ? `Sin cargar · se cobró ${money(l.item.price)}` : "Sin cargar · el precio lo podés poner al confirmar"}
-              </span>
-            </span>
-            <button aria-label={`Quitar ${l.item.name}`} onClick={() => toggle(l.item)} className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-neutral-900">
-              <XIcon size={18} />
-            </button>
+
+      <div className={`flex flex-col gap-4 transition-opacity ${missingSeller ? "pointer-events-none opacity-40" : ""}`} aria-disabled={missingSeller}>
+        <h2 className="text-[17px] font-bold">¿Qué se hizo o se vendió?</h2>
+        {groups.map((g) => (
+          <div key={g.title} className="flex flex-col gap-2.5">
+            {groups.length > 1 && <h3 className="text-[12px] font-bold uppercase tracking-[.08em] text-neutral-500">{g.title}</h3>}
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              {g.list.map((it) => {
+                const line = draft.lines.find((l) => l.item.id === it.id);
+                const out = it.kind === "producto" && (it.available ?? 0) <= 0;
+                return (
+                  <div
+                    key={it.id}
+                    className={`flex min-h-[56px] items-center gap-2 rounded-[16px] border-2 pl-4 pr-2 transition-colors ${
+                      line ? "border-fg bg-fg text-bg" : "border-neutral-800 bg-surface hover:border-accent"
+                    }`}
+                  >
+                    <button onClick={() => toggle(it)} aria-pressed={!!line} className="flex min-w-0 flex-1 flex-col py-2.5 text-left">
+                      <span className="text-[15px] font-semibold leading-tight">{it.name}</span>
+                      <span className={`text-[13px] ${line ? "opacity-70" : "text-neutral-400"}`}>
+                        {money(it.price)}
+                        {out && " · sin stock cargado"}
+                      </span>
+                    </button>
+                    {line && (
+                      <span className="flex items-center gap-1">
+                        <button onClick={() => setQty(it.id, line.qty - 1)} aria-label="Uno menos" className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-black/10">
+                          <MinusIcon size={16} weight="bold" />
+                        </button>
+                        <span className="min-w-5 text-center text-[16px] font-bold tabular-nums">{line.qty}</span>
+                        <button onClick={() => setQty(it.id, line.qty + 1)} aria-label="Uno más" className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-black/10">
+                          <PlusIcon size={16} weight="bold" />
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         ))}
-      <AddPending onAdd={(name, price) => !picked.has(pendingItem(name).id) && toggle(pendingItem(name, price))} />
-      <button onClick={onNext} disabled={!n} className={`${CTA} mt-2`}>
-        {n ? `Seguir (${n})` : "Marcá al menos uno"}
-      </button>
+        {!groups.length && <p className="text-neutral-400">No hay prácticas ni productos {draft.sellerId ? "asignados a esa médica" : "con precio"}. Los carga el admin en Stock.</p>}
+        {draft.lines
+          .filter((l) => l.item.kind === "pendiente")
+          .map((l) => (
+            <div key={l.item.id} className="flex items-center gap-3 rounded-[16px] border-2 border-dashed border-accent-700 px-4 py-2.5">
+              <span className="min-w-0 flex-1">
+                <span className="block text-[15px] font-semibold">{l.item.name}</span>
+                <span className="text-[13px] text-neutral-400">{l.item.price ? `Sin cargar · ${money(l.item.price)}` : "Sin cargar · el admin le pone precio"}</span>
+              </span>
+              <button aria-label={`Quitar ${l.item.name}`} onClick={() => toggle(l.item)} className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-neutral-900">
+                <XIcon size={16} />
+              </button>
+            </div>
+          ))}
+        <AddPending onAdd={(name, price) => !picked.has(pendingItem(name).id) && toggle(pendingItem(name, price))} />
+      </div>
+
+      <div className="sticky bottom-0 -mx-5 flex flex-col gap-3 border-t border-neutral-900 bg-bg/95 px-5 pb-4 pt-3 backdrop-blur sm:-mx-6 sm:px-6">
+        <div className="flex flex-wrap items-center gap-2">
+          {(
+            [
+              ["efectivo", "Efectivo o transf."],
+              ["tarjeta", "Tarjeta"],
+            ] as const
+          ).map(([m, label]) => (
+            <button key={m} aria-pressed={draft.payment === m} onClick={() => setDraft({ ...draft, payment: draft.payment === m ? null : m })} className={draft.payment === m ? CHIP_ON : CHIP}>
+              {label}
+            </button>
+          ))}
+          {!draft.payment && <span className="text-[13px] text-neutral-500">pago opcional</span>}
+        </div>
+        <button onClick={onSave} disabled={busy || missingSeller || !draft.lines.length} className={CTA}>
+          {busy
+            ? "Guardando…"
+            : missingSeller
+              ? "Elegí quién la atendió"
+              : !draft.lines.length
+                ? "Marcá lo que se hizo o vendió"
+                : `Guardar · ${money(draft.payment === "tarjeta" ? card : cash)}`}
+        </button>
+      </div>
     </section>
   );
 }
@@ -772,7 +926,7 @@ function Confirm({
 
 type TodaySale = SaleRow;
 
-function Today({ sales, onOpenClose }: { sales: TodaySale[] | null; onOpenClose: () => void }) {
+function Today({ sales, highlight, onOpenClose }: { sales: TodaySale[] | null; highlight: string | null; onOpenClose: () => void }) {
   const rows = useMemo(() => {
     const paid = (sales ?? []).filter((s) => s.status === "paid");
     const byVisit = new Map<string, TodaySale[]>();
@@ -815,7 +969,10 @@ function Today({ sales, onOpenClose }: { sales: TodaySale[] | null; onOpenClose:
         <span className="whitespace-nowrap text-[17px] font-bold tabular-nums">{money(total)}</span>
       </div>
       {rows.map((r) => (
-        <div key={r.key} className="flex justify-between gap-4 border-b border-neutral-900 py-3.5 text-[14px] sm:text-[15px]">
+        <div
+          key={r.key}
+          className={`-mx-2 flex justify-between gap-4 rounded-lg border-b border-neutral-900 px-2 py-3.5 text-[14px] sm:text-[15px] ${r.key === highlight ? "cl-flash-row" : ""}`}
+        >
           <span className="min-w-0">
             <span className="mr-3.5 tabular-nums text-neutral-500">{r.time}</span>
             {r.label}
@@ -835,8 +992,6 @@ const CTA =
   "flex min-h-[56px] items-center justify-center rounded-[18px] bg-accent px-6 text-[16px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:cursor-not-allowed disabled:bg-neutral-900 disabled:text-neutral-500 sm:text-[17px]";
 const GHOST =
   "flex items-center justify-center rounded-[18px] border-2 border-neutral-800 px-5 text-[15px] font-semibold text-fg transition-colors hover:bg-neutral-900";
-const OPTION =
-  "flex min-h-[64px] items-center gap-[18px] rounded-[18px] border-2 border-neutral-800 bg-surface px-5 py-3.5 text-left text-fg transition-colors hover:border-accent";
 const ROUND =
   "flex h-[44px] w-[44px] items-center justify-center rounded-full border-2 border-neutral-700 text-fg transition-colors hover:bg-neutral-900 disabled:opacity-30";
 const CHIP = "rounded-full border-2 border-neutral-700 px-4 py-2 text-[14px] font-semibold transition-colors hover:border-accent";
