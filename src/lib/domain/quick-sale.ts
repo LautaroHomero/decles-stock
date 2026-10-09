@@ -38,12 +38,12 @@ export interface QuickSeller {
   aliases?: string[];
 }
 
-export type QuickPayment = "efectivo" | "tarjeta";
+export type QuickPayment = "efectivo" | "transferencia" | "tarjeta";
 
 const PAYMENT_WORDS: Record<string, QuickPayment> = {
   tarjeta: "tarjeta", tarjetas: "tarjeta", credito: "tarjeta", debito: "tarjeta", posnet: "tarjeta", visa: "tarjeta", master: "tarjeta",
   efectivo: "efectivo", efvo: "efectivo", efe: "efectivo", cash: "efectivo", contado: "efectivo",
-  transferencia: "efectivo", transf: "efectivo", transfer: "efectivo", mp: "efectivo", mercadopago: "efectivo",
+  transferencia: "transferencia", transf: "transferencia", transfer: "transferencia", trans: "transferencia", mp: "transferencia", mercadopago: "transferencia",
 };
 
 /** Medio de pago de una palabra, aunque esté mal escrita («tarjta», «efectvo», «trasferencia»). */
@@ -466,7 +466,7 @@ export function suggest<P extends QuickProduct, S extends QuickSeller = QuickSel
 
   // Pago
   for (const [word, phrase] of PAYMENT_TARGETS) {
-    if (word.startsWith(last.n) || paymentOf(last.n) === (word === "tarjeta" ? "tarjeta" : "efectivo")) {
+    if (word.startsWith(last.n) || paymentOf(last.n) === word) {
       const prev = toks[toks.length - 2]?.n;
       const value = prev === "con" || prev === "en" || prev === "por" ? word : phrase;
       out.push({ label: phrase, kind: "payment", text: replaceFrom(last.at, value, " ") });

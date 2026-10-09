@@ -239,10 +239,10 @@ export async function recordSale(
   if (!quantity) return fail("La cantidad tiene que ser un entero mayor a 0.");
   const item = await getPriceItem(ctx.orgId, v.itemId);
   if (!item || !item.active) return fail("Ese ítem no está en la lista de precios.", 404);
-  const rawMethod = v.paymentMethod ? (v.paymentMethod === "transferencia" ? "efectivo" : v.paymentMethod) : null;
-  if (rawMethod && rawMethod !== "efectivo" && rawMethod !== "tarjeta")
+  const rawMethod = v.paymentMethod || null;
+  if (rawMethod && rawMethod !== "efectivo" && rawMethod !== "transferencia" && rawMethod !== "tarjeta")
     return fail("El medio de pago tiene que ser efectivo, transferencia o tarjeta.");
-  const paymentMethod = rawMethod as "efectivo" | "tarjeta" | null;
+  const paymentMethod = rawMethod as "efectivo" | "transferencia" | "tarjeta" | null;
   const preferExpiry = parseExpiry(v.expiresOn);
   if (preferExpiry === undefined) return fail("No entiendo la fecha de vencimiento. Usá DD/MM/AAAA o MM/AAAA.");
   // Un médico solo vende lo general o lo propio.
@@ -361,8 +361,8 @@ export async function commissions(actor: Actor, from?: string, to?: string): Pro
 export async function completeSalePayment(actor: Actor, saleId: string, method: string): Promise<Result<object>> {
   const ctx = staffCtx(actor, "manual");
   if (!ctx) return fail("No autorizado.", 403);
-  const m = method === "transferencia" ? "efectivo" : method;
-  if (m !== "efectivo" && m !== "tarjeta") return fail("El medio de pago tiene que ser efectivo, transferencia o tarjeta.");
+  const m = method;
+  if (m !== "efectivo" && m !== "transferencia" && m !== "tarjeta") return fail("El medio de pago tiene que ser efectivo, transferencia o tarjeta.");
   const sale = await getSale(ctx.orgId, saleId);
   if (!sale) return fail("Venta no encontrada.", 404);
   if (actor.role === "medico" && sale.providerId !== actor.activeOrg?.providerId) return fail("Esa venta no es tuya.", 403);

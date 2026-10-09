@@ -150,6 +150,8 @@ export interface OrgMember {
   mustChangePassword: boolean;
   providerId: string | null;
   commissionPct: number;
+  /** Sección de la planilla diaria (Decles). */
+  area: ProviderArea;
   /** Apodos para la hoja de ventas. */
   aliases: string[];
   /** Para recuperar la contraseña ('' = sin cargar). */
@@ -161,7 +163,7 @@ export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
   const org = await getOrganization(orgId);
   const adminIds = new Set(org?.adminIds ?? []);
   const rows = (await getSql()`
-    SELECT u.id AS user_id, u.name, u.username, u.email, u.active, u.must_change_password, u.aliases, m.role, m.provider_id, p.commission_pct
+    SELECT u.id AS user_id, u.name, u.username, u.email, u.active, u.must_change_password, u.aliases, m.role, m.provider_id, p.commission_pct, p.area
     FROM memberships m
     JOIN users u ON u.id = m.user_id
     LEFT JOIN providers p ON p.id = m.provider_id
@@ -177,6 +179,7 @@ export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
     mustChangePassword: Boolean(r.must_change_password),
     providerId: (r.provider_id as string) ?? null,
     commissionPct: Number(r.commission_pct ?? 0),
+    area: ((r.area as ProviderArea) ?? "medicos"),
     aliases: ((r.aliases as string) ?? "").split(",").filter(Boolean),
     email: (r.email as string) ?? "",
   }));
@@ -382,6 +385,13 @@ export async function createProvider(orgId: string, name: string, specialty: str
 
 export async function setProviderCommission(providerId: string, pct: number): Promise<void> {
   await getSql()`UPDATE providers SET commission_pct = ${pct} WHERE id = ${providerId}`;
+}
+
+export const PROVIDER_AREAS = ["medicos", "kinesiologia", "auxiliares", "externos"] as const;
+export type ProviderArea = (typeof PROVIDER_AREAS)[number];
+
+export async function setProviderArea(providerId: string, area: ProviderArea): Promise<void> {
+  await getSql()`UPDATE providers SET area = ${area} WHERE id = ${providerId}`;
 }
 
 export async function setProviderActive(providerId: string, active: boolean): Promise<void> {

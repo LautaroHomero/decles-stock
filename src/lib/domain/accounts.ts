@@ -30,6 +30,9 @@ import {
   setUserEmail,
   type Account,
   type OrgMember,
+  setProviderArea,
+  PROVIDER_AREAS,
+  type ProviderArea,
 } from "@/lib/db/repo";
 import { getSql } from "@/lib/db/connection";
 import {
@@ -309,15 +312,17 @@ export async function listTeam(actor: Actor): Promise<Result<{ members: OrgMembe
 }
 
 /** Médicas activas del consultorio (para elegir quién vendió). La médica se ve solo a sí misma. */
-export async function listSellers(actor: Actor): Promise<Result<{ sellers: { providerId: string; name: string; aliases: string[] }[] }>> {
+export async function listSellers(actor: Actor): Promise<Result<{ sellers: { providerId: string; name: string; aliases: string[]; area: ProviderArea }[] }>> {
   if (!actor.activeOrg) return fail("No autorizado.", 403);
   const members = await listOrgMembers(actor.activeOrg.id);
   const sellers = members
     .filter((m) => m.active && m.role === "medico" && m.providerId)
     .filter((m) => actor.role !== "medico" || m.userId === actor.userId)
-    .map((m) => ({ providerId: m.providerId!, name: m.name, aliases: m.aliases }));
+    .map((m) => ({ providerId: m.providerId!, name: m.name, aliases: m.aliases, area: m.area }));
   return { ok: true, sellers };
 }
+
+const isArea = (a: unknown): a is ProviderArea => typeof a === "string" && (PROVIDER_AREAS as readonly string[]).includes(a);
 
 async function member(orgId: string, userId: string): Promise<OrgMember | undefined> {
   return (await listOrgMembers(orgId)).find((m) => m.userId === userId);
@@ -325,7 +330,7 @@ async function member(orgId: string, userId: string): Promise<OrgMember | undefi
 
 export async function createMember(
   actor: Actor,
-  v: { name: string; username: string; role: StaffRole; isAdmin?: boolean; commissionPct?: number; aliases?: string | string[]; email?: string },
+  v: { name: string; username: string; role: StaffRole; isAdmin?: boolean; commissionPct?: number; aliases?: string | string[]; email?: string; area?: string },
 ): Promise<Result<{ userId: string; username: string; temporaryPassword: string }>> {
   const g = adminOrg(actor);
   if (!g.ok) return g;
@@ -349,6 +354,7 @@ export async function createMember(
   if (v.role === "medico") {
     providerId = (await createProvider(g.orgId, name, "Médica/o")).id;
     await setProviderCommission(providerId, pct);
+    if (isArea(v.area)) await setProviderArea(providerId, v.area);
   }
   await addMembership({ userId: user.id, organizationId: g.orgId, role: v.role, providerId });
   if (v.isAdmin) await setOrgAdmin(g.orgId, user.id, true);
@@ -365,7 +371,7 @@ async function activeAdminCount(orgId: string): Promise<number> {
 export async function updateMember(
   actor: Actor,
   userId: string,
-  v: { name?: string; isAdmin?: boolean; commissionPct?: number; active?: boolean; aliases?: string | string[]; email?: string },
+  v: { name?: string; isAdmin?: boolean; commissionPct?: number; active?: boolean; aliases?: string | string[]; email?: string; area?: string },
 ): Promise<Result<object>> {
   const g = adminOrg(actor);
   if (!g.ok) return g;
@@ -404,6 +410,10 @@ export async function updateMember(
     if (m.providerId) await renameProvider(m.providerId, name);
   }
   if (v.commissionPct !== undefined && m.providerId) await setProviderCommission(m.providerId, v.commissionPct);
+  if (v.area !== undefined) {
+    if (!m.providerId || !isArea(v.area)) return fail("Área inválida.");
+    await setProviderArea(m.providerId, v.area);
+  }
   if (v.isAdmin !== undefined && v.isAdmin !== m.isAdmin) await setOrgAdmin(g.orgId, userId, v.isAdmin);
   if (v.active !== undefined && v.active !== m.active) {
     await setUserActive(userId, v.active);

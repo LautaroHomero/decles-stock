@@ -22,10 +22,11 @@ interface DayClose {
   practices: number;
   productSales: number;
   total: number;
-  byPayment: { efectivo: number; tarjeta: number; pending: number; pendingCard: number };
+  byPayment: { efectivo: number; transferencia: number; tarjeta: number; pending: number; pendingCard: number };
   providers: CloseProvider[];
   expenses: { id: string; concept: string; amount: number; createdByName: string }[];
   expensesTotal: number;
+  incomesTotal: number;
   net: number;
 }
 
@@ -87,7 +88,8 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
           {pay && c.total > 0 && (
             <p className="-mt-3 text-[14px] text-neutral-400">
               {[
-                pay.efectivo ? `Efectivo o transf. ${money(pay.efectivo)}` : null,
+                pay.efectivo ? `Efectivo ${money(pay.efectivo)}` : null,
+                pay.transferencia ? `Transferencia ${money(pay.transferencia)}` : null,
                 pay.tarjeta ? `Tarjeta ${money(pay.tarjeta)}` : null,
                 pay.pending
                   ? `Sin medio cargado ${money(pay.pending)}${pay.pendingCard !== pay.pending ? ` (${money(pay.pendingCard)} si fue con tarjeta)` : ""}`
@@ -98,7 +100,7 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
             </p>
           )}
 
-          {c.expenses.length > 0 && (
+          {(c.expenses.length > 0 || c.incomesTotal > 0) && (
             <section className="flex flex-col gap-2">
               <div className="flex items-baseline justify-between gap-3">
                 <h2 className="text-[16px] font-medium">Egresos</h2>
@@ -115,7 +117,7 @@ export function CierreView({ onOpenSales }: { onOpenSales: () => void }) {
                 ))}
               </ul>
               <p className="flex justify-between gap-3 border-t border-neutral-800 pt-2 text-[15px] font-medium">
-                <span>Queda (cobrado − egresos)</span>
+                <span>Queda (cobrado{c.incomesTotal ? ` + ingresos extras ${money(c.incomesTotal)}` : ""} − egresos)</span>
                 <span className="tabular-nums">{money(c.net)}</span>
               </p>
             </section>

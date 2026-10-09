@@ -21,6 +21,7 @@ import {
   type Payment,
   type SaleRow,
 } from "./shared";
+import { PlanillaView } from "./planilla-view";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 
 interface CommissionRow {
@@ -148,6 +149,7 @@ export function VentasView({ actor }: { actor: Actor }) {
   const practices = paid.filter((s) => s.kind !== "producto").reduce((n, s) => n + s.quantity, 0);
   const total = paid.reduce((n, s) => n + charged(s), 0);
   const cash = paid.filter((s) => s.paymentMethod === "efectivo").reduce((n, s) => n + s.cashTotal, 0);
+  const transfer = paid.filter((s) => s.paymentMethod === "transferencia").reduce((n, s) => n + s.cashTotal, 0);
   const card = paid.filter((s) => s.paymentMethod === "tarjeta").reduce((n, s) => n + s.cardTotal, 0);
   const unknown = paid.filter((s) => !s.paymentMethod);
   const unknownCash = unknown.reduce((n, s) => n + s.cashTotal, 0);
@@ -206,8 +208,11 @@ export function VentasView({ actor }: { actor: Actor }) {
     units ? `${units} ${units === 1 ? "producto" : "productos"}` : null,
   ].filter(Boolean);
 
+  // Día (secretaría y admin): la lista tiene la forma de la planilla en papel.
+  const sheet = period === "dia" && !isMedico;
+
   return (
-    <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-5 pb-20 pt-6 text-[14px] sm:px-6 sm:pt-12">
+    <div className={`mx-auto flex w-full flex-col gap-6 px-5 pb-20 pt-6 text-[14px] sm:px-6 sm:pt-12 ${sheet ? "max-w-[1180px]" : "max-w-[760px]"}`}>
       <Toast msg={toast} />
       {editing && (
         <EditVisit
@@ -238,6 +243,11 @@ export function VentasView({ actor }: { actor: Actor }) {
       <div className="flex flex-wrap items-center gap-4">
         <h1 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[22px]">Ventas</h1>
         <span className="flex-1" />
+        {sheet && (
+          <button onClick={() => window.print()} className="cl-no-print rounded-md border border-neutral-800 px-3 py-1.5 text-[13px] text-neutral-300 hover:bg-accent-900">
+            Imprimir
+          </button>
+        )}
         <div className="flex rounded-xl border border-neutral-800 p-1" role="tablist" aria-label="Período">
           {periods.map(([id, text]) => (
             <button
@@ -296,7 +306,10 @@ export function VentasView({ actor }: { actor: Actor }) {
         )}
       </div>
 
+      {sheet && <PlanillaView actor={actor} date={anchor} bare />}
+
       {/* Lo cobrado */}
+      {!sheet && (
       <section className="flex flex-col gap-5 rounded-xl bg-surface p-6">
         <div className="flex flex-col gap-1">
           <span className="text-[14px] text-neutral-400">Cobrado</span>
@@ -306,8 +319,9 @@ export function VentasView({ actor }: { actor: Actor }) {
           <span className="text-[14px] text-neutral-300">{data ? (paid.length ? counts.join(" · ") : "No se anotó nada.") : " "}</span>
         </div>
         {paid.length > 0 && (
-          <div className="grid grid-cols-1 gap-4 border-t border-neutral-800 pt-5 sm:grid-cols-3">
-            <Stat label="Efectivo o transf." value={money(cash)} />
+          <div className="grid grid-cols-2 gap-4 border-t border-neutral-800 pt-5 sm:grid-cols-4">
+            <Stat label="Efectivo" value={money(cash)} />
+            <Stat label="Transferencia" value={money(transfer)} />
             <Stat label={PAYMENT_LABEL.tarjeta} value={money(card)} />
             <Stat
               label="Sin cargar cómo pagó"
@@ -328,8 +342,9 @@ export function VentasView({ actor }: { actor: Actor }) {
         )}
         {period !== "dia" && paid.length > 0 && <DayBars from={from} to={to} today={today} sales={paid} onPick={openDay} />}
       </section>
+      )}
 
-      {seesCommission && comm?.rows && comm.rows.length > 0 && (
+      {!sheet && seesCommission && comm?.rows && comm.rows.length > 0 && (
         <section className="flex flex-col gap-3">
           <h2 className="text-[15px] font-medium">{admin ? "Comisiones" : "Tu comisión"}</h2>
           <div className="overflow-x-auto rounded-xl border border-neutral-800 px-5">
@@ -387,7 +402,7 @@ export function VentasView({ actor }: { actor: Actor }) {
         </section>
       )}
 
-      {expenses.length > 0 && (
+      {!sheet && expenses.length > 0 && (
         <section className="flex flex-col gap-2">
           <h2 className="text-[15px] font-medium">Egresos</h2>
           <div className="flex flex-col">
@@ -414,7 +429,7 @@ export function VentasView({ actor }: { actor: Actor }) {
       )}
 
       {/* Día: el detalle */}
-      {period === "dia" && data && visits.length > 0 && (
+      {!sheet && period === "dia" && data && visits.length > 0 && (
         <section className="flex flex-col gap-3">
           <h2 className="text-[15px] font-medium">Detalle</h2>
           <div className="flex flex-col gap-2.5">
@@ -518,7 +533,7 @@ function VisitCard({
           {pending.length > 0 && (
             <>
               <span className="text-[13px] text-neutral-400">¿Cómo pagó?</span>
-              {(["efectivo", "tarjeta"] as Payment[]).map((m) => (
+              {(["efectivo", "transferencia", "tarjeta"] as Payment[]).map((m) => (
                 <button key={m} className={CHIP} onClick={() => onMethod(pending, m)}>
                   {PAYMENT_LABEL[m]}
                 </button>

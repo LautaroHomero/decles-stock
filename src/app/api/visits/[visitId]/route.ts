@@ -11,6 +11,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ visitId: string
     patientName: b.patientName,
     providerId: b.providerId,
     paymentMethod: b.paymentMethod,
+    observations: b.observations,
     lines: b.lines ?? [],
   });
   if (r.ok) await refreshAfterChange(actor);

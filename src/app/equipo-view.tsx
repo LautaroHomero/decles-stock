@@ -15,11 +15,30 @@ interface Member {
   active: boolean;
   mustChangePassword: boolean;
   commissionPct: number;
+  area: Area;
   aliases: string[];
   email: string;
 }
 
-const ROLE = { medico: "Médica/o", recepcion: "Secretaría" } as const;
+const ROLE = { medico: "Profesional", recepcion: "Secretaría" } as const;
+type Area = "medicos" | "kinesiologia" | "auxiliares" | "externos";
+const AREA: Record<Area, string> = { medicos: "Médicos", kinesiologia: "Kinesiología", auxiliares: "Auxiliares", externos: "Médicos externos" };
+
+/** Sección de la planilla donde aparece la profesional. */
+function AreaField({ value, onChange }: { value: Area; onChange: (a: Area) => void }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[12px] text-neutral-400">Área en la planilla</span>
+      <select value={value} onChange={(e) => onChange(e.target.value as Area)} className={FIELD}>
+        {(Object.keys(AREA) as Area[]).map((a) => (
+          <option key={a} value={a}>
+            {AREA[a]}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 /**
  * Equipo (solo admin): alta de médicas y secretarias, baja/reactivación, admin,
@@ -138,6 +157,7 @@ function MemberRow({
 }) {
   const [name, setName] = useState(m.name);
   const [pct, setPct] = useState(String(m.commissionPct));
+  const [area, setArea] = useState<Area>(m.area ?? "medicos");
   const [aliases, setAliases] = useState(m.aliases.join(", "));
   const [email, setEmail] = useState(m.email);
   const [admin, setAdmin] = useState(m.isAdmin);
@@ -152,7 +172,7 @@ function MemberRow({
             {self && <span className="text-[12px] text-neutral-500">(vos)</span>}
           </span>
           <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-neutral-400">
-            <span>{ROLE[m.role]}</span>
+            <span>{m.role === "medico" ? AREA[m.area ?? "medicos"] : ROLE[m.role]}</span>
             <span>· {m.username}</span>
             {m.isAdmin && <Pill className="!py-0 !text-[11px]">admin</Pill>}
             {m.mustChangePassword && <Pill className="!py-0 !text-[11px]">contraseña temporal</Pill>}
@@ -179,6 +199,7 @@ function MemberRow({
                 <input value={pct} onChange={(e) => setPct(e.target.value.replace(/[^\d.,]/g, ""))} inputMode="decimal" className={FIELD} />
               </label>
             )}
+            {m.role === "medico" && <AreaField value={area} onChange={setArea} />}
             {m.role === "medico" && (
               <label className="flex flex-col gap-1 sm:col-span-2">
                 <span className="text-[12px] text-neutral-400">Apodos (para la hoja de ventas, separados por coma)</span>
@@ -199,7 +220,7 @@ function MemberRow({
                   name,
                   email,
                   isAdmin: admin,
-                  ...(m.role === "medico" ? { commissionPct: Number(pct.replace(",", ".")), aliases } : {}),
+                  ...(m.role === "medico" ? { commissionPct: Number(pct.replace(",", ".")), aliases, area } : {}),
                 })
               }
             >
@@ -241,7 +262,7 @@ function NewMemberForm({
   onCreated: (name: string, username: string, password: string) => void;
   onError: (m: string) => void;
 }) {
-  const [f, setF] = useState({ name: "", username: "", role: "medico" as "medico" | "recepcion", pct: "", email: "", isAdmin: false });
+  const [f, setF] = useState({ name: "", username: "", role: "medico" as "medico" | "recepcion", pct: "", email: "", isAdmin: false, area: "medicos" as Area });
   const [busy, setBusy] = useState(false);
   const suggest = (name: string) =>
     name
@@ -262,6 +283,7 @@ function NewMemberForm({
       isAdmin: f.isAdmin,
       email: f.email,
       commissionPct: f.role === "medico" ? Number(f.pct.replace(",", ".") || 0) : undefined,
+      area: f.role === "medico" ? f.area : undefined,
     });
     setBusy(false);
     if (!r.ok) return onError(r.error ?? "No se pudo crear.");
@@ -309,6 +331,7 @@ function NewMemberForm({
             <input value={f.pct} onChange={(e) => setF({ ...f, pct: e.target.value.replace(/[^\d.,]/g, "") })} inputMode="decimal" placeholder="Ej. 10" className={FIELD} />
           </label>
         )}
+        {f.role === "medico" && <AreaField value={f.area} onChange={(area) => setF({ ...f, area })} />}
       </div>
       <label className="flex items-center gap-2 text-[13px]">
         <input type="checkbox" checked={f.isAdmin} onChange={(e) => setF({ ...f, isAdmin: e.target.checked })} />

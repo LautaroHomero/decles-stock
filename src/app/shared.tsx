@@ -39,7 +39,7 @@ export function daysUntil(ymd: string): number {
 
 export type ApiResult = { ok: boolean; error?: string } & Record<string, unknown>;
 
-export async function call(url: string, method: "POST" | "PATCH" | "DELETE", body: object = {}): Promise<ApiResult> {
+export async function call(url: string, method: "POST" | "PATCH" | "PUT" | "DELETE", body: object = {}): Promise<ApiResult> {
   try {
     const r = await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     if (r.status === 401) {
@@ -166,6 +166,10 @@ export interface SaleRow {
   voidReason: string | null;
   providerId: string | null;
   providerName: string | null;
+  /** Planilla: importe / parte de la profesional escritos a mano y columna Observaciones. */
+  priceManual?: boolean;
+  commissionManual?: boolean;
+  observations?: string;
   commissionPct: number;
   commissionAmount: number;
   paymentMethod: Payment | null;
@@ -173,8 +177,13 @@ export interface SaleRow {
   cardTotal: number;
 }
 
-export type Payment = "efectivo" | "tarjeta";
-export const PAYMENT_LABEL: Record<Payment, string> = { efectivo: "Efectivo / transf.", tarjeta: "Tarjeta" };
+export type Payment = "efectivo" | "transferencia" | "tarjeta";
+export const PAYMENT_LABEL: Record<Payment, string> = { efectivo: "Efectivo", transferencia: "Transferencia", tarjeta: "Tarjeta" };
+export const PAYMENTS: [Payment, string][] = [
+  ["efectivo", "Efectivo"],
+  ["transferencia", "Transf."],
+  ["tarjeta", "Tarjeta"],
+];
 
 /** Precio con tarjeta efectivo (si no se cargó, es el mismo que efectivo). */
 export const cardOf = (p: { price: number | null; cardPrice: number | null }) => p.cardPrice ?? p.price ?? 0;
@@ -184,7 +193,7 @@ export const cardOf = (p: { price: number | null; cardPrice: number | null }) =>
  */
 export function Amount({ cash, card, method, className = "" }: { cash: number; card: number; method: Payment | null; className?: string }) {
   if (method === "tarjeta") return <span className={`tabular-nums ${className}`}>{money(card)}</span>;
-  if (method === "efectivo" || card === cash) return <span className={`tabular-nums ${className}`}>{money(cash)}</span>;
+  if (method === "efectivo" || method === "transferencia" || card === cash) return <span className={`tabular-nums ${className}`}>{money(cash)}</span>;
   return (
     <span className={`flex flex-col items-end leading-tight tabular-nums ${className}`}>
       <span>{money(cash)}</span>

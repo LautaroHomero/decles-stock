@@ -1,5 +1,7 @@
 import {
+  applyManualAmounts,
   insertPendingSale,
+  setVisitObservations,
   listVisitSales,
   markSaleEdited,
   markSaleVoided,
@@ -30,9 +32,27 @@ export interface VisitInput {
   patientName?: string;
   providerId?: string | null;
   paymentMethod?: string | null;
-  /** `pendingPrice`: lo que se cobró por unidad de algo no cargado (opcional). */
-  lines: { itemId?: string; pendingName?: string; pendingPrice?: number | null; quantity?: number; expiresOn?: string | null }[];
+  /** Planilla: columna Observaciones (texto libre, se guarda tal cual). */
+  observations?: string;
+  /**
+   * `pendingPrice`: lo que se cobró por unidad de algo no cargado (opcional).
+   * Planilla: `generic` = renglón sin práctica elegida («Atención»); `amount` = lo que abonó por el renglón
+   * (pisa la lista de precios; 0 = no pasó por caja); `commission` = la parte de la profesional ($K).
+   */
+  lines: {
+    itemId?: string;
+    pendingName?: string;
+    pendingPrice?: number | null;
+    quantity?: number;
+    expiresOn?: string | null;
+    generic?: boolean;
+    amount?: number | null;
+    commission?: number | null;
+  }[];
 }
+
+export const GENERIC_PRACTICE = "Atención";
+const pesos = (n: unknown) => n === undefined || n === null || (typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= 1_000_000_000);
 
 const clean = (s: unknown) => (typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "");
 
@@ -40,11 +60,13 @@ export async function recordVisit(
   actor: Actor,
   v: VisitInput,
 ): Promise<Result<{ visitId: string; saleIds: string[]; total: number; cashTotal: number; cardTotal: number; pending: number }>> {
-  const lines = Array.isArray(v.lines) ? v.lines.filter((l) => l && (typeof l.itemId === "string" || clean(l.pendingName))) : [];
+  const lines = Array.isArray(v.lines) ? v.lines.filter((l) => l && (typeof l.itemId === "string" || clean(l.pendingName) || l.generic)) : [];
   if (!lines.length) return { ok: false, error: "No hay nada para anotar: elegí al menos una práctica o un producto.", status: 400 };
   if (lines.length > 30) return { ok: false, error: "Demasiados renglones juntos (máximo 30).", status: 400 };
   const orgId = actor.activeOrg?.id;
   if (!orgId || actor.role === "paciente") return { ok: false, error: "No autorizado.", status: 403 };
+  if (lines.some((l) => !pesos(l.amount) || !pesos(l.commission)))
+    return { ok: false, error: "Los importes tienen que ser números enteros de pesos.", status: 400 };
 
   // Para los pendientes la médica se valida acá (los demás renglones los valida recordSale).
   const providerId = actor.role === "medico" ? (actor.activeOrg?.providerId ?? null) : (v.providerId ?? null);
@@ -60,8 +82,8 @@ export async function recordVisit(
         return { ok: false, error: "El precio tiene que ser un número entero de pesos.", status: 400 };
     }
   }
-  const raw = v.paymentMethod === "transferencia" ? "efectivo" : v.paymentMethod;
-  const method: PaymentMethod | null = raw === "efectivo" || raw === "tarjeta" ? raw : null;
+  const raw = v.paymentMethod;
+  const method: PaymentMethod | null = raw === "efectivo" || raw === "transferencia" || raw === "tarjeta" ? raw : null;
   const patient = clean(v.patientName).slice(0, 120);
   const who = { id: actor.userId, name: actor.name, source: "manual" as const };
 
@@ -74,21 +96,23 @@ export async function recordVisit(
       const id = await insertPendingSale(
         orgId,
         {
-          name: clean(l.pendingName).slice(0, 80),
+          name: l.generic ? GENERIC_PRACTICE : clean(l.pendingName).slice(0, 80),
+          kind: l.generic ? "tratamiento" : "pendiente",
           quantity: qty,
           providerId: providerId!,
           patientLabel: patient,
           visitId,
           paymentMethod: method,
           note: "",
-          unitPrice: l.pendingPrice ?? 0,
+          unitPrice: l.generic ? Math.round((l.amount ?? 0) / qty) : (l.pendingPrice ?? 0),
           commissionPct,
         },
         who,
       );
       saleIds.push(id);
-      pending++;
-      const t = (l.pendingPrice ?? 0) * qty;
+      if (!l.generic) pending++;
+      await applyManualAmounts(orgId, id, { amount: l.amount, commission: l.commission });
+      const t = l.amount ?? (l.pendingPrice ?? 0) * qty;
       total += t;
       cashTotal += t;
       cardTotal += t;
@@ -113,10 +137,14 @@ export async function recordVisit(
       return r;
     }
     saleIds.push(r.saleId);
-    total += r.total;
-    cashTotal += r.cashTotal;
-    cardTotal += r.cardTotal;
+    const manual = typeof l.amount === "number" && l.amount !== r.total;
+    await applyManualAmounts(orgId, r.saleId, { amount: manual ? l.amount : null, commission: l.commission });
+    total += manual ? l.amount! : r.total;
+    cashTotal += manual ? l.amount! : r.cashTotal;
+    cardTotal += manual ? l.amount! : r.cardTotal;
   }
+  const obs = clean(v.observations).slice(0, 300);
+  if (obs) await setVisitObservations(orgId, visitId, obs);
   return { ok: true, visitId, saleIds, total, cashTotal, cardTotal, pending };
 }
 

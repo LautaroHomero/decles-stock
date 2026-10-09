@@ -6,6 +6,7 @@ import { call, money } from "./shared";
 /** Egresos de plata (luz, insumos, un retiro…): se anotan desde Anotar y se ven en Hoy, Cierre y Ventas. */
 export interface Expense {
   id: string;
+  direction?: "egreso" | "ingreso";
   concept: string;
   amount: number;
   createdByName: string;
@@ -26,9 +27,11 @@ const FIELD =
 export function ExpenseForm({
   expense,
   initial,
+  direction = expense?.direction ?? "egreso",
   onClose,
   onSaved,
 }: {
+  direction?: "egreso" | "ingreso";
   expense?: Expense;
   initial?: { concept: string; amount: number };
   onClose: () => void;
@@ -40,16 +43,18 @@ export function ExpenseForm({
   const [err, setErr] = useState("");
   const n = Number(amount.replace(/\D/g, "") || 0);
   const ok = concept.trim() && n > 0;
+  const ingreso = direction === "ingreso";
+  const what = ingreso ? "Ingreso extra" : "Egreso";
 
   async function save() {
     if (!ok || busy) return;
     setBusy(true);
     setErr("");
-    const body = { concept, amount: n };
+    const body = { concept, amount: n, direction };
     const r = expense ? await call(`/api/expenses/${expense.id}`, "PATCH", body) : await call("/api/expenses", "POST", body);
     setBusy(false);
     if (!r.ok) return setErr(r.error ?? "No se pudo guardar.");
-    onSaved(expense ? "Egreso corregido" : `Egreso · ${concept.trim()} · ${money(n)}`);
+    onSaved(expense ? `${what} corregido` : `${what} · ${concept.trim()} · ${money(n)}`);
   }
 
   async function remove() {
@@ -58,7 +63,7 @@ export function ExpenseForm({
     const r = await call(`/api/expenses/${expense.id}`, "DELETE");
     setBusy(false);
     if (!r.ok) return setErr(r.error ?? "No se pudo anular.");
-    onSaved("Egreso anulado");
+    onSaved(`${what} anulado`);
   }
 
   return (
@@ -71,12 +76,12 @@ export function ExpenseForm({
         }}
       >
         <div>
-          <h2 className="font-display text-[18px] font-medium tracking-[-.01em]">{expense ? "Corregir egreso" : "Anotar un egreso"}</h2>
-          <p className="text-[13px] text-neutral-400">Plata que sale de la caja: luz, insumos, un retiro…</p>
+          <h2 className="font-display text-[18px] font-medium tracking-[-.01em]">{expense ? `Corregir ${what.toLowerCase()}` : ingreso ? "Anotar un ingreso extra" : "Anotar un egreso"}</h2>
+          <p className="text-[13px] text-neutral-400">{ingreso ? "Plata que entra a la caja y no es de un paciente: cambio, varios…" : "Plata que sale de la caja: luz, insumos, un retiro…"}</p>
         </div>
         <label className="flex flex-col gap-1">
           <span className="text-[12px] text-neutral-400">¿En qué?</span>
-          <input autoFocus={!concept} value={concept} onChange={(e) => setConcept(e.target.value)} placeholder="Ej. Luz" className={FIELD} />
+          <input autoFocus={!concept} value={concept} onChange={(e) => setConcept(e.target.value)} placeholder={ingreso ? "Ej. Cambio" : "Ej. Luz"} className={FIELD} />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-[12px] text-neutral-400">Importe</span>
@@ -104,7 +109,7 @@ export function ExpenseForm({
         </div>
         {expense && (
           <button type="button" onClick={remove} disabled={busy} className="self-start text-[13px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline">
-            Anular este egreso
+            Anular
           </button>
         )}
         {expense?.updatedByName && <p className="text-[12px] text-neutral-500">Editado por {expense.updatedByName}</p>}

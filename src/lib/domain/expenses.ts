@@ -10,8 +10,13 @@ import type { Actor } from "@/lib/domain/types";
 
 export type Result<T> = ({ ok: true } & T) | { ok: false; error: string; status: number };
 
+export type Direction = "egreso" | "ingreso";
+const dirOf = (d: unknown): Direction => (d === "ingreso" ? "ingreso" : "egreso");
+
 export interface Expense {
   id: string;
+  /** "ingreso" = ingreso extra (cambio, varios…); "egreso" = gasto. */
+  direction: Direction;
   concept: string;
   amount: number;
   createdByName: string;
@@ -23,6 +28,7 @@ type Row = Record<string, unknown>;
 const fail = (error: string, status = 400) => ({ ok: false as const, error, status });
 const toExpense = (r: Row): Expense => ({
   id: r.id as string,
+  direction: dirOf(r.direction),
   concept: r.concept as string,
   amount: Number(r.amount),
   createdByName: r.created_by_name as string,
@@ -40,14 +46,14 @@ function ctx(actor: Actor) {
 function clean(v: { concept?: unknown; amount?: unknown }): { concept: string; amount: number } | string {
   const concept = String(v.concept ?? "").trim().replace(/\s+/g, " ");
   const amount = Number(v.amount);
-  if (!concept) return "Decí en qué se gastó.";
+  if (!concept) return "Falta el concepto.";
   if (concept.length > 120) return "El concepto es muy largo.";
   if (!Number.isInteger(amount) || amount <= 0) return "El importe tiene que ser un número entero de pesos.";
   if (amount > 1_000_000_000) return "Ese importe no parece correcto.";
   return { concept: concept.charAt(0).toUpperCase() + concept.slice(1), amount };
 }
 
-export async function listExpenses(actor: Actor, from?: string, to?: string): Promise<Result<{ expenses: Expense[]; total: number }>> {
+export async function listExpenses(actor: Actor, from?: string, to?: string, direction: Direction = "egreso"): Promise<Result<{ expenses: Expense[]; total: number }>> {
   const c = ctx(actor);
   if (!c) return { ok: true, expenses: [], total: 0 };
   const today = realNowIso().slice(0, 10);
@@ -56,20 +62,20 @@ export async function listExpenses(actor: Actor, from?: string, to?: string): Pr
   if (!YMD.test(f) || !YMD.test(t)) return fail("Fechas inválidas: usá AAAA-MM-DD.");
   const rows = (await getSql()`
     SELECT * FROM expenses
-    WHERE organization_id = ${c.orgId} AND status = 'active' AND substr(created_at, 1, 10) BETWEEN ${f} AND ${t}
+    WHERE organization_id = ${c.orgId} AND status = 'active' AND direction = ${direction} AND substr(created_at, 1, 10) BETWEEN ${f} AND ${t}
     ORDER BY created_at DESC, id DESC LIMIT 1000`) as unknown as Row[];
   const expenses = rows.map(toExpense);
   return { ok: true, expenses, total: expenses.reduce((n, e) => n + e.amount, 0) };
 }
 
-export async function createExpense(actor: Actor, v: { concept?: unknown; amount?: unknown }): Promise<Result<{ expense: Expense }>> {
+export async function createExpense(actor: Actor, v: { concept?: unknown; amount?: unknown; direction?: unknown }): Promise<Result<{ expense: Expense }>> {
   const c = ctx(actor);
   if (!c) return fail("Los egresos los anota la secretaría o el admin.", 403);
   const x = clean(v);
   if (typeof x === "string") return fail(x);
   const rows = (await getSql()`
-    INSERT INTO expenses (id, organization_id, concept, amount, created_by, created_by_name, created_at)
-    VALUES (${`egr_${randomUUID().slice(0, 8)}`}, ${c.orgId}, ${x.concept}, ${x.amount}, ${actor.userId}, ${actor.name}, ${realNowIso()})
+    INSERT INTO expenses (id, organization_id, direction, concept, amount, created_by, created_by_name, created_at)
+    VALUES (${`egr_${randomUUID().slice(0, 8)}`}, ${c.orgId}, ${dirOf(v.direction)}, ${x.concept}, ${x.amount}, ${actor.userId}, ${actor.name}, ${realNowIso()})
     RETURNING *`) as unknown as Row[];
   return { ok: true, expense: toExpense(rows[0]) };
 }

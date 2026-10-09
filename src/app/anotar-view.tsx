@@ -7,7 +7,7 @@ import { parseNote, suggest } from "@/lib/domain/quick-sale";
 import { parseExpense } from "@/lib/domain/expense-note";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import { firstName, greeting } from "./ui";
-import { Toast, call, fmtTime, money, usePoll, useToast, type CatalogResponse, type Payment, type SaleRow } from "./shared";
+import { Toast, call, fmtTime, money, usePoll, useToast, type CatalogResponse, type Payment, type SaleRow, PAYMENTS } from "./shared";
 
 /**
  * Anotar (diseño «Vender»): lo que pasó en el consultorio en una frase —
@@ -403,12 +403,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
 
                 {/* Pago: opcional */}
                 <div className="flex flex-wrap items-center gap-2">
-                  {(
-                    [
-                      ["efectivo", "Efectivo o transf."],
-                      ["tarjeta", "Tarjeta"],
-                    ] as const
-                  ).map(([m, label]) => (
+                  {PAYMENTS.map(([m, label]) => (
                     <button
                       key={m}
                       aria-pressed={preview.payment === m}
@@ -585,10 +580,20 @@ export function EditVisit({ sales, isMedico, onClose, onSaved }: { sales: SaleRo
     onSaved();
   }
 
+  // Lo anotado en la Planilla (importes a mano, observaciones, «Atención» sin práctica) se corrige allá.
+  const fromSheet = paid.some((x) => x.priceManual || x.commissionManual || x.observations || (!x.itemId && x.kind !== "pendiente"));
+
   return (
     <div className="cl-fade-in fixed inset-0 z-40 overflow-y-auto bg-black/60 px-4 py-10" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="mx-auto w-full max-w-[640px]">
-        {!draft ? (
+        {fromSheet ? (
+          <div className="flex flex-col gap-3 rounded-xl bg-surface p-5">
+            <p className="text-[14px]">Esto se anotó en la planilla (con importes o notas escritas a mano). Corregilo desde Ventas → Día.</p>
+            <button onClick={onClose} className="self-start rounded-md border border-neutral-800 px-3 py-1.5 text-[13px] hover:bg-accent-900">
+              Entendido
+            </button>
+          </div>
+        ) : !draft ? (
           <p className="text-center text-neutral-300">Cargando…</p>
         ) : (
           <>
@@ -751,12 +756,7 @@ function ManualView({
 
       <div className="sticky bottom-0 -mx-5 flex flex-col gap-3 border-t border-neutral-900 bg-bg/95 px-5 pb-4 pt-3 backdrop-blur sm:-mx-6 sm:px-6">
         <div className="flex flex-wrap items-center gap-2">
-          {(
-            [
-              ["efectivo", "Efectivo o transf."],
-              ["tarjeta", "Tarjeta"],
-            ] as const
-          ).map(([m, label]) => (
+          {PAYMENTS.map(([m, label]) => (
             <button key={m} aria-pressed={draft.payment === m} onClick={() => setDraft({ ...draft, payment: draft.payment === m ? null : m })} className={draft.payment === m ? CHIP_ON : CHIP}>
               {label}
             </button>
@@ -1093,12 +1093,7 @@ function Confirm({
           </p>
         )}
         <div className="flex flex-wrap gap-2" role="group" aria-label="¿Cómo pagó?">
-          {(
-            [
-              ["efectivo", "Efectivo o transf."],
-              ["tarjeta", "Tarjeta"],
-            ] as const
-          ).map(([m, label]) => (
+          {PAYMENTS.map(([m, label]) => (
             <button
               key={m}
               aria-pressed={draft.payment === m}

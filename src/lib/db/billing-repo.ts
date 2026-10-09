@@ -15,8 +15,8 @@ export type PriceKind = "consulta" | "tratamiento" | "producto";
 /** En `sales.kind`: además "pendiente" (Decles), algo anotado que todavía no está en la lista de precios. */
 export type SaleKind = PriceKind | "pendiente";
 export type BillingSource = "manual" | "agent";
-/** Medio de pago (Decles). "efectivo" incluye transferencia: mismo precio. */
-export type PaymentMethod = "efectivo" | "tarjeta";
+/** Medio de pago (Decles). Transferencia va al precio de efectivo. */
+export type PaymentMethod = "efectivo" | "transferencia" | "tarjeta";
 
 export interface PriceItem {
   id: string;
@@ -73,6 +73,10 @@ export interface Sale {
   cardTotal: number;
   /** Renglones anotados juntos comparten visitId (null en ventas viejas). */
   visitId: string | null;
+  /** Planilla (Decles): importe y/o parte de la profesional escritos a mano; columna Observaciones. */
+  priceManual: boolean;
+  commissionManual: boolean;
+  observations: string;
 }
 
 export interface BillingWho {
@@ -203,6 +207,9 @@ const toSale = (r: Row): Sale => ({
   cashTotal: Number(r.cash_total ?? r.total),
   cardTotal: Number(r.card_total ?? r.total),
   visitId: (r.visit_id as string) ?? null,
+  priceManual: Boolean(r.price_manual),
+  commissionManual: Boolean(r.commission_manual),
+  observations: (r.observations as string) ?? "",
 });
 
 export async function insertSale(
@@ -355,6 +362,8 @@ export async function insertPendingSale(
     /** Lo que se cobró por unidad, si la secretaria lo cargó (0 = a definir por el admin). */
     unitPrice?: number;
     commissionPct?: number;
+    /** Planilla: renglón sin práctica elegida ("Atención") = 'tratamiento' sin ítem (no es un pendiente). */
+    kind?: SaleKind;
   },
   who: BillingWho,
 ): Promise<string> {
@@ -367,7 +376,7 @@ export async function insertPendingSale(
     INSERT INTO sales (id, organization_id, item_id, item_name, kind, quantity, unit_price, total, provider_id, patient_id, note,
                        created_by, created_by_name, source, created_at, commission_pct, commission_amount,
                        payment_method, cash_total, card_total, patient_label, visit_id)
-    VALUES (${id}, ${orgId}, NULL, ${v.name}, 'pendiente', ${v.quantity}, ${unit}, ${total}, ${v.providerId}, NULL, ${v.note},
+    VALUES (${id}, ${orgId}, NULL, ${v.name}, ${v.kind ?? "pendiente"}, ${v.quantity}, ${unit}, ${total}, ${v.providerId}, NULL, ${v.note},
             ${who.id}, ${who.name}, ${who.source}, ${realNowIso()}, ${pct}, ${commission}, ${v.paymentMethod}, ${total}, ${total}, ${v.patientLabel}, ${v.visitId})`;
   return id;
 }
@@ -441,6 +450,30 @@ export async function stampVisit(orgId: string, visitId: string, createdAt: stri
   await getSql()`
     UPDATE sales SET created_at = ${createdAt}, note = ${note}
     WHERE organization_id = ${orgId} AND visit_id = ${visitId} AND status = 'paid'`;
+}
+
+/**
+ * Planilla (Decles): importe ("Abona", total del renglón) y/o parte de la profesional ($K) escritos a mano.
+ * Sin `commission`, la comisión se recalcula con el % congelado sobre el importe nuevo.
+ */
+export async function applyManualAmounts(orgId: string, saleId: string, v: { amount?: number | null; commission?: number | null }): Promise<void> {
+  const amount = v.amount ?? null;
+  const commission = v.commission ?? null;
+  if (amount !== null) {
+    await getSql()`
+      UPDATE sales SET total = ${amount}, cash_total = ${amount}, card_total = ${amount},
+        unit_price = ROUND(${amount}::numeric / quantity), price_manual = TRUE,
+        commission_amount = ROUND(${amount}::numeric * commission_pct / 100)
+      WHERE id = ${saleId} AND organization_id = ${orgId}`;
+  }
+  if (commission !== null) {
+    await getSql()`UPDATE sales SET commission_amount = ${commission}, commission_manual = TRUE WHERE id = ${saleId} AND organization_id = ${orgId}`;
+  }
+}
+
+/** Planilla: la columna Observaciones de una anotación. */
+export async function setVisitObservations(orgId: string, visitId: string, text: string): Promise<void> {
+  await getSql()`UPDATE sales SET observations = ${text} WHERE organization_id = ${orgId} AND visit_id = ${visitId} AND status = 'paid'`;
 }
 
 /** Decles: % de comisión propio del ítem (null = el de la médica). */
