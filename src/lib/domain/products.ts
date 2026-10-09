@@ -33,9 +33,18 @@ export interface CatalogProduct {
   lots: StockItem["lots"];
 }
 
+/** Práctica (Decles): lo que la médica hace en la consulta. price_list_item kind 'tratamiento', sin stock. */
+export interface CatalogPractice {
+  id: string;
+  name: string;
+  price: number;
+  cardPrice: number | null;
+}
+
 export async function catalog(actor: Actor): Promise<
   Result<{
     products: CatalogProduct[];
+    practices: CatalogPractice[];
     alerts: { expiringSoon: number; expired: number; low: number };
     expiryDays: number;
     canAdmin: boolean;
@@ -68,9 +77,13 @@ export async function catalog(actor: Actor): Promise<
       lots: i.lots,
     };
   });
+  const practices = prices.items
+    .filter((p) => p.kind === "tratamiento" && p.active)
+    .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount }));
   return {
     ok: true,
     products,
+    practices,
     alerts: {
       expiringSoon: ov.overview.expiringSoon.length,
       expired: ov.overview.expired.length,
@@ -144,4 +157,37 @@ export async function updateProduct(
     if (!c.ok) return c;
   }
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Prácticas (solo admin): nombre, precio efectivo y con tarjeta. Sin stock.
+// ---------------------------------------------------------------------------
+
+export async function listPractices(actor: Actor): Promise<Result<{ practices: (CatalogPractice & { active: boolean })[] }>> {
+  const prices = await listPrices(actor, { includeInactive: true });
+  if (!prices.ok) return prices;
+  return {
+    ok: true,
+    practices: prices.items
+      .filter((p) => p.kind === "tratamiento")
+      .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, active: p.active })),
+  };
+}
+
+export async function createPractice(actor: Actor, v: { name: string; price: number; cardPrice?: number | null }): Promise<Result<{ itemId: string }>> {
+  if (!actor.activeOrg?.canAdmin) return fail("Solo un administrador puede cargar prácticas.", 403);
+  return createPrice(actor, { kind: "tratamiento", name: v.name, amount: v.price, cardAmount: v.cardPrice ?? null });
+}
+
+export async function updatePractice(
+  actor: Actor,
+  id: string,
+  v: { name?: string; price?: number; cardPrice?: number | null; active?: boolean },
+): Promise<Result<object>> {
+  if (!actor.activeOrg?.canAdmin) return fail("Solo un administrador puede cambiar prácticas.", 403);
+  const cur = (await listPrices(actor, { includeInactive: true }));
+  if (!cur.ok) return cur;
+  if (!cur.items.some((p) => p.id === id && p.kind === "tratamiento")) return fail("Práctica no encontrada.", 404);
+  const r = await updatePrice(actor, id, { name: v.name, amount: v.price, cardAmount: v.cardPrice, active: v.active });
+  return r.ok ? { ok: true } : r;
 }

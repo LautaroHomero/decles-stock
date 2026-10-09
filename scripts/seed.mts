@@ -15,7 +15,8 @@ if (!isLocalDb(url)) {
 const repo = await import("../src/lib/db/repo");
 const { hashPassword } = await import("../src/lib/auth/password");
 const { hydrateActor } = await import("../src/lib/auth/actor");
-const { createProduct } = await import("../src/lib/domain/products");
+const { createProduct, createPractice } = await import("../src/lib/domain/products");
+const { recordVisit } = await import("../src/lib/domain/visits");
 const { addStock } = await import("../src/lib/domain/stock");
 const { recordSale } = await import("../src/lib/domain/billing");
 const { refreshStockAlerts } = await import("../src/lib/domain/notifications");
@@ -68,6 +69,13 @@ const gel = must(await createProduct(adminActor, { name: "Gel de limpieza", pric
 must(await createProduct(adminActor, { name: "Crema Pindonga", price: 15900, cardPrice: 18300, minQuantity: 3, quantity: 12, expiresOn: day(200) }), "pindonga");
 must(await createProduct(adminActor, { name: "Contorno de ojos", price: 26500, cardPrice: 30500, minQuantity: 2, quantity: 5, expiresOn: day(150) }), "contorno");
 
+// Prácticas (lo que la médica hace en la consulta), con precio efectivo y con tarjeta.
+const practice = async (name: string, price: number, cardPrice: number) => must(await createPractice(adminActor, { name, price, cardPrice }), name).itemId;
+const atencion = await practice("Atención", 25000, 28800);
+const peeling = await practice("Peeling", 40000, 46000);
+const botox = await practice("Aplicación de botox", 120000, 138000);
+const limpieza = await practice("Limpieza facial", 35000, 40300);
+
 // Un lote ya vencido (la app no deja ingresarlo así; se mete directo para la demo).
 await getSql()`
   INSERT INTO stock_lots (id, organization_id, item_id, lot_code, quantity, initial_quantity, expires_on, received_at, created_by)
@@ -77,11 +85,18 @@ await getSql()`
 must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, providerId: laura.providerId, paymentMethod: "tarjeta" }), "venta 1");
 must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, providerId: laura.providerId, expiresOn: day(240) }), "venta 2");
 
+// Pacientes de hoy.
+must(await recordVisit(secActor, { patientName: "María López", providerId: laura.providerId, paymentMethod: "efectivo", lines: [{ itemId: atencion }, { itemId: peeling }] }), "visita 1");
+must(await recordVisit(secActor, { patientName: "Ana Gómez", providerId: paula.providerId, lines: [{ itemId: atencion }] }), "visita 2");
+must(await recordVisit(secActor, { patientName: "Rosa Díaz", providerId: laura.providerId, paymentMethod: "tarjeta", lines: [{ itemId: limpieza }, { itemId: crema.priceItemId }] }), "visita 3");
+
 // Historial de las últimas 3 semanas para ver Ventas por semana y por mes (fechas corridas a mano).
 {
-  const items = (await getSql()`SELECT id FROM price_list_items WHERE organization_id = ${org.id}`) as unknown as { id: string }[];
+  const items = (await getSql()`SELECT id FROM price_list_items WHERE organization_id = ${org.id} AND kind = 'producto'`) as unknown as { id: string }[];
+  const practiceIds = [atencion, peeling, botox, limpieza];
+  const names = ["Laura Paz", "Julia Romero", "Carla Méndez", "Sofía Ruiz", "Inés Torres", "Lucía Vega", "Marta Gil", "Paula Sosa"];
   // Stock extra para que el historial no deje la demo sin unidades.
-  for (const it of await getSql()`SELECT stock_item_id FROM price_list_items WHERE organization_id = ${org.id}`)
+  for (const it of await getSql()`SELECT stock_item_id FROM price_list_items WHERE organization_id = ${org.id} AND kind = 'producto'`)
     await addStock(adminActor, { itemId: it.stock_item_id as string, quantity: 20, expiresOn: day(500) });
   // PRNG con semilla fija (mulberry32): la demo sale igual cada vez.
   let s = 20261008;
@@ -106,6 +121,20 @@ must(await recordSale(secActor, { itemId: crema.priceItemId, quantity: 1, provid
         await getSql()`UPDATE sales SET created_at = ${`${day(-back)}T${hh}:${mm}:00`} WHERE id = ${r.saleId}`;
       }
     }
+    // 1 a 4 pacientes por día, con 1 o 2 prácticas.
+    for (let k = 0, n2 = 1 + rnd(4); k < n2; k++) {
+      const lines = [{ itemId: atencion }, ...(rnd(2) ? [{ itemId: practiceIds[1 + rnd(3)] }] : [])];
+      const v = await recordVisit(secActor, {
+        patientName: names[rnd(names.length)],
+        providerId: rnd(2) ? laura.providerId : paula.providerId,
+        paymentMethod: ["efectivo", "tarjeta", null][rnd(3)],
+        lines,
+      });
+      if (v.ok) {
+        const at = `${day(-back)}T${String(9 + rnd(9)).padStart(2, "0")}:${String(rnd(60)).padStart(2, "0")}:00`;
+        await getSql()`UPDATE sales SET created_at = ${at} WHERE visit_id = ${v.visitId}`;
+      }
+    }
   }
 }
 
@@ -114,7 +143,7 @@ const created = await refreshStockAlerts(org.id);
 await getSql()`UPDATE organizations SET onboarding_done = TRUE WHERE id = ${org.id}`;
 
 console.log(`
-Listo: ${ORG} con 6 productos, 3 semanas de ventas y ${created} avisos.
+Listo: ${ORG} con 6 productos, 4 prácticas, 3 semanas de pacientes y ventas, y ${created} avisos.
 Todas las contraseñas de la demo: decles123
 
   Usuario   Rol

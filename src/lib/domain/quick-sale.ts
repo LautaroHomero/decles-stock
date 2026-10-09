@@ -20,6 +20,10 @@
  *     apodos que el admin carga en Equipo para los que no salen del nombre ("pili" → Pilar).
  *  6. Medio de pago (opcional): "con tarjeta", "débito", "en efectivo", "transferencia", "mp".
  *     Igual que la médica: vale para ese renglón y los siguientes, y lo anterior sin medio lo hereda.
+ *  7. Paciente (`parseNote`): el catálogo incluye las prácticas ("atención", "peeling"), así que
+ *     "María López, la atendió laura, atención y peeling" da paciente + médica + 2 prácticas.
+ *     Es paciente el primer pedazo que no es producto, práctica ni médica (1 a 4 palabras sin
+ *     números), o las palabras que van ANTES del producto en el mismo pedazo ("Ana Gómez atención").
  */
 
 export interface QuickProduct {
@@ -68,6 +72,8 @@ const FILLER = new Set([
   "marca", "unidad", "unidades", "u", "x", "cant", "cantidad", "producto", "productos",
   "dra", "dr", "doctora", "doctor", "lic", "licenciada",
   "pago", "pagaron", "pagado", "abono", "abonaron", "medio",
+  "atendio", "atendi", "atendida", "atendido", "atiende", "atendieron", "vino", "vinieron", "paciente", "pacienta",
+  "hizo", "hice", "hicimos", "hicieron", "se", "le", "lo", "su", "sesion", "turno", "y",
 ]);
 
 /** Minúsculas, sin tildes, sin puntuación (conserva dígitos). */
@@ -204,11 +210,30 @@ function findSeller<S extends QuickSeller>(seg: string, sellers: S[], productVoc
   return { seller: hits.size === 1 ? [...hits][0] : null, used };
 }
 
-export function parseQuickSale<P extends QuickProduct, S extends QuickSeller = QuickSeller>(
+const NAME_TOKEN = /^[a-zñ]{2,}$/;
+const capitalize = (w: string) => (w ? w[0].toLocaleUpperCase("es") + w.slice(1) : w);
+
+/** Palabras del texto original (con tildes y mayúsculas) junto a su forma normalizada. */
+function tokens(seg: string): { raw: string; n: string }[] {
+  return seg
+    .split(/\s+/)
+    .map((raw) => ({ raw: raw.replace(/^[^\p{L}\d]+|[^\p{L}\d]+$/gu, ""), n: normalize(raw).replace(/ /g, "") }))
+    .filter((t) => t.n);
+}
+
+const asName = (ts: { raw: string }[]) => ts.map((t) => capitalize(t.raw)).join(" ");
+
+export interface QuickNote<P extends QuickProduct = QuickProduct, S extends QuickSeller = QuickSeller> {
+  lines: QuickLine<P, S>[];
+  /** Nombre del paciente escrito en el texto (null = no se nombró a nadie). */
+  patient: string | null;
+}
+
+export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickSeller>(
   text: string,
   products: P[],
   sellers: S[] = [],
-): QuickLine<P, S>[] {
+): QuickNote<P, S> {
   const lines: QuickLine<P, S>[] = [];
   const nameNumbers = new Set(products.flatMap((p) => normalize(p.name).split(" ").filter((w) => /^\d+$/.test(w))));
   const productVocab = new Set(products.flatMap((p) => productWords(p.name)));
@@ -216,6 +241,7 @@ export function parseQuickSale<P extends QuickProduct, S extends QuickSeller = Q
   let first: S | null = null;
   let pay: QuickPayment | null = null;
   let firstPay: QuickPayment | null = null;
+  let patient: string | null = null;
   for (const raw of splitSegments(text)) {
     const { seller, used } = findSeller(raw, sellers, productVocab);
     if (seller) {
@@ -229,14 +255,29 @@ export function parseQuickSale<P extends QuickProduct, S extends QuickSeller = Q
         used.add(w);
       }
     }
-    const seg = used.size ? normalize(raw).split(" ").filter((w) => !used.has(w)).join(" ") : raw;
-    const { quantity, words } = parseSegment(seg, nameNumbers);
+    const toks = tokens(raw).filter((t) => !used.has(t.n));
+    const { quantity, words } = parseSegment(toks.map((t) => t.n).join(" "), nameNumbers);
     if (!words.length) continue; // "vendí", "Laura:" o un número suelto
     const ranked = products
       .map((p) => ({ p, s: score(words, p.name) }))
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s);
     const [best, second] = ranked;
+
+    if (!best) {
+      // Nada del catálogo: si parece un nombre ("María López"), es el paciente.
+      const nameToks = toks.filter((t) => !FILLER.has(t.n));
+      if (!patient && seller === null && nameToks.length >= 1 && nameToks.length <= 4 && nameToks.every((t) => NAME_TOKEN.test(t.n))) {
+        patient = asName(nameToks);
+        continue;
+      }
+    } else if (!patient) {
+      // "Ana Gómez atención": lo que va antes del producto/práctica, si son palabras sueltas, es el paciente.
+      const pw = productWords(best.p.name);
+      const at = toks.findIndex((t) => pw.some((w) => wordScore(stem(t.n), w) > 0));
+      const lead = toks.slice(0, Math.max(at, 0)).filter((t) => !FILLER.has(t.n) && !(t.n in NUMBER_WORDS));
+      if (lead.length && lead.length <= 4 && lead.every((t) => NAME_TOKEN.test(t.n))) patient = asName(lead);
+    }
     // Match claro: hay uno solo, o el primero le saca ventaja al segundo.
     const clear = best && (!second || best.s - second.s >= 0.15);
     lines.push({
@@ -253,5 +294,14 @@ export function parseQuickSale<P extends QuickProduct, S extends QuickSeller = Q
     if (!l.seller) l.seller = first;
     if (!l.payment) l.payment = firstPay;
   }
-  return lines;
+  return { lines, patient };
+}
+
+/** Solo los renglones (compatibilidad con la hoja de ventas original). */
+export function parseQuickSale<P extends QuickProduct, S extends QuickSeller = QuickSeller>(
+  text: string,
+  products: P[],
+  sellers: S[] = [],
+): QuickLine<P, S>[] {
+  return parseNote(text, products, sellers).lines;
 }

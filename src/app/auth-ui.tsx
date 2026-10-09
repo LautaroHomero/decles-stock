@@ -7,24 +7,24 @@ import { BrandMark, ThemeToggle, Wordmark } from "./ui";
 // Piezas compartidas por login, primer arranque y cambio de contraseña (estética del login de Clavdia).
 
 export const AUTH_FIELD =
-  "w-full rounded-md border border-neutral-800 bg-transparent px-3.5 py-2.5 text-[15px] text-fg placeholder:text-neutral-600 transition-colors focus:border-accent-700 focus:outline-none";
+  "w-full rounded-2xl border-2 border-neutral-800 bg-bg px-4 py-3 text-[17px] text-fg placeholder:text-neutral-600 transition-colors focus:border-accent-600 focus:outline-none";
 export const AUTH_PRIMARY =
-  "w-full rounded-md border border-accent bg-accent px-4 py-2.5 text-[15px] font-medium text-bg transition-opacity hover:opacity-85 active:opacity-70 disabled:opacity-40";
-export const AUTH_CARD = "rounded-2xl bg-surface p-5 shadow-md";
+  "w-full min-h-14 rounded-2xl bg-accent px-4 text-[18px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:opacity-40";
+export const AUTH_CARD = "rounded-3xl border-2 border-neutral-800 bg-surface p-6";
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="block space-y-1.5">
-      <span className="block text-[13px] font-medium text-fg">{label}</span>
+      <span className="block text-[15px] font-semibold text-fg">{label}</span>
       {children}
-      {hint && <span className="block text-[12px] text-neutral-500">{hint}</span>}
+      {hint && <span className="block text-[13.5px] text-neutral-400">{hint}</span>}
     </label>
   );
 }
 
 export function Err({ msg }: { msg: string }) {
   return msg ? (
-    <p role="alert" className="text-[13px] text-neutral-200">
+    <p role="alert" className="text-[15px] text-accent-300">
       {msg}
     </p>
   ) : null;
@@ -56,7 +56,7 @@ export function PasswordInput({
         type="button"
         onClick={() => setShow((s) => !s)}
         aria-label={show ? "Ocultar contraseña" : "Mostrar contraseña"}
-        className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-neutral-500 hover:text-fg"
+        className="absolute right-2 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md text-neutral-500 hover:text-fg"
       >
         {show ? <EyeSlashIcon size={16} /> : <EyeIcon size={16} />}
       </button>
@@ -110,7 +110,7 @@ export function ChangePasswordForm({ forced, onDone }: { forced?: boolean; onDon
 /** Marco de las pantallas sin sesión (login, primer arranque, contraseña obligatoria). */
 export function AuthFrame({ subtitle, children }: { subtitle: string; children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-[440px] flex-col justify-center gap-6 px-6 py-10">
+    <main className="mx-auto flex min-h-screen w-full max-w-[480px] flex-col justify-center gap-7 px-6 py-10 text-[17px]">
       <header className="flex flex-col gap-6">
         <div className="flex justify-end">
           <ThemeToggle compact />
@@ -119,7 +119,7 @@ export function AuthFrame({ subtitle, children }: { subtitle: string; children: 
           <BrandMark size={44} />
           <div className="flex flex-col gap-2">
             <Wordmark size={34} />
-            <p className="text-[14px] text-neutral-400">{subtitle}</p>
+            <p className="text-[17px] leading-snug text-neutral-300">{subtitle}</p>
           </div>
         </div>
       </header>

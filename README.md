@@ -1,6 +1,6 @@
 # Klavdia · Stock (Decles)
 
-Stock, ventas, comisiones y vencimientos del consultorio Decles. Es un **recorte de Clavdia**:
+Pacientes, prácticas, ventas, stock, comisiones y vencimientos del consultorio Decles. Es un **recorte de Clavdia**:
 mismo stack, misma estética y **mismas tablas** (más columnas aditivas), para integrarlo a
 Clavdia cuando salga a producción sin migrar datos a mano.
 
@@ -9,8 +9,8 @@ Clavdia cuando salga a producción sin migrar datos a mano.
 | Rol | Puede |
 | --- | --- |
 | **Admin** (cualquier persona marcada como admin) | Equipo: alta y baja de médicas y secretarias, reset de contraseña, % de comisión. Stock: productos con precio, lotes con vencimiento, bajas. Ventas: ver todo, comisiones por médica, anular |
-| **Secretaría** | Solo vender: elige **qué médica vendió**, escribe en la hoja ("vendí 2 cremas pindonga") o toca el producto. Ve nombre y precio |
-| **Médica/o** | Vende a su nombre, ve el stock, su comisión y la **campanita** con vencimientos y stock bajo |
+| **Secretaría** | **Anotar**: escribe lo que pasó ("María López, la atendió Laura, atención y peeling" / "gabriela vendió 2 cremas con tarjeta") o lo elige de una lista en pasos; confirma y listo. Ve el **cierre del día** y Ventas |
+| **Médica/o** | Anota a su nombre, ve el stock, su comisión, su cierre del día y la **campanita** con vencimientos y stock bajo |
 
 Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
 
@@ -30,6 +30,16 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
 - **Bloqueo**: 5 intentos fallidos → 15 min.
 - **Si el único admin perdió la contraseña**: `npm run user:reset-password -- <usuario>` en la máquina donde corre.
 
+## Anotar y cierre del día
+
+- **Anotar** (pantalla principal, para todos): un cuadro de texto libre o "Prefiero elegirlo de una lista" (qué se hizo o
+  vendió → quién → cómo pagó). Siempre muestra "¿Está bien así?" con cantidades +/−, paciente editable, médica y total.
+- El **paciente es solo un nombre** escrito (no hay fichas). Las **prácticas** (atención, peeling…) las carga el admin en
+  Stock → Prácticas con precio efectivo y con tarjeta; generan comisión igual que un producto.
+- Todo lo anotado junto se guarda junto (`visit_id`): **o se anota todo o nada** (si no alcanza el stock de un producto, no se
+  anota ninguna línea).
+- **Cierre del día**: pacientes, prácticas, lo cobrado (por medio de pago) y el detalle por médica. Se imprime.
+
 ## Precios, medio de pago y comisiones
 
 - Cada producto tiene **precio efectivo/transferencia** (el mismo) y **precio con tarjeta** (vacío = igual).
@@ -40,7 +50,7 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
 
 ## Primeros pasos (onboarding)
 
-Después del primer arranque, el admin ve un checklist de 6 pasos que se tildan solos al hacerlos: su email, productos con precio,
+Después del primer arranque, el admin ve un checklist de 7 pasos que se tildan solos al hacerlos: su email, prácticas, productos con precio,
 stock con vencimiento, médicas con comisión, secretaría y una venta de prueba. Se oculta y se reabre desde el menú de la cuenta.
 
 ## Instalación
@@ -78,7 +88,7 @@ Empezar de cero: `docker compose down -v && npm run db:up && npm run db:migrate 
 ```
 src/lib/db/migrations/   0001_core · 0002_stock · 0003_billing   (= Clavdia)
                          0004_notifications · 0005_accounts_commissions · 0006_user_aliases
-                         0007_payment_methods · 0008_onboarding   (nuevas)
+                         0007_payment_methods · 0008_onboarding · 0009_visits   (nuevas)
 src/lib/auth/            session (cookie firmada + session_version), password (scrypt), actor
 src/lib/domain/
   accounts.ts      primer arranque, login, contraseña (y recuperación por código), equipo (alta/baja/reset/comisión)
@@ -86,7 +96,9 @@ src/lib/domain/
   billing.ts       = Clavdia + médica obligatoria y comisión congelada; resumen de comisiones
   products.ts      producto vendible = stock_item + price_list_item (alta/edición en un paso)
   notifications.ts avisos de vencimiento / vencido / stock bajo para las médicas
-  quick-sale.ts    intérprete SIN IA de la hoja: producto, cantidad, médica (con diminutivos/apodos) y medio de pago
+  quick-sale.ts    intérprete SIN IA: paciente, prácticas/productos, cantidad, médica (con diminutivos/apodos) y medio de pago
+  visits.ts        anotar todo junto (paciente + médica + renglones), todo o nada
+  day-close.ts     cierre del día
   onboarding.ts    "Primeros pasos" del admin
 ```
 
@@ -94,7 +106,8 @@ src/lib/domain/
 
 Diferencias concretas contra Clavdia; todo lo demás es igual:
 
-1. **Migraciones nuevas**: `0004` a `0008` (solo agregan tablas/columnas). `price_list_items.amount` sigue siendo el
+1. **Migraciones nuevas**: `0004` a `0009` (solo agregan tablas/columnas). Prácticas = `price_list_items.kind = 'tratamiento'`
+   (sin stock). `sales.patient_label` (paciente escrito; en Clavdia se puede mapear a `patient_id`) y `sales.visit_id`. `price_list_items.amount` sigue siendo el
    precio base (efectivo); `card_amount` es nuevo. `sales.total` = lo cobrado; `cash_total`/`card_total`/`payment_method` nuevos.
 2. **Login**: Clavdia entra con DNI/email + PIN. Al integrar, o se suma usuario+contraseña a Clavdia, o se completa
    `email`/`dni` de estas cuentas para que entren con el login de Clavdia. `session_version` conviene llevarlo igual.

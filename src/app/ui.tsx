@@ -7,7 +7,7 @@ import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 
 /** Botón principal: relleno claro (una sola acción principal por pantalla). */
 export const BTN_PRIMARY =
-  "inline-flex items-center justify-center gap-1.5 rounded-md border border-accent bg-accent px-3.5 text-[13px] font-medium text-bg transition-opacity hover:opacity-85 active:opacity-70 disabled:pointer-events-none disabled:opacity-40";
+  "inline-flex items-center justify-center gap-1.5 rounded-md border border-accent bg-accent px-3.5 text-[13px] font-medium text-on-accent transition-opacity hover:opacity-85 active:opacity-70 disabled:pointer-events-none disabled:opacity-40";
 /** Botón secundario / ghost. */
 export const BTN_GHOST =
   "inline-flex items-center justify-center gap-1.5 rounded-md border border-neutral-800 bg-transparent px-3 text-[13px] text-neutral-300 transition-colors hover:border-accent-700 hover:bg-accent-900 disabled:pointer-events-none disabled:opacity-40";

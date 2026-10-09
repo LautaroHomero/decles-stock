@@ -212,6 +212,9 @@ export async function recordSale(
     expiresOn?: string | null;
     /** Opcional: "efectivo" (o transferencia) | "tarjeta". Sin medio se registra a precio efectivo. */
     paymentMethod?: string | null;
+    /** Decles: paciente escrito a mano y renglones anotados juntos (ver domain/visits.ts). */
+    patientLabel?: string;
+    visitId?: string | null;
   },
   source: BillingSource = "manual",
 ): Promise<
@@ -252,6 +255,7 @@ export async function recordSale(
   let providerId = actor.role === "medico" ? actor.activeOrg?.providerId ?? null : v.providerId ?? item.providerId ?? null;
   let commissionPct = 0;
   if (!providerId && item.kind === "producto") return fail("Elegí qué médica hizo la venta.");
+  if (!providerId && item.kind === "tratamiento") return fail("Elegí qué médica hizo la práctica.");
   if (providerId) {
     const p = await getProvider(providerId);
     if (!p || p.organizationId !== ctx.orgId) return fail("Profesional no encontrado en este consultorio.", 404);
@@ -269,7 +273,10 @@ export async function recordSale(
 
   const { id, total, cashTotal, cardTotal } = await insertSale(
     ctx.orgId,
-    { item, quantity, providerId, patientId: v.patientId ?? null, note: cleanName(v.note), commissionPct, paymentMethod },
+    {
+      item, quantity, providerId, patientId: v.patientId ?? null, note: cleanName(v.note), commissionPct, paymentMethod,
+      patientLabel: cleanName(v.patientLabel).slice(0, 120), visitId: v.visitId ?? null,
+    },
     ctx.who,
   );
 

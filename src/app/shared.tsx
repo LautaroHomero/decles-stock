@@ -3,18 +3,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // Clases de la vista Sistema de Clavdia (src/app/system-shared.tsx), mismas medidas.
-export const CARD = "flex w-full flex-col gap-3 rounded-xl bg-surface p-5 shadow-sm";
+// Botones y campos de la paleta "Noche y champagne": esquinas redondeadas, bordes de 2px y
+// el champagne (`bg-accent`) solo para la acción principal.
+export const CARD = "flex w-full flex-col gap-3 rounded-2xl bg-surface p-5 shadow-sm";
 export const BTN =
-  "rounded-md border border-neutral-800 px-2.5 py-1 text-[12px] text-neutral-300 transition-colors hover:border-accent-700 hover:bg-accent-900 disabled:opacity-40";
+  "rounded-xl border-2 border-neutral-800 px-3.5 py-1.5 text-[13.5px] font-semibold text-fg transition-colors hover:border-neutral-700 hover:bg-neutral-900 disabled:opacity-40";
 export const BTN_DARK =
-  "rounded-md border border-accent px-2.5 py-1 text-[12px] font-medium text-accent-300 transition-colors hover:bg-accent-900 active:bg-accent-800 disabled:opacity-40";
+  "rounded-xl border-2 border-accent bg-accent px-3.5 py-1.5 text-[13.5px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:opacity-40";
 export const FIELD =
-  "w-full rounded-md border border-neutral-800 bg-transparent px-2.5 py-1.5 text-[13px] text-fg placeholder:text-neutral-600 focus:border-accent-700 focus:outline-none";
-/** Acción principal grande (pantalla de venta: se toca con el dedo). */
+  "w-full rounded-xl border-2 border-neutral-800 bg-surface px-3 py-2 text-[15px] text-fg placeholder:text-neutral-600 focus:border-accent-600 focus:outline-none";
+/** Acción principal grande (se toca con el dedo). */
 export const BTN_BIG =
-  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg border border-accent bg-accent px-4 text-[15px] font-medium text-bg transition-opacity hover:opacity-85 active:opacity-70 disabled:pointer-events-none disabled:opacity-40";
+  "inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-5 text-[18px] font-bold text-on-accent transition-[filter,opacity] hover:brightness-105 active:opacity-85 disabled:pointer-events-none disabled:opacity-40";
 
-export const money = (n: number) => `$ ${n.toLocaleString("es-AR")}`;
+export const money = (n: number) => `$\u00a0${n.toLocaleString("es-AR")}`;
 
 /** `YYYY-MM-DD` → `DD/MM/AAAA`. */
 export const fmtDate = (ymd: string) => `${ymd.slice(8, 10)}/${ymd.slice(5, 7)}/${ymd.slice(0, 4)}`;
@@ -126,9 +128,17 @@ export interface CatalogProduct {
   lots: { id: string; lotCode: string; quantity: number; expiresOn: string | null; expired: boolean; receivedAt: string }[];
 }
 
+export interface CatalogPractice {
+  id: string;
+  name: string;
+  price: number;
+  cardPrice: number | null;
+}
+
 export interface CatalogResponse {
   ok: boolean;
   products: CatalogProduct[];
+  practices: CatalogPractice[];
   alerts: { expiringSoon: number; expired: number; low: number };
   expiryDays: number;
   canAdmin: boolean;
@@ -137,6 +147,9 @@ export interface CatalogResponse {
 export interface SaleRow {
   id: string;
   itemName: string;
+  kind: "consulta" | "tratamiento" | "producto";
+  patientName: string | null;
+  visitId: string | null;
   quantity: number;
   unitPrice: number;
   total: number;

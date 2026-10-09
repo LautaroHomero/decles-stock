@@ -5,19 +5,21 @@ import { EnvelopeSimpleIcon, KeyIcon, ListChecksIcon, SignOutIcon } from "@phosp
 import type { Actor } from "@/lib/domain/types";
 import { ThemeToggle, Wordmark, initials } from "./ui";
 import { Bell } from "./bell";
-import { VenderView } from "./vender-view";
-import { InventarioView } from "./inventario-view";
+import { AnotarView } from "./anotar-view";
+import { CierreView } from "./cierre-view";
+import { StockSection } from "./practicas-view";
 import { VentasView } from "./ventas-view";
 import { EquipoView } from "./equipo-view";
 import { ChangePasswordForm, EmailForm } from "./auth-ui";
 import { Onboarding } from "./onboarding";
 
-type Section = "vender" | "inventario" | "ventas" | "equipo";
+type Section = "vender" | "cierre" | "inventario" | "ventas" | "equipo";
 
 const TABS: { id: Section; label: string }[] = [
-  { id: "vender", label: "Vender" },
-  { id: "inventario", label: "Stock" },
+  { id: "vender", label: "Anotar" },
+  { id: "cierre", label: "Cierre" },
   { id: "ventas", label: "Ventas" },
+  { id: "inventario", label: "Stock" },
   { id: "equipo", label: "Equipo" },
 ];
 
@@ -27,8 +29,8 @@ const ROLE_LABEL = { medico: "Médica/o", recepcion: "Secretaría", paciente: "P
 export function StockApp({ actor }: { actor: Actor }) {
   const isAdmin = !!actor.activeOrg?.canAdmin;
   const isMedico = actor.role === "medico";
-  // El admin arranca en el inventario (es quien carga); el resto, vendiendo.
-  const [section, setSection] = useState<Section>(isAdmin ? "inventario" : "vender");
+  // Todos arrancan anotando; el admin carga stock y prácticas desde Stock.
+  const [section, setSection] = useState<Section>("vender");
   // La secretaría solo vende: el inventario (vencimientos, lotes) es del admin y la médica.
   // El equipo, solo el admin.
   const tabs = TABS.filter((t) => (t.id !== "inventario" || isAdmin || isMedico) && (t.id !== "equipo" || isAdmin));
@@ -40,12 +42,12 @@ export function StockApp({ actor }: { actor: Actor }) {
   };
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden bg-bg">
-      <header className="cl-force-dark flex h-14 shrink-0 items-center gap-4 border-b border-neutral-800 bg-header px-4 text-fg sm:gap-8 sm:px-6">
-        <button onClick={() => setSection("vender")} aria-label="Klavdia — Vender" className="shrink-0">
-          <Wordmark size={17} />
+    <div className="flex h-[100dvh] flex-col overflow-hidden bg-bg print:h-auto print:overflow-visible">
+      <header className="cl-no-print flex h-16 shrink-0 items-center gap-3 border-b border-neutral-900 bg-header px-4 text-fg sm:gap-8 sm:px-6">
+        <button onClick={() => setSection("vender")} aria-label="Klavdia — Anotar" className="shrink-0">
+          <Wordmark size={20} />
         </button>
-        <nav className="flex h-full items-stretch gap-1 sm:gap-2" aria-label="Secciones">
+        <nav className="-mx-1 flex h-full min-w-0 items-stretch gap-0.5 overflow-x-auto sm:gap-2" aria-label="Secciones">
           {tabs.map((t) => {
             const active = section === t.id;
             return (
@@ -53,10 +55,10 @@ export function StockApp({ actor }: { actor: Actor }) {
                 key={t.id}
                 onClick={() => go(t.id)}
                 aria-current={active ? "page" : undefined}
-                className={`relative flex items-center px-2 text-[14px] transition-colors sm:px-3 ${active ? "text-fg" : "text-neutral-400 hover:text-fg"}`}
+                className={`relative flex shrink-0 items-center px-2 text-[15.5px] font-semibold transition-colors sm:px-3 ${active ? "text-fg" : "text-neutral-500 hover:text-fg"}`}
               >
                 {t.label}
-                {active && <span className="absolute inset-x-2 bottom-0 h-[2px] rounded-full bg-fg sm:inset-x-3" />}
+                {active && <span className="absolute inset-x-2 bottom-0 h-[3px] rounded-full bg-accent sm:inset-x-3" />}
               </button>
             );
           })}
@@ -67,10 +69,11 @@ export function StockApp({ actor }: { actor: Actor }) {
         <AvatarMenu actor={actor} onOnboarding={() => setOnbKey((k) => k + 1)} />
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto">
-        {isAdmin && <Onboarding go={go} reloadKey={onbKey} />}
-        {section === "vender" && <VenderView actor={actor} />}
-        {section === "inventario" && (isAdmin || isMedico) && <InventarioView />}
+      <main className="min-h-0 flex-1 overflow-y-auto print:overflow-visible">
+        {isAdmin && section !== "cierre" && <Onboarding go={go} reloadKey={onbKey} />}
+        {section === "vender" && <AnotarView actor={actor} onOpenClose={() => go("cierre")} />}
+        {section === "cierre" && <CierreView onOpenSales={() => go("ventas")} />}
+        {section === "inventario" && (isAdmin || isMedico) && <StockSection canAdmin={isAdmin} />}
         {section === "ventas" && <VentasView actor={actor} />}
         {section === "equipo" && isAdmin && <EquipoView actor={actor} />}
       </main>

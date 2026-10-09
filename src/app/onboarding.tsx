@@ -5,13 +5,19 @@ import { CheckIcon, CaretDownIcon } from "@phosphor-icons/react";
 import { BTN, BTN_DARK, call, usePoll } from "./shared";
 import { EmailForm } from "./auth-ui";
 
-type StepId = "email" | "productos" | "stock" | "medicas" | "secretaria" | "venta";
-type Section = "vender" | "inventario" | "ventas" | "equipo";
+type StepId = "email" | "practicas" | "productos" | "stock" | "medicas" | "secretaria" | "venta";
+type Section = "vender" | "cierre" | "inventario" | "ventas" | "equipo";
 
 const STEPS: Record<StepId, { title: string; body: string; cta?: string; go?: Section }> = {
   email: {
     title: "Cargá tu email",
     body: "Si un día te olvidás la contraseña, te llega un código a este mail para elegir una nueva.",
+  },
+  practicas: {
+    title: "Cargá las prácticas",
+    body: "Atención, peeling, limpieza… con su precio en efectivo/transferencia y con tarjeta. Cuentan para la comisión de cada médica.",
+    cta: "Ir a Stock",
+    go: "inventario",
   },
   productos: {
     title: "Cargá los productos que venden",
@@ -38,9 +44,9 @@ const STEPS: Record<StepId, { title: string; body: string; cta?: string; go?: Se
     go: "equipo",
   },
   venta: {
-    title: "Hacé una venta de prueba",
-    body: "Escribí en la hoja, por ejemplo «laura vendió 2 cremas con tarjeta», y registrala. Después la podés anular desde Ventas.",
-    cta: "Ir a Vender",
+    title: "Anotá algo de prueba",
+    body: "Escribí, por ejemplo, «María López, la atendió Laura, atención» o «laura vendió 2 cremas con tarjeta». Después lo podés anular desde Ventas.",
+    cta: "Ir a Anotar",
     go: "vender",
   },
 };
@@ -81,7 +87,7 @@ export function Onboarding({ go, reloadKey }: { go: (s: Section) => void; reload
             <p className="text-[13px] text-neutral-400">
               {finished
                 ? "Cada persona entra con su usuario. Las ventas, comisiones y avisos de vencimiento ya funcionan solos."
-                : "Seis pasos cortos. Cada uno se tilda solo cuando lo hacés."}
+                : "Siete pasos cortos. Cada uno se tilda solo cuando lo hacés."}
             </p>
           </div>
           <button className={finished ? BTN_DARK : BTN} onClick={close}>
@@ -90,7 +96,7 @@ export function Onboarding({ go, reloadKey }: { go: (s: Section) => void; reload
         </div>
 
         <div className="h-1 overflow-hidden rounded-full bg-neutral-800" aria-hidden>
-          <div className="h-full rounded-full bg-fg transition-all" style={{ width: `${(ready / total) * 100}%` }} />
+          <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${(ready / total) * 100}%` }} />
         </div>
 
         <ol className="flex flex-col">
@@ -101,7 +107,7 @@ export function Onboarding({ go, reloadKey }: { go: (s: Section) => void; reload
               <li key={s.id} className="flex gap-3 border-t border-neutral-900 py-3 first:border-0">
                 <span
                   className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[12px] tabular-nums ${
-                    s.done ? "border-fg bg-fg text-bg" : current ? "border-fg text-fg" : "border-neutral-700 text-neutral-500"
+                    s.done ? "border-accent bg-accent text-on-accent" : current ? "border-accent text-fg" : "border-neutral-700 text-neutral-500"
                   }`}
                 >
                   {s.done ? <CheckIcon size={13} weight="bold" /> : i + 1}

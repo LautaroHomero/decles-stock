@@ -55,7 +55,7 @@ export function Bell({ onOpenStock }: { onOpenStock: () => void }) {
       >
         <BellIcon size={19} weight={unread ? "fill" : "regular"} />
         {unread > 0 && (
-          <span className="absolute -right-1 -top-1 flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-fg px-1 text-[10.5px] font-semibold tabular-nums text-bg">
+          <span className="absolute -right-1 -top-1 flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-accent px-1 text-[10.5px] font-semibold tabular-nums text-on-accent">
             {unread > 9 ? "9+" : unread}
           </span>
         )}
@@ -86,7 +86,7 @@ export function Bell({ onOpenStock }: { onOpenStock: () => void }) {
                   }}
                   className={`flex w-full gap-3 border-b border-neutral-900 px-4 py-3 text-left transition-colors last:border-0 hover:bg-accent-900 ${n.readAt ? "opacity-55" : ""}`}
                 >
-                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.readAt ? "bg-transparent" : "bg-fg"}`} />
+                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.readAt ? "bg-transparent" : "bg-accent"}`} />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-baseline gap-2">
                       <span className="text-[11px] uppercase tracking-[.06em] text-neutral-500">{KIND_LABEL[n.kind]}</span>

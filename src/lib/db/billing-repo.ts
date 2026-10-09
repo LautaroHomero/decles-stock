@@ -67,6 +67,8 @@ export interface Sale {
   /** Valor de la venta a precio efectivo y a precio tarjeta (congelados al vender). */
   cashTotal: number;
   cardTotal: number;
+  /** Renglones anotados juntos comparten visitId (null en ventas viejas). */
+  visitId: string | null;
 }
 
 export interface BillingWho {
@@ -183,7 +185,7 @@ const toSale = (r: Row): Sale => ({
   providerId: (r.provider_id as string) ?? null,
   providerName: (r.provider_name as string) ?? null,
   patientId: (r.patient_id as string) ?? null,
-  patientName: (r.patient_name as string) ?? null,
+  patientName: (r.patient_name as string) || (r.patient_label as string) || null,
   note: (r.note as string) ?? "",
   status: r.status as Sale["status"],
   createdByName: r.created_by_name as string,
@@ -195,6 +197,7 @@ const toSale = (r: Row): Sale => ({
   paymentMethod: (r.payment_method as PaymentMethod) ?? null,
   cashTotal: Number(r.cash_total ?? r.total),
   cardTotal: Number(r.card_total ?? r.total),
+  visitId: (r.visit_id as string) ?? null,
 });
 
 export async function insertSale(
@@ -209,6 +212,9 @@ export async function insertSale(
     commissionPct?: number;
     /** null/undefined = no se cargó: se registra a precio efectivo y se guardan los dos valores. */
     paymentMethod?: PaymentMethod | null;
+    /** Paciente escrito a mano (Decles: no hay ficha). */
+    patientLabel?: string;
+    visitId?: string | null;
   },
   who: BillingWho,
 ): Promise<{ id: string; total: number; cashTotal: number; cardTotal: number; commissionAmount: number }> {
@@ -225,10 +231,10 @@ export async function insertSale(
   await getSql()`
     INSERT INTO sales (id, organization_id, item_id, item_name, kind, quantity, unit_price, total, provider_id, patient_id, note,
                        created_by, created_by_name, source, created_at, commission_pct, commission_amount,
-                       payment_method, cash_total, card_total)
+                       payment_method, cash_total, card_total, patient_label, visit_id)
     VALUES (${id}, ${orgId}, ${v.item.id}, ${v.item.name}, ${v.item.kind}, ${v.quantity}, ${unitPrice}, ${total},
             ${v.providerId}, ${v.patientId}, ${v.note}, ${who.id}, ${who.name}, ${who.source}, ${realNowIso()}, ${pct}, ${commissionAmount},
-            ${method}, ${cashTotal}, ${cardTotal})`;
+            ${method}, ${cashTotal}, ${cardTotal}, ${v.patientLabel ?? ""}, ${v.visitId ?? null})`;
   return { id, total, cashTotal, cardTotal, commissionAmount };
 }
 
@@ -251,6 +257,8 @@ export interface CommissionRow {
   total: number;
   commission: number;
 }
+
+export const newVisitId = () => uid("vis");
 
 /** Ventas pagas del período agrupadas por médica (las anuladas no cuentan). */
 export async function commissionSummary(orgId: string, from: string, to: string): Promise<CommissionRow[]> {

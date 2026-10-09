@@ -118,7 +118,8 @@ export function VentasView({ actor }: { actor: Actor }) {
 
   const sales = useMemo(() => data?.sales ?? [], [data]);
   const paid = sales.filter((s) => s.status === "paid");
-  const units = paid.reduce((n, s) => n + s.quantity, 0);
+  const units = paid.filter((s) => s.kind === "producto").reduce((n, s) => n + s.quantity, 0);
+  const practices = paid.filter((s) => s.kind !== "producto").reduce((n, s) => n + s.quantity, 0);
   const total = paid.reduce((n, s) => n + charged(s), 0);
   const cash = paid.filter((s) => s.paymentMethod === "efectivo").reduce((n, s) => n + s.cashTotal, 0);
   const card = paid.filter((s) => s.paymentMethod === "tarjeta").reduce((n, s) => n + s.cardTotal, 0);
@@ -235,7 +236,14 @@ export function VentasView({ actor }: { actor: Actor }) {
           <span className="text-[12px] uppercase tracking-[.08em] text-neutral-500">Total vendido</span>
           <span className="font-display text-[34px] font-medium leading-none tracking-[-.02em] tabular-nums">{data ? money(total) : "…"}</span>
           <span className="text-[13px] text-neutral-400">
-            {paid.length === 0 ? "Sin ventas." : `${paid.length} ${paid.length === 1 ? "venta" : "ventas"} · ${units} ${units === 1 ? "producto" : "productos"}`}
+            {paid.length === 0
+              ? "Sin ventas."
+              : [
+                  practices ? `${practices} ${practices === 1 ? "práctica" : "prácticas"}` : null,
+                  units ? `${units} ${units === 1 ? "producto" : "productos"}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
           </span>
         </div>
         {paid.length > 0 && (
@@ -451,7 +459,9 @@ function SaleItem({
         <span className="w-11 shrink-0 tabular-nums text-neutral-500">{fmtTime(s.createdAt)}</span>
         <span className="min-w-0 flex-1">
           <span className={voided ? "line-through" : ""}>
-            {s.quantity} × {s.itemName}
+            {s.kind === "producto" || s.quantity > 1 ? `${s.quantity} × ` : ""}
+            {s.itemName}
+            {s.patientName && <span className="text-neutral-400"> — {s.patientName}</span>}
           </span>
           <span className="block text-[12.5px] text-neutral-500">
             {[
@@ -581,12 +591,12 @@ function Calendar({
               onClick={() => onPick(d)}
               title={totals.has(d) ? money(totals.get(d)!) : "Sin ventas"}
               className={`relative mx-auto flex h-9 w-9 flex-col items-center justify-center rounded-full text-[13px] tabular-nums transition-colors disabled:opacity-25 ${
-                d === selected ? "bg-fg text-bg" : d === today ? "border border-neutral-600 text-fg hover:bg-accent-900" : "text-neutral-200 hover:bg-accent-900"
+                d === selected ? "bg-accent text-on-accent" : d === today ? "border border-neutral-600 text-fg hover:bg-accent-900" : "text-neutral-200 hover:bg-accent-900"
               }`}
             >
               {Number(d.slice(8))}
               {totals.has(d) && (
-                <span className={`absolute bottom-1 h-1 w-1 rounded-full ${d === selected ? "bg-bg" : "bg-fg"}`} aria-hidden />
+                <span className={`absolute bottom-1 h-1 w-1 rounded-full ${d === selected ? "bg-on-accent" : "bg-accent"}`} aria-hidden />
               )}
             </button>
           ),
@@ -594,7 +604,7 @@ function Calendar({
       </div>
       <div className="mt-3 flex items-center justify-between border-t border-neutral-800 pt-3 text-[12px] text-neutral-400">
         <span className="flex items-center gap-1.5">
-          <span className="h-1 w-1 rounded-full bg-fg" aria-hidden /> días con ventas
+          <span className="h-1 w-1 rounded-full bg-accent" aria-hidden /> días con ventas
         </span>
         <span className="tabular-nums">{data ? `Mes: ${money(monthTotal)}` : "…"}</span>
       </div>
