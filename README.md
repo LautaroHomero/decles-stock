@@ -55,9 +55,7 @@ el primer arranque. Se reinicia solo con la PC. Los datos viven en el volumen `d
 
 ### Hosteado (Vercel + Supabase)
 
-1. Proyecto en Supabase. En Vercel: `DATABASE_URL` (pooled, 6543), `AUTH_SECRET` (32+ caracteres), `CRON_SECRET`.
-2. `DATABASE_URL_DIRECT=... npm run db:migrate`
-3. Entrar a la URL y completar el primer arranque.
+Paso a paso, con las variables para copiar: **[DEPLOY.md](DEPLOY.md)**.
 
 ### Desarrollo
 

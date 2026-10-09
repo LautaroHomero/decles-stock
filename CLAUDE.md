@@ -13,7 +13,8 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
 - Cuentas: usuario + contraseña (`domain/accounts.ts`). Toda baja o reset sube `users.session_version`
   (revoca sesiones). Con `must_change_password` la API solo permite `/api/auth/password`.
 - Venta de producto exige médica (`providerId`); la comisión se congela en `sales.commission_*`.
-- Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada.
+- Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada. `migrate` activa RLS en todas
+  las tablas de `public` (bloquea la API REST de Supabase); la app entra como dueña y no le afecta.
 - Fechas: `realNowIso()` (zona `America/Argentina/Buenos_Aires`), timestamps TEXT.
 
 ```bash

@@ -33,5 +33,28 @@ export async function migrate(sql: Sql): Promise<string[]> {
     });
     ran.push(id);
   }
+  await lockPublicApi(sql);
   return ran;
+}
+
+/**
+ * Supabase expone el schema `public` por su API REST (PostgREST) a cualquiera que tenga la
+ * clave pública ("anon"). Esta app no usa esa API — se conecta directo con el usuario dueño
+ * de las tablas — así que se activa RLS sin políticas en TODAS las tablas: la API no ve nada
+ * y la app sigue igual (el dueño de la tabla no pasa por RLS). Corre en cada migrate, así
+ * cubre también las tablas que se agreguen después. En un Postgres común es inofensivo.
+ */
+async function lockPublicApi(sql: Sql): Promise<void> {
+  await sql.unsafe(`
+    DO $$
+    DECLARE t record;
+    BEGIN
+      FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+        EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t.tablename);
+      END LOOP;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        EXECUTE 'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated';
+        EXECUTE 'REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated';
+      END IF;
+    END $$;`);
 }
