@@ -3,8 +3,9 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { CaretLeftIcon, CheckIcon, MinusIcon, PlusIcon, SquaresFourIcon, XIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
-import { parseNote, suggest } from "@/lib/domain/quick-sale";
+import { parseNote, searchScore, suggest } from "@/lib/domain/quick-sale";
 import { parseExpense } from "@/lib/domain/expense-note";
+import { extractMoney, parsePayout, splitPaid } from "@/lib/domain/money-note";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import { firstName, greeting } from "./ui";
 import { Toast, call, fmtTime, money, usePoll, useToast, type CatalogResponse, type Payment, type SaleRow, PAYMENTS } from "./shared";
@@ -31,6 +32,8 @@ interface Item {
   available?: number;
   /** Médicas que lo hacen / venden (vacío = cualquiera). */
   providerIds: string[];
+  /** % de comisión propio del ítem (null = el de la médica). */
+  pct?: number | null;
 }
 
 /** ¿Esa médica puede anotar este ítem? (sin vínculos = cualquiera). */
@@ -55,6 +58,8 @@ const normQ = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\
 interface Seller {
   id: string;
   name: string;
+  /** % de comisión de la profesional. */
+  pct?: number;
   aliases?: string[];
 }
 interface Line {
@@ -73,6 +78,12 @@ interface Draft {
   unresolved: { text: string; qty: number; sellerId: string | null; candidates: Item[] }[];
   /** El paciente salió de una sola palabra suelta: puede ser algo no cargado («radiofrecuencia»). Se pregunta. */
   patientUnsure: boolean;
+  /** Lo que ingresó (null = el precio de lista). 0 = le pagaron directo a la profesional / abono. */
+  paid: number | null;
+  /** Le pagaron directo a la profesional (o abono). */
+  direct: boolean;
+  /** Lo que le corresponde a la profesional, si se aclaró (null = según su %). */
+  share: number | null;
 }
 
 const cardOf = (i: Item) => i.cardPrice ?? i.price;
@@ -84,12 +95,20 @@ const emptyDraft = (from: Draft["from"], sellerId: string | null): Draft => ({
   lines: [],
   unresolved: [],
   patientUnsure: false,
+  paid: null,
+  direct: false,
+  share: null,
 });
 
 /** Lo escrito → borrador. Lo que no se encuentra en la lista queda como pendiente (lo resuelve el admin). */
 function buildDraft(text: string, items: Item[], sellers: Seller[], fixedSeller: string | null): Draft {
-  const { lines, patient, patientSure, seller, payment } = parseNote(text, items, sellers);
+  // La plata primero («45000», «le transfirieron a carmen», «le corresponden 9000»): el resto es paciente, médica y qué.
+  const money = extractMoney(text);
+  const { lines, patient, patientSure, seller, payment } = parseNote(money.text, items, sellers);
   const d = emptyDraft("text", fixedSeller);
+  d.paid = money.paid;
+  d.direct = money.direct;
+  d.share = money.share;
   d.patient = patient ?? "";
   d.patientUnsure = !!patient && !patientSure;
   for (const l of lines) {
@@ -106,14 +125,47 @@ function buildDraft(text: string, items: Item[], sellers: Seller[], fixedSeller:
   return d;
 }
 
+/** Toda práctica es de un paciente: con una práctica anotada, el nombre es obligatorio. */
+const hasPractice = (lines: Line[]) => lines.some((l) => l.item.kind === "practica");
+
 const lineCash = (l: Line) => l.item.price * l.qty;
 const lineCard = (l: Line) => cardOf(l.item) * l.qty;
+/** Precio de lista de un renglón según el medio de pago. */
+const lineList = (l: Line, payment: Payment | null) => (payment === "tarjeta" ? lineCard(l) : lineCash(l));
+/** Lo que ingresó por cada renglón: lo escrito repartido (productos a lista, el resto a la práctica). */
+const lineAmounts = (d: Draft) =>
+  splitPaid(
+    d.lines.map((l) => ({ list: lineList(l, d.payment), product: l.item.kind === "producto" })),
+    d.paid,
+  );
+/** La parte de la profesional según su % (o el del ítem), sobre lo que ingresó. */
+function autoShare(d: Draft, sellers: Seller[]): number {
+  const amounts = lineAmounts(d);
+  return d.lines.reduce((n, l, i) => {
+    const pct = l.item.pct ?? sellers.find((s) => s.id === (l.sellerId ?? d.sellerId))?.pct ?? 0;
+    return n + Math.round((amounts[i] * pct) / 100);
+  }, 0);
+}
+/** Renglones para `/api/visits` con lo que ingresó y, si se aclaró, la parte de la profesional. */
+function visitLines(d: Draft) {
+  const amounts = lineAmounts(d);
+  const kAt = Math.max(0, d.lines.findIndex((l) => l.item.kind !== "producto"));
+  return d.lines.map((l, i) => {
+    const money = {
+      ...(d.paid !== null ? { amount: amounts[i] } : {}),
+      ...(d.share !== null ? { commission: i === kAt ? d.share : 0 } : {}),
+    };
+    return l.item.kind === "pendiente"
+      ? { pendingName: l.item.name, pendingPrice: (d.paid !== null ? Math.round(amounts[i] / l.qty) : l.item.price) || null, quantity: l.qty, ...money }
+      : { itemId: l.item.id, quantity: l.qty, ...money };
+  });
+}
 const summaryOf = (d: Draft) =>
   [d.patient.trim(), d.lines.map((l) => `${l.qty > 1 ? `${l.qty} ` : ""}${l.item.name}`).join(", ")].filter(Boolean).join(" · ");
 
 export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: () => void }) {
   const [catalog, refreshCatalog] = usePoll<CatalogResponse>("/api/catalog", 30_000);
-  const [sellersData] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; aliases: string[] }[] }>("/api/sellers", 60_000);
+  const [sellersData] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; aliases: string[]; commissionPct: number }[] }>("/api/sellers", 60_000);
   const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[] }>("/api/sales", 30_000);
   const [toast, showToast] = useToast();
   const isMedico = actor.role === "medico";
@@ -123,14 +175,14 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const [expenseForm, setExpenseForm] = useState<{ expense?: Expense; initial?: { concept: string; amount: number } } | null>(null);
 
   const items: Item[] = useMemo(() => {
-    const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [] }));
+    const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [], pct: p.commissionPct }));
     const products = (catalog?.products ?? [])
       .filter((p) => p.price !== null && p.priceItemId)
-      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available, providerIds: p.providerIds ?? [] }));
+      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available, providerIds: p.providerIds ?? [], pct: p.commissionPct }));
     return [...practices, ...products];
   }, [catalog]);
   const sellers: Seller[] = useMemo(
-    () => (sellersData?.sellers ?? []).map((s) => ({ id: s.providerId, name: s.name, aliases: s.aliases })),
+    () => (sellersData?.sellers ?? []).map((s) => ({ id: s.providerId, name: s.name, aliases: s.aliases, pct: s.commissionPct })),
     [sellersData],
   );
   // La médica anota a su nombre; con una sola médica en el consultorio, queda elegida sola.
@@ -141,9 +193,14 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   // Lo que se toca en la vista previa (si el texto no lo dice).
   const [pickSeller, setPickSeller] = useState<string | null>(null);
   const [pickPay, setPickPay] = useState<Payment | null>(null);
+  // Plata tocada en la vista previa: lo que ingresó y la parte de la profesional (null = lo del texto / automático).
+  const [pickPaid, setPickPaid] = useState<string | null>(null);
+  const [pickShare, setPickShare] = useState<string | null>(null);
   // Respuestas tocadas en la vista previa: «crema» → cuál, y si el nombre dudoso es la paciente.
   const [chosen, setChosen] = useState<Record<string, string>>({});
   const [unsureIs, setUnsureIs] = useState<"patient" | "item" | null>(null);
+  // Paciente escrito en la vista previa cuando el texto no lo nombra.
+  const [pickPatient, setPickPatient] = useState("");
   const [draft, setDraft] = useState<Draft>(emptyDraft("text", null));
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
@@ -187,17 +244,30 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       const only = sellersFor(d.lines, sellers);
       if (only?.length === 1) d.sellerId = only[0].id;
     }
-    return { ...d, sellerId: pickSeller ?? d.sellerId, payment: d.payment ?? pickPay };
-  }, [typed, items, sellers, fixedSeller, pickSeller, pickPay, chosen, unsureIs]);
+    // Hay práctica y el texto no nombra al paciente: se pregunta en la vista previa.
+    const askPatient = hasPractice(d.lines) && !d.patient.trim() && !d.patientUnsure;
+    if (askPatient) d.patient = pickPatient.trim();
+    if (pickPaid !== null) d.paid = toPesos(pickPaid);
+    if (pickShare !== null) d.share = pickShare.trim() === "" ? null : toPesos(pickShare);
+    return { ...d, sellerId: pickSeller ?? d.sellerId, payment: d.payment ?? pickPay, askPatient };
+  }, [typed, items, sellers, fixedSeller, pickSeller, pickPay, chosen, unsureIs, pickPatient, pickPaid, pickShare]);
   // «pagué 5000 de luz» → es un egreso, no una atención.
-  const expense = useMemo(() => (canExpense ? parseExpense(typed) : null), [typed, canExpense]);
+  // «ya le pagué todo a carmen» → pago a una profesional (va antes que los egresos: también dice «pagué»).
+  const payout = useMemo(() => (canExpense ? parsePayout(typed, sellers) : null), [typed, canExpense, sellers]);
+  const [payoutsData, refreshPayouts] = usePoll<{ ok: boolean; balances: { providerId: string; share: number; paid: number; owed: number }[] }>(
+    "/api/payouts",
+    30_000,
+  );
+  const owedTo = (id: string) => payoutsData?.balances?.find((b) => b.providerId === id);
+  const expense = useMemo(() => (canExpense && !payout ? parseExpense(typed) : null), [typed, canExpense, payout]);
   const possible = preview ? sellersFor(preview.lines, sellers) : null;
   const notHers = !!preview && preview.lines.some((l) => !allowedFor(l.item, preview.sellerId));
   const missingSeller = !!preview && !isMedico && !preview.sellerId;
   const nothing = !!preview && !preview.lines.length && !preview.unresolved.length && !preview.patientUnsure;
   // Lo que falta contestar en la vista previa (todo se resuelve ahí, con un toque).
   const pendingQ = !!preview && (preview.unresolved.length > 0 || preview.patientUnsure);
-  const canSave = !!preview && !nothing && !missingSeller && !notHers && !pendingQ;
+  const missingPatient = !!preview && hasPractice(preview.lines) && !preview.patient.trim();
+  const canSave = !!preview && !nothing && !missingSeller && !notHers && !pendingQ && !missingPatient;
 
   async function save(d: Draft) {
     setBusy(true);
@@ -205,9 +275,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       patientName: d.patient.trim(),
       providerId: d.sellerId,
       paymentMethod: d.payment,
-      lines: d.lines.map((l) =>
-        l.item.kind === "pendiente" ? { pendingName: l.item.name, pendingPrice: l.item.price || null, quantity: l.qty } : { itemId: l.item.id, quantity: l.qty },
-      ),
+      lines: visitLines(d),
     });
     setBusy(false);
     if (!r.ok) {
@@ -220,11 +288,15 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setText("");
     setPickSeller(null);
     setPickPay(null);
+    setPickPaid(null);
+    setPickShare(null);
     setChosen({});
     setUnsureIs(null);
+    setPickPatient("");
     setMode("idle");
     refreshSales();
     refreshCatalog();
+    refreshPayouts();
     setTimeout(() => setFlash(null), 1400);
   }
 
@@ -246,7 +318,19 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setTimeout(() => setFlash(null), 1400);
   }
 
+  async function savePayout() {
+    if (!payout || busy) return;
+    setBusy(true);
+    const r = await call("/api/payouts", "POST", { providerId: payout.seller.id, amount: payout.amount });
+    setBusy(false);
+    if (!r.ok) return showToast(r.error ?? "No se pudo anotar el pago.");
+    const p = r.payout as { amount: number; providerName: string };
+    refreshPayouts();
+    expenseDone(`Pagado a ${p.providerName} · ${money(p.amount)}`);
+  }
+
   function go() {
+    if (payout) return savePayout();
     if (expense) return saveExpense();
     if (preview && canSave && !busy) save(preview);
   }
@@ -254,6 +338,11 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const loading = !catalog || !sellersData;
   const cash = preview?.lines.reduce((n, l) => n + lineCash(l), 0) ?? 0;
   const card = preview?.lines.reduce((n, l) => n + lineCard(l), 0) ?? 0;
+  // Lo que ingresó (lo escrito o la lista) y el reparto: la profesional (su % o lo aclarado) y Decles.
+  const ingreso = preview ? (preview.paid ?? (preview.payment === "tarjeta" ? card : cash)) : 0;
+  const auto = preview ? autoShare(preview, sellers) : 0;
+  const parte = preview?.share ?? auto;
+  const sellerName = sellers.find((s) => s.id === preview?.sellerId)?.name;
 
   return (
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-7 px-5 pb-20 pt-6 text-[14px] leading-[1.45] sm:px-6 sm:pt-8">
@@ -281,6 +370,9 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                   setUnsureIs(null);
                   setPickSeller(null);
                   setPickPay(null);
+                  setPickPaid(null);
+                  setPickShare(null);
+                  setPickPatient("");
                 }
               }}
               onKeyDown={(e) => {
@@ -318,7 +410,20 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
               </div>
             )}
 
-            {expense ? (
+            {payout ? (
+              <div className="flex animate-cl-in flex-col gap-1 rounded-xl border border-neutral-800 px-5 py-4">
+                <p className="text-[12px] uppercase tracking-[.06em] text-neutral-500">Pago a profesional</p>
+                <p className="flex items-baseline justify-between gap-3 text-[14px]">
+                  <b className="font-medium">{payout.seller.name}</b>
+                  <span className="whitespace-nowrap tabular-nums">
+                    {payout.amount !== null ? money(payout.amount) : `todo lo de hoy · ${money(owedTo(payout.seller.id)?.owed ?? 0)}`}
+                  </span>
+                </p>
+                <p className="text-[13px] text-neutral-500">
+                  Su parte de hoy {money(owedTo(payout.seller.id)?.share ?? 0)} · ya pagado {money(owedTo(payout.seller.id)?.paid ?? 0)}. Sale de la caja.
+                </p>
+              </div>
+            ) : expense ? (
               <div className="flex animate-cl-in flex-col gap-1 rounded-xl border border-neutral-800 px-5 py-4">
                 <p className="text-[12px] uppercase tracking-[.06em] text-neutral-500">Egreso de plata</p>
                 <p className="flex items-baseline justify-between gap-3 text-[14px]">
@@ -331,7 +436,18 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
               </div>
             ) : preview ? (
               <div className="flex animate-cl-in flex-col gap-3 rounded-xl border border-neutral-800 px-5 py-4">
-                {preview.patient && !preview.patientUnsure && (
+                {preview.askPatient && (
+                  <label className="flex flex-col gap-1">
+                    <span className={`text-[14px] ${preview.patient ? "text-neutral-400" : "text-accent"}`}>¿A qué paciente?</span>
+                    <input
+                      value={pickPatient}
+                      onChange={(e) => setPickPatient(e.target.value)}
+                      placeholder="Nombre de la paciente"
+                      className="border-b-2 border-neutral-800 bg-transparent pb-1 text-[16px] font-medium outline-none placeholder:text-neutral-600 focus:border-accent-600"
+                    />
+                  </label>
+                )}
+                {preview.patient && !preview.patientUnsure && !preview.askPatient && (
                   <p className="text-[14px]">
                     <span className="text-neutral-400">Paciente </span>
                     <b>{preview.patient}</b>
@@ -364,7 +480,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                           )}
                         </span>
                         <span className="whitespace-nowrap tabular-nums text-neutral-300">
-                          {l.item.kind === "pendiente" ? "—" : money(preview.payment === "tarjeta" ? lineCard(l) : lineCash(l))}
+                          {l.item.kind === "pendiente" && preview.paid === null ? "—" : money(lineAmounts(preview)[i])}
                         </span>
                       </li>
                     ))}
@@ -401,6 +517,42 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     </div>
                   ))}
 
+                {/* Plata: cuánto ingresó (siempre) y el reparto que hace el sistema */}
+                {preview.lines.length > 0 && (
+                  <div className="flex flex-col gap-2 border-t border-neutral-900 pt-3 text-[14px]">
+                    <label className="flex flex-wrap items-center gap-2">
+                      <span className="w-[112px] text-neutral-400">Ingresó</span>
+                      <input
+                        value={pickPaid !== null ? (pickPaid ? `$ ${toPesos(pickPaid).toLocaleString("es-AR")}` : "") : `$ ${ingreso.toLocaleString("es-AR")}`}
+                        onChange={(e) => setPickPaid(e.target.value.replace(/\D/g, ""))}
+                        inputMode="numeric"
+                        placeholder="$ 0"
+                        className={MONEY_IN}
+                      />
+                      {preview.direct ? (
+                        <span className="text-[13px] text-neutral-500">le pagaron directo a la profesional</span>
+                      ) : preview.paid === null && pickPaid === null ? (
+                        <span className="text-[13px] text-neutral-500">precio de lista · cambialo si pagó otro importe</span>
+                      ) : null}
+                    </label>
+                    <label className="flex flex-wrap items-center gap-2">
+                      <span className="w-[112px] truncate text-neutral-400">Para {sellerName ? firstName(sellerName.replace(/^(Dra?\.|Lic\.)\s*/i, "")) : "la profesional"}</span>
+                      <input
+                        value={pickShare !== null ? (pickShare ? `$ ${toPesos(pickShare).toLocaleString("es-AR")}` : "") : preview.share !== null ? `$ ${preview.share.toLocaleString("es-AR")}` : ""}
+                        onChange={(e) => setPickShare(e.target.value.replace(/\D/g, ""))}
+                        inputMode="numeric"
+                        placeholder={`$ ${auto.toLocaleString("es-AR")}`}
+                        className={MONEY_IN}
+                      />
+                      <span className="text-[13px] text-neutral-500">{preview.share === null ? "según su comisión" : "lo que aclaraste"}</span>
+                    </label>
+                    <p className="flex items-center gap-2">
+                      <span className="w-[112px] text-neutral-400">Para Decles</span>
+                      <span className="tabular-nums">{ingreso - parte < 0 ? `− ${money(parte - ingreso)}` : money(ingreso - parte)}</span>
+                    </p>
+                  </div>
+                )}
+
                 {/* Pago: opcional */}
                 <div className="flex flex-wrap items-center gap-2">
                   {PAYMENTS.map(([m, label]) => (
@@ -423,10 +575,12 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
               </p>
             )}
 
-            <button onClick={go} disabled={expense ? busy : !canSave || busy || loading} className={CTA}>
+            <button onClick={go} disabled={payout || expense ? busy : !canSave || busy || loading} className={CTA}>
               {busy
                 ? "Guardando…"
-                : expense
+                : payout
+                  ? `Guardar pago · ${money(payout.amount ?? owedTo(payout.seller.id)?.owed ?? 0)}`
+                  : expense
                   ? expense.concept && expense.amount
                     ? `Guardar egreso · ${money(expense.amount)}`
                     : "Completar el egreso"
@@ -436,11 +590,13 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     ? "Falta qué se hizo"
                     : pendingQ
                       ? "Tocá la opción correcta"
-                      : missingSeller || notHers
+                      : missingPatient
+                        ? "Falta el paciente"
+                        : missingSeller || notHers
                         ? "Elegí quién la atendió"
-                        : `Guardar · ${money(preview.payment === "tarjeta" ? card : cash)}`}
+                        : `Guardar · ${money(ingreso)}`}
             </button>
-            {preview && !nothing && !expense && (
+            {preview && !nothing && !expense && !payout && (
               <button
                 onClick={() => {
                   setDraft(preview);
@@ -527,10 +683,10 @@ export function EditVisit({ sales, isMedico, onClose, onSaved }: { sales: SaleRo
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const items: Item[] = useMemo(() => {
-    const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [] }));
+    const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [], pct: p.commissionPct }));
     const products = (catalog?.products ?? [])
       .filter((p) => p.price !== null && p.priceItemId)
-      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available, providerIds: p.providerIds ?? [] }));
+      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available, providerIds: p.providerIds ?? [], pct: p.commissionPct }));
     return [...practices, ...products];
   }, [catalog]);
   const sellers: Seller[] = useMemo(() => (sellersData?.sellers ?? []).map((x) => ({ id: x.providerId, name: x.name, aliases: x.aliases })), [sellersData]);
@@ -542,6 +698,9 @@ export function EditVisit({ sales, isMedico, onClose, onSaved }: { sales: SaleRo
     const d = emptyDraft("text", first?.providerId ?? null);
     d.patient = first?.patientName ?? "";
     d.payment = first?.paymentMethod ?? null;
+    // Lo que ingresó y la parte de la profesional, si se escribieron a mano, se conservan.
+    if (paid.some((x) => x.priceManual)) d.paid = paid.reduce((n, x) => n + x.total, 0);
+    if (paid.some((x) => x.commissionManual)) d.share = paid.reduce((n, x) => n + x.commissionAmount, 0);
     d.lines = paid.map((x) => {
       const it = x.itemId ? items.find((i) => i.id === x.itemId) : undefined;
       // Lo guardado manda: si el producto ahora tiene menos stock, igual se puede mantener.
@@ -568,9 +727,7 @@ export function EditVisit({ sales, isMedico, onClose, onSaved }: { sales: SaleRo
         patientName: draft.patient.trim(),
         providerId: draft.sellerId,
         paymentMethod: draft.payment,
-        lines: draft.lines.map((l) =>
-          l.item.kind === "pendiente" ? { pendingName: l.item.name, pendingPrice: l.item.price || null, quantity: l.qty } : { itemId: l.item.id, quantity: l.qty },
-        ),
+        lines: visitLines(draft),
       }),
     })
       .then((x) => x.json())
@@ -581,14 +738,14 @@ export function EditVisit({ sales, isMedico, onClose, onSaved }: { sales: SaleRo
   }
 
   // Lo anotado en la Planilla (importes a mano, observaciones, «Atención» sin práctica) se corrige allá.
-  const fromSheet = paid.some((x) => x.priceManual || x.commissionManual || x.observations || (!x.itemId && x.kind !== "pendiente"));
+  const fromSheet = paid.some((x) => x.observations || (!x.itemId && x.kind !== "pendiente"));
 
   return (
     <div className="cl-fade-in fixed inset-0 z-40 overflow-y-auto bg-black/60 px-4 py-10" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="mx-auto w-full max-w-[640px]">
         {fromSheet ? (
           <div className="flex flex-col gap-3 rounded-xl bg-surface p-5">
-            <p className="text-[14px]">Esto se anotó en la planilla (con importes o notas escritas a mano). Corregilo desde Ventas → Día.</p>
+            <p className="text-[14px]">Esto se anotó en Ventas → Día como «Atención» sin práctica. Corregilo desde ahí.</p>
             <button onClick={onClose} className="self-start rounded-md border border-neutral-800 px-3 py-1.5 text-[13px] hover:bg-accent-900">
               Entendido
             </button>
@@ -826,9 +983,13 @@ function AddPending({ onAdd, initial = "", compact }: { onAdd: (name: string, pr
 /** Buscar en la lista (cuando lo escrito no se entendió). */
 function SearchItems({ items, sellerId, onPick }: { items: Item[]; sellerId: string | null; onPick: (it: Item) => void }) {
   const [q, setQ] = useState("");
+  // Sin importar mayúsculas, tildes ni errores de tipeo; lo más parecido primero.
   const list = items
     .filter((i) => allowedFor(i, sellerId))
-    .filter((i) => !q.trim() || normQ(i.name).includes(normQ(q.trim())))
+    .map((i) => ({ i, s: q.trim() ? searchScore(q, i.name) : 1 }))
+    .filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.i)
     .slice(0, 8);
   return (
     <div className="flex flex-col gap-2">
@@ -901,7 +1062,8 @@ function Confirm({
   // Algo que la médica elegida no tiene asignado (el admin lo vincula en Stock).
   const notHers = (l: Line) => !allowedFor(l.item, l.sellerId ?? draft.sellerId);
   const anyNotHers = draft.lines.some(notHers);
-  const blocked = !draft.lines.length || draft.unresolved.length > 0 || missingSeller || anyNotHers || draft.patientUnsure;
+  const missingPatient = hasPractice(draft.lines) && !draft.patient.trim();
+  const blocked = !draft.lines.length || draft.unresolved.length > 0 || missingSeller || anyNotHers || draft.patientUnsure || missingPatient;
 
   const setQty = (i: number, qty: number) =>
     setDraft({ ...draft, lines: qty <= 0 ? draft.lines.filter((_, j) => j !== i) : draft.lines.map((l, j) => (j === i ? { ...l, qty } : l)) });
@@ -956,7 +1118,7 @@ function Confirm({
         <input
           value={draft.patient}
           onChange={(e) => setDraft({ ...draft, patient: e.target.value, patientUnsure: false })}
-          placeholder="Nombre (opcional)"
+          placeholder={hasPractice(draft.lines) ? "Nombre de la paciente" : "Nombre (opcional)"}
           className="border-b-2 border-neutral-800 bg-transparent pb-1 text-[18px] font-medium leading-tight outline-none placeholder:font-medium placeholder:text-neutral-600 focus:border-accent-600 sm:text-[22px]"
         />
       </label>
@@ -1009,7 +1171,7 @@ function Confirm({
                 />
               </label>
             ) : (
-              <span className="text-[14px] tabular-nums text-neutral-300">{money((draft.payment === "tarjeta" ? cardOf(l.item) : l.item.price) * l.qty)}</span>
+              <span className="text-[14px] tabular-nums text-neutral-300">{money(lineAmounts(draft)[i])}</span>
             )}
           </li>
         ))}
@@ -1107,11 +1269,35 @@ function Confirm({
         </div>
       </div>
 
-      <div>
-        <p className="font-display text-[22px] font-medium tracking-[-.02em] tabular-nums sm:text-[24px]">
-          {money(draft.payment === "tarjeta" ? card : cash)}
+      {/* Plata: cuánto ingresó y el reparto (la profesional según su %, salvo que se aclare) */}
+      <div className="flex flex-col gap-2 text-[14px]">
+        <label className="flex flex-wrap items-center gap-2">
+          <span className="w-[140px] text-neutral-400">Ingresó</span>
+          <input
+            value={`$ ${(draft.paid ?? (draft.payment === "tarjeta" ? card : cash)).toLocaleString("es-AR")}`}
+            onChange={(e) => setDraft({ ...draft, paid: toPesos(e.target.value), direct: false })}
+            inputMode="numeric"
+            className={MONEY_IN}
+          />
+          {draft.paid === null && !draft.payment && card !== cash && <span className="text-[13px] text-neutral-500">o {money(card)} con tarjeta</span>}
+        </label>
+        <label className="flex flex-wrap items-center gap-2">
+          <span className="w-[140px] text-neutral-400">Para la profesional</span>
+          <input
+            value={draft.share !== null ? `$ ${draft.share.toLocaleString("es-AR")}` : ""}
+            onChange={(e) => setDraft({ ...draft, share: e.target.value.replace(/\D/g, "") ? toPesos(e.target.value) : null })}
+            inputMode="numeric"
+            placeholder={`$ ${autoShare(draft, sellers).toLocaleString("es-AR")}`}
+            className={MONEY_IN}
+          />
+          <span className="text-[13px] text-neutral-500">{draft.share === null ? "según su comisión" : "a mano"}</span>
+        </label>
+        <p className="flex items-center gap-2">
+          <span className="w-[140px] text-neutral-400">Para Decles</span>
+          <span className="tabular-nums">
+            {money((draft.paid ?? (draft.payment === "tarjeta" ? card : cash)) - (draft.share ?? autoShare(draft, sellers)))}
+          </span>
         </p>
-        {!draft.payment && card !== cash && <p className="text-[14px] text-neutral-400">o {money(card)} si paga con tarjeta</p>}
         {pendingCount > 0 && (
           <p className="text-[14px] text-neutral-400">+ {pendingCount === 1 ? "1 cosa sin precio" : `${pendingCount} cosas sin precio`} todavía (lo completa el admin)</p>
         )}
@@ -1121,7 +1307,9 @@ function Confirm({
         <button onClick={onSave} disabled={busy || blocked} className={`${CTA} flex-[2_1_220px]`}>
           {busy
             ? "Guardando…"
-            : missingSeller
+            : missingPatient
+              ? "Falta el paciente"
+              : missingSeller
               ? "Falta quién"
               : draft.unresolved.length || anyNotHers || draft.patientUnsure
                 ? "Revisá lo marcado"
@@ -1250,6 +1438,8 @@ function Today({
   );
 }
 
+const MONEY_IN =
+  "w-[130px] rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-right tabular-nums text-fg outline-none placeholder:text-neutral-500 focus:border-accent-700";
 const CTA =
   "flex min-h-12 items-center justify-center rounded-lg border border-accent bg-accent px-5 text-[15px] font-medium text-on-accent transition-opacity hover:opacity-85 active:opacity-70 disabled:cursor-not-allowed disabled:border-neutral-800 disabled:bg-neutral-900 disabled:text-neutral-500";
 const GHOST =

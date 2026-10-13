@@ -15,12 +15,17 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
 - Recuperar contraseña: código por mail (`requestPasswordReset`/`confirmPasswordReset`, `src/lib/mail.ts`).
   La respuesta a "mandame el código" nunca revela si la cuenta existe.
 - Venta de producto o práctica exige médica (`providerId`); la comisión se congela en `sales.commission_*`.
-- Anotar = `recordVisit` (`domain/visits.ts`): renglones con el mismo `visit_id`, todo o nada. Paciente = texto libre.
+- Anotar = `recordVisit` (`domain/visits.ts`): renglones con el mismo `visit_id`, todo o nada. Paciente = texto libre, **obligatorio si hay una práctica** (pantalla y servidor).
   Lo no cargado = venta `kind 'pendiente'` (resuelve el admin, `domain/pending.ts`); sin stock = `stock_items.owed`.
 - Diseño monocromo (negro y blanco, Inter): tokens `--cl-*` en `globals.css`; acción principal `bg-accent text-on-accent`.
 - Planilla: `planilla-view.tsx` = Ventas → Día (filas por área); `cierre-sheet.tsx` = Cierre (números del día, por profesional, ingresos/egresos extras, caja, medios de pago). Áreas = `providers.area`; fila = visita con
   `amount`/`commission` manuales (`applyManualAmounts`), «Atención» sin práctica (`generic`). Fila = paciente · qué pagó (práctica/producto) · médica · pagó $ · medio (+ $K fuera de Médicos).
   Ingresos extras = `expenses.direction 'ingreso'`; caja = `day_cash` (`opening` = cambio al iniciar, se le pregunta a la secretaria al entrar — `opening-cash.tsx`; `amount` = contado al cambio). Pago: efectivo | transferencia | tarjeta.
+- Plata al anotar (`money-note.ts`): la secretaria dice cuánto ingresó («45000», «pagó 40 mil»); el reparto lo hace el
+  sistema (% de la profesional) salvo que lo aclare («le corresponden 9000»). «le transfirieron a carmen» / «abono» = ingresó $0.
+  Se guarda con `amount`/`commission` manuales; resolver un pendiente no pisa lo escrito.
+- Pagos a profesionales (`domain/payouts.ts`, tabla `provider_payouts`): «le pagué todo a Carmen» (Anotar, `parsePayout`) o
+  «Pagar todo» en Cierre. Debe = su parte del día ($K) − pagado. Sale de la caja. Cierre = entró / salió / movimientos.
 - Egresos de plata: tabla `expenses` (`domain/expenses.ts`), los anota secretaría/admin; texto «pagué 5000 de luz» → `expense-note.ts`.
 - Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada. `migrate` activa RLS en todas
   las tablas de `public` (bloquea la API REST de Supabase); la app entra como dueña y no le afecta.

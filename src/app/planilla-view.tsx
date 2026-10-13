@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { PlusIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
-import { normalize, parseNote } from "@/lib/domain/quick-sale";
+import { normalize, parseNote, suggest } from "@/lib/domain/quick-sale";
 import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogResponse, type Payment, type SaleRow } from "./shared";
 
 /**
@@ -385,6 +385,14 @@ function RowEditor({
   const first = useRef<HTMLInputElement>(null);
 
   const picked = useMemo(() => itemsIn(what, practices, products), [what, practices, products]);
+  // Ayuda al escribir (sin importar mayúsculas, tildes ni errores): Tab o un toque completa.
+  const all = useMemo(() => [...practices, ...products], [practices, products]);
+  const hints = useMemo(() => (what.trim() ? suggest(what, all).filter((h) => h.kind !== "payment").slice(0, 4) : []), [what, all]);
+  const whatRef = useRef<HTMLInputElement>(null);
+  const accept = (t: string) => {
+    setWhat(t.replace(/[\s,]+$/, ""));
+    requestAnimationFrame(() => whatRef.current?.focus());
+  };
   const priceOf = (p: Picked) => p.amount ?? (p.item ? (method === "tarjeta" ? (p.item.cardPrice ?? p.item.price) : p.item.price) * p.qty : 0);
   const listTotal = picked.reduce((n, p) => n + priceOf(p), 0);
   const paidValue = paidTouched ? num(paid) : listTotal;
@@ -394,6 +402,8 @@ function RowEditor({
   async function save() {
     if (busy || !dirty) return;
     if (!providerId) return onError("Elegí quién atendió.");
+    // Toda práctica (o «Atención» sin práctica) es de un paciente.
+    if (!patient.trim() && (!picked.length || picked.some((p) => !p.product))) return onError("Falta el paciente.");
     // Sin nada escrito en «Qué pagó»: es una atención por el importe que se puso.
     const parts: Picked[] = picked.length ? picked : [{ item: null, product: false, name: GENERIC, qty: 1, amount: null }];
     const amounts = parts.map(priceOf);
@@ -426,7 +436,6 @@ function RowEditor({
     }
     if (e.key === "Escape") onCancel?.();
   };
-  const listId = `it-${row?.key ?? "new"}`;
 
   return (
     <tr className="border-b border-neutral-800 bg-surface align-top" onKeyDown={keys}>
@@ -435,12 +444,34 @@ function RowEditor({
         <input ref={first} autoFocus={!!row} value={patient} onChange={(e) => setPatient(e.target.value)} placeholder="Paciente" className={CELL} />
       </td>
       <td className="px-1.5 py-1">
-        <input list={listId} value={what} onChange={(e) => setWhat(e.target.value)} placeholder="Práctica o producto (separá con coma)" className={CELL} />
-        <datalist id={listId}>
-          {[...practices, ...products].map((p) => (
-            <option key={p.id} value={p.name} />
-          ))}
-        </datalist>
+        <input
+          ref={whatRef}
+          value={what}
+          onChange={(e) => setWhat(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Tab" && hints.length && !e.shiftKey) {
+              e.preventDefault();
+              accept(hints[0].text);
+            }
+          }}
+          placeholder="Práctica o producto (separá con coma)"
+          className={CELL}
+        />
+        {hints.length > 0 && (
+          <span className="flex flex-wrap gap-1 px-1 pt-1">
+            {hints.map((h, i) => (
+              <button
+                key={h.label + i}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => accept(h.text)}
+                className={`rounded-pill border px-2 py-0.5 text-[12px] ${i === 0 ? "border-accent-700 text-fg" : "border-neutral-800 text-neutral-400 hover:text-fg"}`}
+              >
+                {h.label}
+              </button>
+            ))}
+          </span>
+        )}
         {picked.length > 0 && (
           <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-500">
             {picked

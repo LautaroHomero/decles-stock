@@ -397,11 +397,12 @@ export async function resolvePendingSale(
   v: { item: PriceItem; commissionPct: number },
 ): Promise<boolean> {
   const rows = (await getSql()`
-    SELECT quantity, payment_method, total FROM sales
+    SELECT quantity, payment_method, total, price_manual, commission_manual FROM sales
     WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid' FOR UPDATE`) as unknown as Row[];
   if (!rows.length) return false;
-  // Si al anotar se cargó lo que se cobró, eso manda: solo se vincula el ítem.
-  if (Number(rows[0].total) > 0) {
+  // Si al anotar se cargó lo que se cobró (aunque sea $0: le pagaron directo a la profesional), eso manda:
+  // solo se vincula el ítem.
+  if (Number(rows[0].total) > 0 || rows[0].price_manual) {
     const kept = (await getSql()`
       UPDATE sales SET item_id = ${v.item.id}, item_name = ${v.item.name}, kind = ${v.item.kind}
       WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid'
@@ -417,7 +418,8 @@ export async function resolvePendingSale(
   const done = (await getSql()`
     UPDATE sales SET item_id = ${v.item.id}, item_name = ${v.item.name}, kind = ${v.item.kind}, unit_price = ${unit},
       total = ${unit * q}, cash_total = ${cashTotal}, card_total = ${cardTotal},
-      commission_pct = ${v.commissionPct}, commission_amount = ${commission}
+      commission_pct = ${v.commissionPct},
+      commission_amount = CASE WHEN commission_manual THEN commission_amount ELSE ${commission} END
     WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid'
     RETURNING id`) as unknown as Row[];
   return done.length > 0;

@@ -24,6 +24,10 @@
  *     "María López, la atendió laura, atención y peeling" da paciente + médica + 2 prácticas.
  *     Es paciente el primer pedazo que no es producto, práctica ni médica (1 a 4 palabras sin
  *     números), o las palabras que van ANTES del producto en el mismo pedazo ("Ana Gómez atención").
+ *  8. Médica vs. paciente: un nombre después de «vino», «paciente», «a», «para» es la paciente aunque
+ *     se llame igual que una médica; uno pegado a un apellido que no es de ninguna médica («Laura Gómez»)
+ *     también. Lo que va después de «Dra.», «por», «atendió» es la médica. Toda práctica necesita
+ *     paciente: si no se nombra, la pantalla lo pide antes de guardar.
  */
 
 export interface QuickProduct {
@@ -85,6 +89,30 @@ const SYNONYMS: Record<string, string[]> = {
   limpieza: ["facial"], electro: ["electrocoagulacion"], hilos: ["tensores"], laser: ["laser"],
 };
 
+/** Sinónimos de una palabra, aunque esté mal escrita («botx» → botox → toxina). */
+function synonymsOf(w: string): string[] {
+  const direct = SYNONYMS[w] ?? SYNONYMS[stem(w)];
+  if (direct) return direct;
+  if (w.length < 4) return [];
+  const key = Object.keys(SYNONYMS).find((k) => k.length >= 4 && (near1(w, k) || phon(w) === phon(k)));
+  return key ? [key, ...SYNONYMS[key]] : [];
+}
+
+/**
+ * Para buscadores y filtros: qué tan bien `query` describe `name` (0 = nada). Sin importar mayúsculas,
+ * tildes ni errores de tipeo, con sinónimos y prefijos («pel», «acido hial», «botx», «jel»).
+ */
+export function searchScore(query: string, name: string): number {
+  const words = normalize(query).split(" ").filter((w) => w && !FILLER.has(w));
+  if (!words.length) return 1;
+  const all = words.flatMap((w) => [stem(w), ...synonymsOf(w).map((s) => `~${s}`)]);
+  const s = score(all, name);
+  // Todas las palabras escritas tienen que aparecer de alguna forma (si no, «crema vit» trae cualquier crema).
+  const pw = productWords(name);
+  const covered = words.every((w) => [stem(w), ...synonymsOf(w)].some((q) => pw.some((p) => wordScore(q, p) > 0)));
+  return covered ? s : 0;
+}
+
 const NUMBER_WORDS: Record<string, number> = {
   un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8,
   nueve: 9, diez: 10, once: 11, doce: 12, docena: 12, quince: 15, veinte: 20,
@@ -93,7 +121,14 @@ const NUMBER_WORDS: Record<string, number> = {
 /** Palabras que anuncian a la profesional ("la atendió la Dra. …"). */
 /** Palabras que rodean a una persona nombrada: «la gabi», «por laura» / «gabi hizo», «laura vendió». */
 const PERSON_BEFORE = new Set(["la", "el", "por", "con", "atendio", "atendi", "atiende", "atendida", "dra", "dr", "doctora", "lic"]);
+const PERSON_ARTICLE = new Set(["la", "el"]);
 const PERSON_AFTER = new Set(["hizo", "hace", "vendio", "vende", "atendio", "atiende", "le", "lo", "la", "aplico", "realizo", "puso"]);
+
+/**
+ * Palabras que anuncian al PACIENTE: «vino Laura», «paciente Gómez», «le hizo botox a Carla», «para Ana».
+ * Un nombre después de estas nunca es la médica, aunque se llame igual que una.
+ */
+const PATIENT_CUES = new Set(["paciente", "pacienta", "vino", "vinieron", "a", "para", "sra", "sr", "senora", "señora", "senor", "señor"]);
 
 const SELLER_CUES = new Set(["atendio", "atendi", "atendida", "atendido", "atiende", "dra", "dr", "doctora", "doctor", "lic", "licenciada"]);
 
@@ -155,11 +190,14 @@ export function phon(w: string): string {
   return w
     .replace(/h/g, "")
     .replace(/qu/g, "k")
+    .replace(/g([ei])/g, "j$1")
     .replace(/c([ei])/g, "s$1")
     .replace(/c/g, "k")
     .replace(/z/g, "s")
     .replace(/v/g, "b")
     .replace(/ll/g, "y")
+    .replace(/w/g, "u")
+    .replace(/y$/, "i")
     .replace(/(.)\1+/g, "$1");
 }
 
@@ -189,8 +227,10 @@ function editDistance(a: string, b: string, max: number): number {
  * (desde 4 letras: «botx», «peling») > dos letras (palabras de 8+: «mesoterapya»).
  */
 function wordScore(q: string, p: string): number {
+  // «~palabra» = sinónimo agregado (no escrito): cuenta la mitad, para que no le gane a lo escrito.
+  if (q.startsWith("~")) return 0.5 * wordScore(q.slice(1), p);
   if (q === p) return 1;
-  if (q.length >= 4 && phon(q) === phon(p)) return 0.85;
+  if (q.length >= 3 && phon(q) === phon(p)) return 0.85;
   if (q.length >= 3 && p.startsWith(q)) return 0.75;
   if (q.length >= 4 && near1(q, p)) return 0.7;
   if (q.length >= 4 && near1(phon(q), phon(p))) return 0.65;
@@ -226,8 +266,26 @@ function score(queryWords: string[], name: string): number {
     if (at >= 0) used.add(at);
   }
   if (hit === 0) return 0;
-  // Desempate: preferir el producto que el texto "cubre" más (crema pindonga > crema hidratante facial).
-  return hit + 0.5 * (used.size / pw.length);
+  // Desempates: preferir el producto que el texto "cubre" más (crema pindonga > crema hidratante facial),
+  // el que empieza con lo que se escribió («ácido hialurónico» > «sérum ácido hialurónico») y el que
+  // no tiene palabras de más («protector solar» > «protector solar con color»).
+  const lead = wordScore(queryWords[0], pw[0]) > 0 ? 0.2 : 0;
+  return hit + 0.5 * (used.size / pw.length) + lead;
+}
+
+/** Palabras del producto que lo escrito no nombra (sin números: «FPS 50»). */
+function unmatched(queryWords: string[], name: string): string[] {
+  return productWords(name).filter((p) => !/\d/.test(p) && p.length > 2 && !queryWords.some((q) => wordScore(q, p) > 0));
+}
+
+/**
+ * ¿`a` es «lo mismo pero sin agregados» que `b`? («protector solar» vs «protector solar con color»):
+ * todo lo que le sobra a `a` también le sobra a `b`, y a `b` le sobra algo más.
+ */
+function plainerThan(queryWords: string[], a: string, b: string): boolean {
+  const ua = unmatched(queryWords, a);
+  const ub = unmatched(queryWords, b);
+  return ub.length > ua.length && ua.every((w) => ub.includes(w));
 }
 
 function splitSegments(text: string): string[] {
@@ -263,7 +321,7 @@ function parseSegment(seg: string, nameNumbers: Set<string>): { quantity: number
     }
     if (!FILLER.has(w)) {
       rest.push(stem(w));
-      for (const syn of SYNONYMS[w] ?? SYNONYMS[stem(w)] ?? []) rest.push(syn);
+      for (const syn of synonymsOf(w)) rest.push(`~${syn}`);
     }
   }
   if (/\bmedia docena\b/.test(normalize(seg))) quantity = 6;
@@ -314,6 +372,15 @@ function findSeller<S extends QuickSeller>(seg: string, sellers: S[], productVoc
     // Una abreviatura que también empieza una palabra de producto ("cre" de crema) no es un nombre…
     // salvo que esté donde va una persona («gabi hizo…»).
     if (w.length <= 4 && !ctx && !exactName && [...productVocab].some((pv) => pv.startsWith(w))) return;
+    // «vino laura», «a laura», «paciente laura»: es la paciente, no la médica.
+    if (PATIENT_CUES.has(ws[i - 1] ?? "") || (PERSON_ARTICLE.has(ws[i - 1] ?? "") && PATIENT_CUES.has(ws[i - 2] ?? ""))) return;
+    // «Laura Gómez» con la médica «Laura Ríos»: el nombre va pegado a un apellido que no es de ninguna
+    // médica → es otra persona (la paciente). Salvo que lo anuncie una pista de médica («Dra. Laura …»).
+    const sellerCue = SELLER_CUES.has(ws[i - 1] ?? "") || ws[i - 1] === "por" || ws[i - 1] === "con";
+    const otherName = (x: string | undefined) =>
+      !!x && NAME_TOKEN.test(x) && x.length >= 3 && !FILLER.has(x) && !(x in NUMBER_WORDS) && !paymentOf(x) &&
+      !productVocab.has(stem(x)) && !sellers.some((s) => sellerWords(s).some((sw) => nameMatches(x, sw)));
+    if (!sellerCue && (otherName(ws[i - 1]) || otherName(ws[i + 1]))) return;
     const found = sellers.filter((s) => sellerWords(s).some((sw) => nameMatches(w, sw)));
     if (found.length) {
       used.add(w);
@@ -323,8 +390,18 @@ function findSeller<S extends QuickSeller>(seg: string, sellers: S[], productVoc
   return { seller: hits.size === 1 ? [...hits][0] : null, used };
 }
 
+/** La profesional nombrada en un texto cualquiera («le pagué todo a carmen»), sin pistas de paciente. */
+export function sellerNamed<S extends QuickSeller>(text: string, sellers: S[]): S | null {
+  const hits = new Set<S>();
+  for (const w of normalize(text).split(" ")) {
+    if (w.length < 3 || FILLER.has(w)) continue;
+    for (const s of sellers) if (sellerWords(s).some((sw) => nameMatches(w, sw))) hits.add(s);
+  }
+  return hits.size === 1 ? [...hits][0] : null;
+}
+
 const NAME_TOKEN = /^[a-zñ]{2,}$/;
-const capitalize = (w: string) => (w ? w[0].toLocaleUpperCase("es") + w.slice(1) : w);
+const capitalize = (w: string) => (w ? w[0].toLocaleUpperCase("es") + w.slice(1).toLocaleLowerCase("es") : w);
 
 /** Palabras del texto original (con tildes y mayúsculas) junto a su forma normalizada. */
 function tokens(seg: string): { raw: string; n: string }[] {
@@ -391,10 +468,18 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
 
     if (!best) {
       // Nada del catálogo: si parece un nombre ("María López"), es el paciente.
-      const nameToks = toks.filter((t) => !FILLER.has(t.n));
-      if (!patient && seller === null && nameToks.length >= 1 && nameToks.length <= 4 && nameToks.every((t) => NAME_TOKEN.test(t.n))) {
+      // «la atendió laura a Gómez», «vino Gómez con Laura»: lo que queda sacando médica, pago y muletillas.
+      // Lo que va después de «Dra.»/«por»/«atendió» es una profesional (aunque no esté cargada), no la paciente.
+      const all = tokens(raw);
+      const nameToks = all.filter((t, i) => {
+        if (used.has(t.n) || FILLER.has(t.n)) return false;
+        const prev = all[i - 1]?.n ?? "";
+        return !(SELLER_CUES.has(prev) || prev === "por");
+      });
+      const cued = all.some((t) => PATIENT_CUES.has(t.n) && t.n !== "a" && t.n !== "para") || all.some((t, i) => (t.n === "a" || t.n === "para") && i > 0);
+      if (!patient && nameToks.length >= 1 && nameToks.length <= 4 && nameToks.every((t) => NAME_TOKEN.test(t.n))) {
         patient = asName(nameToks);
-        patientSure = nameToks.length >= 2;
+        patientSure = nameToks.length >= 2 || cued;
         continue;
       }
       // «la atendió la Dra. Fernández» con una médica que no existe: no es algo que se hizo.
@@ -402,7 +487,7 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
     } else if (!patient) {
       // "Ana Gómez atención": lo que va antes del producto/práctica, si son palabras sueltas, es el paciente.
       // La primera palabra que apunta al producto (directo o por sinónimo: «prp» → plasma).
-      const at = toks.findIndex((t) => score([stem(t.n), ...(SYNONYMS[t.n] ?? [])], best.p.name) > 0);
+      const at = toks.findIndex((t) => score([stem(t.n), ...synonymsOf(t.n).map((s) => `~${s}`)], best.p.name) > 0);
       const lead = toks.slice(0, Math.max(at, 0)).filter((t) => !FILLER.has(t.n) && !(t.n in NUMBER_WORDS) && t.n !== "par");
       if (lead.length && lead.length <= 4 && lead.every((t) => NAME_TOKEN.test(t.n))) patient = asName(lead);
       // «le hizo botox a Carla (Pérez)» / «… para Carla»: el nombre después de «a»/«para».
@@ -420,7 +505,11 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
       }
     }
     // Match claro: hay uno solo, o el primero le saca ventaja al segundo.
-    const clear = best && (!second || best.s - second.s >= 0.15);
+    const clear =
+      best &&
+      (!second ||
+        best.s - second.s >= 0.15 ||
+        (best.s - second.s >= 0 && ranked.slice(1).filter((x) => best.s - x.s < 0.15).every((x) => plainerThan(words, best.p.name, x.p.name))));
     lines.push({
       text: raw,
       quantity,
@@ -484,6 +573,8 @@ export function suggest<P extends QuickProduct, S extends QuickSeller = QuickSel
   const toks = [...text.slice(start).matchAll(/\S+/g)].map((m) => ({ raw: m[0], n: normalize(m[0]).replace(/ /g, ""), at: start + (m.index ?? 0) }));
   const last = toks[toks.length - 1];
   if (!last || last.n.length < 2) return [];
+  // Un importe o una cantidad («45000», «$40.000») no se completa.
+  if (/\d/.test(last.n)) return [];
   const out: Suggestion[] = [];
   const replaceFrom = (at: number, value: string, sep = ", ") => `${text.slice(0, at)}${value}${sep}`;
 
@@ -518,7 +609,7 @@ export function suggest<P extends QuickProduct, S extends QuickSeller = QuickSel
   }
   const tail = toks.slice(i);
   if (tail.length) {
-    const words = tail.flatMap((t) => [stem(t.n), ...(SYNONYMS[t.n] ?? [])]);
+    const words = tail.flatMap((t) => [stem(t.n), ...synonymsOf(t.n).map((s) => `~${s}`)]);
     const typed = normalize(tail.map((t) => t.raw).join(" "));
     const ranked = products
       .map((p) => {

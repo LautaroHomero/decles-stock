@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { searchScore } from "@/lib/domain/quick-sale";
 import { CaretDownIcon, PlusIcon } from "@phosphor-icons/react";
 import { Pill, SECTION_TITLE } from "./ui";
 import {
@@ -70,12 +71,13 @@ export function InventarioView() {
   });
 
   const items = useMemo(() => {
-    const term = q.trim().toLowerCase();
-    return (data?.products ?? []).filter((p) => {
-      if (term && !`${p.name} ${p.category}`.toLowerCase().includes(term)) return false;
-      if (filter === "todos") return true;
-      return flags(p)[filter];
-    });
+    // Buscador tolerante: mayúsculas, tildes y errores de tipeo no importan; lo más parecido primero.
+    const term = q.trim();
+    const scored = (data?.products ?? [])
+      .map((p) => ({ p, s: term ? Math.max(searchScore(term, p.name), searchScore(term, `${p.name} ${p.category}`)) : 1 }))
+      .filter((x) => x.s > 0 && (filter === "todos" || flags(x.p)[filter]));
+    if (term) scored.sort((a, b) => b.s - a.s);
+    return scored.map((x) => x.p);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, q, filter]);
 

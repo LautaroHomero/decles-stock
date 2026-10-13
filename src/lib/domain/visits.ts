@@ -1,5 +1,6 @@
 import {
   applyManualAmounts,
+  getPriceItem,
   insertPendingSale,
   setVisitObservations,
   listVisitSales,
@@ -16,7 +17,7 @@ import { recordSale } from "@/lib/domain/billing";
 import type { Actor } from "@/lib/domain/types";
 
 /**
- * Anotar (Decles): un paciente (nombre escrito, opcional), la médica, las prácticas que se
+ * Anotar (Decles): un paciente (nombre escrito; obligatorio si hay una práctica), la médica, las prácticas que se
  * hicieron y/o los productos vendidos, y el medio de pago, en un solo paso. Cada renglón es
  * una `sale` y todos comparten `visit_id`. O se anota todo o nada.
  *
@@ -85,6 +86,13 @@ export async function recordVisit(
   const raw = v.paymentMethod;
   const method: PaymentMethod | null = raw === "efectivo" || raw === "transferencia" || raw === "tarjeta" ? raw : null;
   const patient = clean(v.patientName).slice(0, 120);
+  // Toda práctica es de un paciente: «Atención» genérica o un ítem de la lista que no es producto.
+  if (!patient) {
+    for (const l of lines) {
+      const practice = l.generic || (l.itemId ? (await getPriceItem(orgId, l.itemId))?.kind !== "producto" : false);
+      if (practice) return { ok: false, error: "Falta el paciente: toda práctica es de un paciente.", status: 400 };
+    }
+  }
   const who = { id: actor.userId, name: actor.name, source: "manual" as const };
 
   const visitId = newVisitId();

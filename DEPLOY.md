@@ -53,7 +53,7 @@ Tiempo: ~40 minutos. Necesitás la terminal en `~/Documents/decles-stock`.
    cd ~/Documents/decles-stock
    DATABASE_URL_DIRECT="postgresql://postgres.xxxx:CONTRASEÑA@aws-0-sa-east-1.pooler.supabase.com:5432/postgres" npm run db:migrate
    ```
-   Tiene que decir `Migraciones aplicadas: 0001_core, …, 0008_onboarding`.
+   Tiene que decir `Migraciones aplicadas: 0001_core, …, 0016_provider_payouts`.
    Además, en cada migrate se bloquea la API pública de Supabase (RLS en todas las tablas): nadie
    puede leer los datos con la clave pública; la app entra directo con el usuario de la base.
 5. **No** corras `npm run db:seed`: es solo para tu base local (igual se niega a correr acá).

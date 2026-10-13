@@ -312,13 +312,13 @@ export async function listTeam(actor: Actor): Promise<Result<{ members: OrgMembe
 }
 
 /** Médicas activas del consultorio (para elegir quién vendió). La médica se ve solo a sí misma. */
-export async function listSellers(actor: Actor): Promise<Result<{ sellers: { providerId: string; name: string; aliases: string[]; area: ProviderArea }[] }>> {
+export async function listSellers(actor: Actor): Promise<Result<{ sellers: { providerId: string; name: string; aliases: string[]; area: ProviderArea; commissionPct: number }[] }>> {
   if (!actor.activeOrg) return fail("No autorizado.", 403);
   const members = await listOrgMembers(actor.activeOrg.id);
   const sellers = members
     .filter((m) => m.active && m.role === "medico" && m.providerId)
     .filter((m) => actor.role !== "medico" || m.userId === actor.userId)
-    .map((m) => ({ providerId: m.providerId!, name: m.name, aliases: m.aliases, area: m.area }));
+    .map((m) => ({ providerId: m.providerId!, name: m.name, aliases: m.aliases, area: m.area, commissionPct: m.commissionPct }));
   return { ok: true, sellers };
 }
 
