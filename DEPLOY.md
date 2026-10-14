@@ -82,10 +82,13 @@ Conviene un Gmail **del consultorio** (no el personal de nadie), ej. `consultori
    | `CRON_SECRET` | Otra clave al azar distinta (de nuevo `openssl rand -base64 48`) |
    | `SMTP_USER` | El Gmail del consultorio (paso 3) |
    | `SMTP_PASS` | La contraseña de aplicación de 16 letras (con o sin espacios) |
+   | `MAIL_FROM` | *Opcional.* Nombre que ve quien recibe, ej. `Consultorio Decles <consultorio.decles@gmail.com>` (mismo Gmail que `SMTP_USER`) |
+
+   Marcá **Production** (y Preview si querés) en cada una. `SMTP_HOST`/`SMTP_PORT` no hacen falta con Gmail.
 
 4. **Deployments → ⋯ → Redeploy** (las variables nuevas recién se usan en el próximo deploy).
    Te queda una URL tipo `decles-stock.vercel.app`.
-5. **Región (recomendado):** *Settings → Functions → Function Region* → **São Paulo (gru1)**, así la app
+5. **Región (recomendado):** *Settings → Functions → Function Region* → **la misma región que la base** (Neon la muestra: `us-east-1` = *Washington, D.C. (iad1)*, `sa-east-1` = *São Paulo (gru1)*), así la app
    está al lado de la base y responde más rápido. Después: *Deployments → ⋯ → Redeploy*.
 
 ---
@@ -130,4 +133,5 @@ Lo ves en Vercel → *Settings → Cron Jobs*.
 | "AUTH_SECRET is required in production" en los logs | Falta `AUTH_SECRET` o tiene menos de 32 caracteres |
 | `db:migrate` no conecta | Revisá que pegaste la URL completa y entre comillas |
 | "No se pudo mandar el mail" | `SMTP_PASS` mal copiada o anulada (cambiaron la contraseña del Gmail): crear otra de aplicación |
+| No llega el mail del código | Mirar *Spam*; que la persona tenga **email cargado** (Equipo); en Vercel → *Logs* buscar "No se pudo mandar el mail" |
 | "La recuperación por email no está activada" | Faltan `SMTP_USER`/`SMTP_PASS` en Vercel (y *Redeploy* después de agregarlas) |
