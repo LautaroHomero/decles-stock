@@ -13,6 +13,7 @@ import { EquipoView } from "./equipo-view";
 import { ChangePasswordForm, EmailForm } from "./auth-ui";
 import { Onboarding } from "./onboarding";
 import { OpeningCashPrompt } from "./opening-cash";
+import { DolarChip } from "./dolar-chip";
 
 type Section = "vender" | "cierre" | "inventario" | "ventas" | "equipo";
 
@@ -66,6 +67,7 @@ export function StockApp({ actor }: { actor: Actor }) {
         </nav>
         <span className="flex-1" />
         <span className="hidden truncate text-[13px] text-neutral-400 md:block">{actor.activeOrg?.name}</span>
+        {!isMedico && <DolarChip canEdit />}
         {(isMedico || isAdmin) && <Bell onOpenStock={() => go("inventario")} />}
         <AvatarMenu actor={actor} onOnboarding={() => setOnbKey((k) => k + 1)} />
       </header>

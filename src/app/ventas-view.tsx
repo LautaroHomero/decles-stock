@@ -20,6 +20,9 @@ import {
   useToast,
   type Payment,
   type SaleRow,
+  methodTotals,
+  usdFmt,
+  type PaymentsMap,
 } from "./shared";
 import { PlanillaView } from "./planilla-view";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
@@ -126,7 +129,7 @@ export function VentasView({ actor }: { actor: Actor }) {
   const isCurrent = from <= today && today <= to;
   const canNext = !isCurrent && rangeOf(period, shift(period, anchor, 1)).from <= today;
 
-  const [data, refresh] = usePoll<{ ok: boolean; sales: SaleRow[] }>(`/api/sales?from=${from}&to=${to}&limit=500`, 30_000);
+  const [data, refresh] = usePoll<{ ok: boolean; sales: SaleRow[]; payments?: PaymentsMap }>(`/api/sales?from=${from}&to=${to}&limit=500`, 30_000);
   const [comm, refreshComm] = usePoll<{ ok: boolean; rows: CommissionRow[] }>(
     seesCommission ? `/api/commissions?from=${from}&to=${to}` : "/api/commissions?none=1",
     60_000,
@@ -148,9 +151,11 @@ export function VentasView({ actor }: { actor: Actor }) {
   const units = paid.filter((s) => s.kind === "producto").reduce((n, s) => n + s.quantity, 0);
   const practices = paid.filter((s) => s.kind !== "producto").reduce((n, s) => n + s.quantity, 0);
   const total = paid.reduce((n, s) => n + charged(s), 0);
-  const cash = paid.filter((s) => s.paymentMethod === "efectivo").reduce((n, s) => n + s.cashTotal, 0);
-  const transfer = paid.filter((s) => s.paymentMethod === "transferencia").reduce((n, s) => n + s.cashTotal, 0);
-  const card = paid.filter((s) => s.paymentMethod === "tarjeta").reduce((n, s) => n + s.cardTotal, 0);
+  // Por medio (las anotaciones con varios medios o en dólares se cuentan por sus partes).
+  const mt = methodTotals(sales, data?.payments);
+  const cash = mt.efectivo;
+  const transfer = mt.transferencia;
+  const card = mt.tarjeta;
   const unknown = paid.filter((s) => !s.paymentMethod);
   const unknownCash = unknown.reduce((n, s) => n + s.cashTotal, 0);
   const unknownCard = unknown.reduce((n, s) => n + s.cardTotal, 0);
@@ -323,6 +328,7 @@ export function VentasView({ actor }: { actor: Actor }) {
             <Stat label="Efectivo" value={money(cash)} />
             <Stat label="Transferencia" value={money(transfer)} />
             <Stat label={PAYMENT_LABEL.tarjeta} value={money(card)} />
+            {mt.usd > 0 && <Stat label="Dólares" value={money(mt.dolares)} sub={usdFmt(mt.usd)} />}
             <Stat
               label="Sin cargar cómo pagó"
               value={unknown.length ? money(unknownCash) : "—"}

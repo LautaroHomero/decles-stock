@@ -1,8 +1,10 @@
+import { connection } from "next/server";
 import { recoveryEnabled, requestPasswordReset } from "@/lib/domain/accounts";
 import { bodyOf, respond } from "../../_http";
 
 /** ¿Está activa la recuperación por email? (si no hay SMTP en producción, no). */
 export async function GET() {
+  await connection(); // siempre en el momento (nunca armado en el build)
   return Response.json({ ok: true, enabled: recoveryEnabled() });
 }
 

@@ -14,6 +14,7 @@ import { realNowIso } from "@/lib/domain/clock";
 import { restoreStockForSale } from "@/lib/db/stock-repo";
 import { getProvider } from "@/lib/db/repo";
 import { recordSale } from "@/lib/domain/billing";
+import { insertVisitPayments, setVisitMethod, type PayPart } from "@/lib/db/payments-repo";
 import type { Actor } from "@/lib/domain/types";
 
 /**
@@ -33,6 +34,11 @@ export interface VisitInput {
   patientName?: string;
   providerId?: string | null;
   paymentMethod?: string | null;
+  /**
+   * Pago en varios medios o en dólares: «mitad efectivo, mitad tarjeta», «100 dólares». `amount` en pesos
+   * (en dólares lo calcula el servidor: usd × rate). Con esto, `paymentMethod` se ignora.
+   */
+  payments?: { method?: string; amount?: number; usd?: number | null; rate?: number | null }[];
   /** Planilla: columna Observaciones (texto libre, se guarda tal cual). */
   observations?: string;
   /**
@@ -83,7 +89,23 @@ export async function recordVisit(
         return { ok: false, error: "El precio tiene que ser un número entero de pesos.", status: 400 };
     }
   }
-  const raw = v.paymentMethod;
+  // Partes del pago (varios medios o dólares).
+  const parts: PayPart[] = [];
+  for (const p of Array.isArray(v.payments) ? v.payments : []) {
+    const m = p?.method;
+    if (m !== "efectivo" && m !== "transferencia" && m !== "tarjeta" && m !== "dolares")
+      return { ok: false, error: "Medio de pago inválido.", status: 400 };
+    if (m === "dolares") {
+      const usd = Number(p.usd), rate = Number(p.rate);
+      if (!(usd > 0 && usd < 1_000_000) || !(rate > 0 && rate < 100_000)) return { ok: false, error: "Faltan los dólares o la cotización.", status: 400 };
+      parts.push({ method: m, usd: Math.round(usd * 100) / 100, rate: Math.round(rate * 100) / 100, amount: Math.round(usd * rate) });
+    } else {
+      if (!pesos(p.amount) || !p.amount) continue;
+      parts.push({ method: m, amount: p.amount as number });
+    }
+  }
+  const visitMethod = parts.length === 1 ? parts[0].method : parts.length > 1 ? "mixto" : null;
+  const raw = parts.length ? (parts.length === 1 && parts[0].method !== "dolares" ? parts[0].method : null) : v.paymentMethod;
   const method: PaymentMethod | null = raw === "efectivo" || raw === "transferencia" || raw === "tarjeta" ? raw : null;
   const patient = clean(v.patientName).slice(0, 120);
   // Toda práctica es de un paciente: «Atención» genérica o un ítem de la lista que no es producto.
@@ -130,7 +152,7 @@ export async function recordVisit(
       itemId: l.itemId,
       quantity: l.quantity,
       providerId,
-      paymentMethod: v.paymentMethod,
+      paymentMethod: method,
       expiresOn: l.expiresOn,
       patientLabel: patient,
       visitId,
@@ -153,6 +175,10 @@ export async function recordVisit(
   }
   const obs = clean(v.observations).slice(0, 300);
   if (obs) await setVisitObservations(orgId, visitId, obs);
+  if (parts.length) {
+    await insertVisitPayments(orgId, visitId, parts);
+    if (visitMethod !== method) await setVisitMethod(orgId, visitId, visitMethod!);
+  }
   return { ok: true, visitId, saleIds, total, cashTotal, cardTotal, pending };
 }
 

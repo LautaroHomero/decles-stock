@@ -16,7 +16,7 @@ export type PriceKind = "consulta" | "tratamiento" | "producto";
 export type SaleKind = PriceKind | "pendiente";
 export type BillingSource = "manual" | "agent";
 /** Medio de pago (Decles). Transferencia va al precio de efectivo. */
-export type PaymentMethod = "efectivo" | "transferencia" | "tarjeta";
+export type PaymentMethod = "efectivo" | "transferencia" | "tarjeta" | "dolares" | "mixto";
 
 export interface PriceItem {
   id: string;

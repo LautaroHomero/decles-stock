@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { PlusIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { normalize, parseNote, suggest } from "@/lib/domain/quick-sale";
-import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogResponse, type Payment, type SaleRow } from "./shared";
+import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogResponse, type PayPart, type PaymentsMap, type SaleMethod, type SaleRow } from "./shared";
 
 /**
  * Planilla del día: la misma hoja que la secretaria llena en papel. Ingresos y egresos extras, caja al
@@ -49,18 +49,20 @@ export interface Row {
   /** Texto para editar: «Peeling, Contorno de ojos x2». */
   itemsText: string;
   providerId: string | null;
-  method: Payment | null;
+  method: SaleMethod | null;
+  /** Varios medios / dólares: las partes del pago. */
+  parts: PayPart[];
   k: number;
   kManual: boolean;
   total: number;
 }
 
-const METHOD_SHORT: Record<Payment, string> = { efectivo: "Efvo.", transferencia: "Transf.", tarjeta: "Tarj." };
+const METHOD_SHORT: Record<SaleMethod, string> = { efectivo: "Efvo.", transferencia: "Transf.", tarjeta: "Tarj.", dolares: "US$", mixto: "Varios" };
 const GENERIC = "Atención";
 const num = (s: string) => Number(s.replace(/\D/g, "") || 0);
 
 
-export function toRows(sales: SaleRow[]): Row[] {
+export function toRows(sales: SaleRow[], payments?: PaymentsMap): Row[] {
   const byVisit = new Map<string, SaleRow[]>();
   for (const s of sales) {
     if (s.status !== "paid") continue;
@@ -81,6 +83,7 @@ export function toRows(sales: SaleRow[]): Row[] {
         itemsText: items.map((i) => `${i.name}${i.qty > 1 ? ` x${i.qty}` : ""}`).join(", "),
         providerId: g[0].providerId,
         method: g[0].paymentMethod,
+        parts: payments?.[key] ?? [],
         k: g.reduce((n, s) => n + s.commissionAmount, 0),
         kManual: g.some((s) => s.commissionManual),
         total: g.reduce((n, s) => n + s.total, 0),
@@ -139,7 +142,7 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
   const admin = !!actor.activeOrg?.canAdmin;
   const canEdit = admin || date === today;
 
-  const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[] }>(`/api/sales?from=${date}&to=${date}&limit=500`, 30_000);
+  const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[]; payments?: PaymentsMap }>(`/api/sales?from=${date}&to=${date}&limit=500`, 30_000);
   const [catalog, refreshCatalog] = usePoll<CatalogResponse>("/api/catalog", 60_000);
   const [sellersData] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; area: Area }[] }>("/api/sellers", 60_000);
   const [toast, showToast] = useToast();
@@ -156,7 +159,7 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
         .map((p) => ({ id: p.priceItemId!, name: p.name, price: p.price!, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [] })),
     [catalog],
   );
-  const rows = useMemo(() => toRows(sales?.ok ? sales.sales : []), [sales]);
+  const rows = useMemo(() => toRows(sales?.ok ? sales.sales : [], sales?.payments), [sales]);
   const areaOf = (providerId: string | null): Area => sellers.find((s) => s.id === providerId)?.area ?? "medicos";
   const sections = AREAS.filter((a) => a.id === "medicos" || sellers.some((s) => s.area === a.id) || rows.some((r) => areaOf(r.providerId) === a.id));
 
@@ -379,7 +382,9 @@ function RowEditor({
   const [providerId, setProviderId] = useState<string>(row?.providerId ?? (sellers.length === 1 ? sellers[0].id : ""));
   const [paid, setPaid] = useState(row ? String(row.total) : "");
   const [paidTouched, setPaidTouched] = useState(!!row);
-  const [method, setMethod] = useState<Payment | "">(row?.method ?? "");
+  const [method, setMethod] = useState<SaleMethod | "">(row?.method ?? "");
+  // Varios medios / dólares (anotado en Anotar): se conservan las partes y lo pagado es su suma.
+  const keepParts = !!row && (method === "mixto" || method === "dolares") && row.parts.length > 0;
   const [k, setK] = useState(row?.kManual ? String(row.k) : "");
   const [busy, setBusy] = useState(false);
   const first = useRef<HTMLInputElement>(null);
@@ -395,7 +400,7 @@ function RowEditor({
   };
   const priceOf = (p: Picked) => p.amount ?? (p.item ? (method === "tarjeta" ? (p.item.cardPrice ?? p.item.price) : p.item.price) * p.qty : 0);
   const listTotal = picked.reduce((n, p) => n + priceOf(p), 0);
-  const paidValue = paidTouched ? num(paid) : listTotal;
+  const paidValue = keepParts ? row!.parts.reduce((n, p) => n + p.amount, 0) : paidTouched ? num(paid) : listTotal;
   const kValue = k.trim() === "" ? null : num(k);
   const dirty = !row ? !!(patient.trim() || what.trim() || paid || k) : true;
 
@@ -420,7 +425,9 @@ function RowEditor({
       if (p.name === GENERIC) return { generic: true, amount: amounts[i], commission };
       return { pendingName: p.name, pendingPrice: amounts[i] ? Math.round(amounts[i] / p.qty) : null, quantity: p.qty, amount: amounts[i], commission };
     });
-    const body = { patientName: patient, providerId, paymentMethod: method || null, lines };
+    const body = keepParts
+      ? { patientName: patient, providerId, payments: row!.parts, lines }
+      : { patientName: patient, providerId, paymentMethod: method === "mixto" || method === "dolares" ? null : method || null, lines };
     setBusy(true);
     const r = row ? await call(`/api/visits/${row.key}`, "PUT", body) : await call("/api/visits", "POST", body);
     setBusy(false);
@@ -493,6 +500,8 @@ function RowEditor({
       <td className="px-1.5 py-1">
         <input
           value={paidValue ? paidValue.toLocaleString("es-AR") : ""}
+          disabled={keepParts}
+          title={keepParts ? "Pagó en varios medios: se corrige desde Anotar" : undefined}
           onChange={(e) => {
             setPaidTouched(true);
             setPaid(e.target.value.replace(/\D/g, ""));
@@ -503,11 +512,13 @@ function RowEditor({
         />
       </td>
       <td className="px-1.5 py-1">
-        <select value={method} onChange={(e) => setMethod(e.target.value as Payment | "")} className={`${CELL} pr-1`}>
+        <select value={method} onChange={(e) => setMethod(e.target.value as SaleMethod | "")} className={`${CELL} pr-1`}>
           <option value="">—</option>
           <option value="efectivo">Efvo.</option>
           <option value="transferencia">Transf.</option>
           <option value="tarjeta">Tarj.</option>
+          {row && row.parts.length > 0 && row.method === "dolares" && <option value="dolares">US$</option>}
+          {row && row.parts.length > 0 && row.method === "mixto" && <option value="mixto">Varios</option>}
         </select>
       </td>
       {showK && (

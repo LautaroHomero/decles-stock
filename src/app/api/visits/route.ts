@@ -10,7 +10,7 @@ export async function POST(req: Request) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
   const b = await bodyOf<VisitInput>(req);
-  const r = await recordVisit(actor, { patientName: b.patientName, providerId: b.providerId, paymentMethod: b.paymentMethod, observations: b.observations, lines: b.lines ?? [] });
+  const r = await recordVisit(actor, { patientName: b.patientName, providerId: b.providerId, paymentMethod: b.paymentMethod, payments: b.payments, observations: b.observations, lines: b.lines ?? [] });
   if (r.ok) await refreshAfterChange(actor);
   return respond(r);
 }

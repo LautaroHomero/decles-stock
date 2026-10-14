@@ -5,7 +5,7 @@ import { CaretLeftIcon, CaretRightIcon, CheckIcon, PlusIcon } from "@phosphor-ic
 import type { Actor } from "@/lib/domain/types";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import { fmtSigned, toRows } from "./planilla-view";
-import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type Payment, type SaleRow } from "./shared";
+import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type Payment, type PaymentsMap, type SaleMethod, type SaleRow, methodTotals, usdFmt } from "./shared";
 
 /**
  * Cierre del día (secretaría y admin): todo lo que entró, todo lo que salió y a quién se le pagó.
@@ -41,7 +41,7 @@ const longDate = (ymd: string) => {
   return s.charAt(0).toUpperCase() + s.slice(1);
 };
 const num = (s: string) => Number(s.replace(/\D/g, "") || 0);
-const METHOD: Record<Payment, string> = { efectivo: "efectivo", transferencia: "transferencia", tarjeta: "tarjeta" };
+const METHOD: Record<SaleMethod, string> = { efectivo: "efectivo", transferencia: "transferencia", tarjeta: "tarjeta", dolares: "dólares", mixto: "varios medios" };
 const short = (name: string) => name.replace(/^(Dra?\.|Lic\.)\s*/i, "");
 
 export function CierreSheet({ actor }: { actor: Actor }) {
@@ -51,7 +51,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const setDate = (d: string) => setPicked(d === today ? null : d);
   const canEdit = !!actor.activeOrg?.canAdmin || date === today;
 
-  const [sales] = usePoll<{ ok: boolean; sales: SaleRow[] }>(`/api/sales?from=${date}&to=${date}&limit=500`, 30_000);
+  const [sales] = usePoll<{ ok: boolean; sales: SaleRow[]; payments?: PaymentsMap }>(`/api/sales?from=${date}&to=${date}&limit=500`, 30_000);
   const [egr, refreshEgr] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}`, 30_000);
   const [ing, refreshIng] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}&direction=ingreso`, 30_000);
   const [cash, refreshCash] = usePoll<{ ok: boolean; cash: { opening: number | null; amount: number | null } }>(`/api/day-cash?date=${date}`, 60_000);
@@ -60,7 +60,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const [form, setForm] = useState<{ direction: "egreso" | "ingreso"; expense?: Expense } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const rows = useMemo(() => toRows(sales?.ok ? sales.sales : []), [sales]);
+  const rows = useMemo(() => toRows(sales?.ok ? sales.sales : [], sales?.payments), [sales]);
   const egresos = useMemo(() => (egr?.ok ? egr.expenses : []), [egr]);
   const ingresos = useMemo(() => (ing?.ok ? ing.expenses : []), [ing]);
   const payouts = useMemo(() => (pay?.ok ? pay.payouts : []), [pay]);
@@ -72,8 +72,10 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const cobrado = rows.reduce((n, r) => n + r.total, 0);
   const kTotal = rows.reduce((n, r) => n + r.k, 0);
   const owedTotal = balances.reduce((n, b) => n + b.owed, 0);
-  const byMethod = (m: Payment | null) => rows.filter((r) => r.method === m).reduce((n, r) => n + r.total, 0);
-  const efectivo = byMethod("efectivo");
+  // Por medio, contando las partes de lo que se pagó con varios medios o en dólares.
+  const mt = useMemo(() => methodTotals(sales?.ok ? sales.sales : [], sales?.payments), [sales]);
+  const byMethod = (m: Payment | null) => (m ? mt[m] : mt.sin);
+  const efectivo = mt.efectivo;
   const opening = cash?.ok ? cash.cash.opening : null;
   const contado = cash?.ok ? cash.cash.amount : null;
   const entro = cobrado + inTotal;
@@ -90,7 +92,18 @@ export function CierreSheet({ actor }: { actor: Actor }) {
         time: r.time,
         who: r.patient || "Sin paciente",
         what: r.items.map((i) => `${i.qty > 1 ? `${i.qty} ` : ""}${i.name}`).join(", "),
-        detail: [short(r.sales[0].providerName ?? ""), r.method ? METHOD[r.method] : r.total ? "sin medio" : "no pasó por caja"].filter(Boolean).join(" · "),
+        detail: [
+          short(r.sales[0].providerName ?? ""),
+          r.parts.length
+            ? r.parts.map((p) => (p.method === "dolares" ? `${usdFmt(p.usd ?? 0)} (${money(p.amount)})` : `${METHOD[p.method]} ${money(p.amount)}`)).join(" + ")
+            : r.method
+              ? METHOD[r.method]
+              : r.total
+                ? "sin medio"
+                : "no pasó por caja",
+        ]
+          .filter(Boolean)
+          .join(" · "),
         inn: r.total,
         out: 0,
         kind: "visita" as const,
@@ -358,6 +371,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                   }}
                 />
                 {contado !== null && <Line label="Diferencia" value={diffText(contado - esperado)} />}
+                {mt.usd > 0 && <Line label="Dólares en caja (aparte)" value={usdFmt(mt.usd)} strong />}
               </div>
             </Card>
             <Card title="Cómo pagaron">
@@ -365,6 +379,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                 <Line label="Efectivo" value={money(efectivo)} />
                 <Line label="Transferencias" value={money(byMethod("transferencia"))} />
                 <Line label="Tarjetas" value={money(byMethod("tarjeta"))} />
+                {mt.usd > 0 && <Line label={`Dólares · ${usdFmt(mt.usd)}`} value={money(mt.dolares)} />}
                 {byMethod(null) > 0 && <Line label="Sin medio cargado" value={money(byMethod(null))} muted />}
                 <Line label="Total cobrado" value={money(cobrado)} strong />
                 <Line label="Para Decles (cobrado − profesionales)" value={fmtSigned(cobrado - kTotal)} />

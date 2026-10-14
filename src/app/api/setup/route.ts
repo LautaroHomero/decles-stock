@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { needsSetup, setupFirstRun } from "@/lib/domain/accounts";
 import { hydrateActor } from "@/lib/auth/actor";
 import { sessionSetCookie, signSession, type SessionClaims } from "@/lib/auth/session";
@@ -6,6 +7,7 @@ import { bodyOf } from "../_http";
 
 /** ¿Hay que configurar? (base sin usuarios) */
 export async function GET() {
+  await connection(); // siempre en el momento (nunca armado en el build)
   return Response.json({ ok: true, needsSetup: await needsSetup() });
 }
 

@@ -2,6 +2,7 @@ import { salesList } from "@/lib/domain/billing";
 import { realNowIso } from "@/lib/domain/clock";
 import type { Actor } from "@/lib/domain/types";
 import { listExpenses, type Expense } from "@/lib/domain/expenses";
+import { listVisitPayments } from "@/lib/db/payments-repo";
 
 /**
  * Cierre del día: pacientes, prácticas y ventas de productos, total cobrado y el detalle por
@@ -33,7 +34,7 @@ export interface DayClose {
   productSales: number;
   total: number;
   /** Totales por medio de pago; `pending` = sin medio cargado (a precio efectivo; con tarjeta sería `pendingCard`). */
-  byPayment: { efectivo: number; transferencia: number; tarjeta: number; pending: number; pendingCard: number };
+  byPayment: { efectivo: number; transferencia: number; tarjeta: number; dolares: number; usd: number; pending: number; pendingCard: number };
   providers: CloseProvider[];
   /** Egresos del día (la médica no los ve: lista vacía). */
   expenses: Expense[];
@@ -61,7 +62,10 @@ export async function dayClose(actor: Actor, date?: string): Promise<Result<{ cl
   const visitKey = (s: (typeof sales)[number]) => s.visitId ?? s.id;
   const patientVisits = new Set<string>();
   const productVisits = new Set<string>();
-  const byPayment = { efectivo: 0, transferencia: 0, tarjeta: 0, pending: 0, pendingCard: 0 };
+  const byPayment = { efectivo: 0, transferencia: 0, tarjeta: 0, dolares: 0, usd: 0, pending: 0, pendingCard: 0 };
+  const splitIds = [...new Set(sales.filter((s) => s.visitId && (s.paymentMethod === "mixto" || s.paymentMethod === "dolares")).map((s) => s.visitId!))];
+  const split = actor.activeOrg ? await listVisitPayments(actor.activeOrg.id, splitIds) : {};
+  const counted = new Set<string>();
   const providers = new Map<string, CloseProvider & { visits: Set<string> }>();
   let practices = 0, total = 0;
 
@@ -71,7 +75,16 @@ export async function dayClose(actor: Actor, date?: string): Promise<Result<{ cl
     if (s.kind === "producto") productVisits.add(key);
     if (s.kind === "tratamiento" || s.kind === "consulta") practices += s.quantity;
     total += s.total;
-    if (s.paymentMethod === "efectivo") byPayment.efectivo += s.total;
+    if ((s.paymentMethod === "mixto" || s.paymentMethod === "dolares") && s.visitId) {
+      // Varios medios: se cuentan las partes una sola vez por anotación.
+      if (!counted.has(s.visitId)) {
+        counted.add(s.visitId);
+        for (const p of split[s.visitId] ?? []) {
+          byPayment[p.method] += p.amount;
+          if (p.method === "dolares") byPayment.usd += p.usd ?? 0;
+        }
+      }
+    } else if (s.paymentMethod === "efectivo") byPayment.efectivo += s.total;
     else if (s.paymentMethod === "transferencia") byPayment.transferencia += s.total;
     else if (s.paymentMethod === "tarjeta") byPayment.tarjeta += s.total;
     else {

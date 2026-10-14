@@ -21,6 +21,48 @@ export interface MoneyNote {
   direct: boolean;
   /** Lo que le corresponde a la profesional, si se aclaró. */
   share: number | null;
+  /**
+   * Pagó con varios medios o en dólares («20000 en efectivo y 20000 con tarjeta», «100 dólares»):
+   * pesos por medio y los dólares (los pasa a pesos la pantalla, con la cotización del día).
+   */
+  split: Split | null;
+  /** Un solo medio pegado al importe («30000 con tarjeta»). */
+  method: "efectivo" | "transferencia" | "tarjeta" | null;
+}
+
+export interface Split {
+  efectivo: number;
+  transferencia: number;
+  tarjeta: number;
+  usd: number;
+  /** Cotización fija (al corregir algo ya guardado se respeta la que se usó). Sin esto, la del día. */
+  rate?: number | null;
+}
+
+/** Pesos de un pago dividido: los tres medios + los dólares a la cotización. */
+export const splitPesos = (s: Split, rate: number | null) =>
+  s.efectivo + s.transferencia + s.tarjeta + Math.round(s.usd * (s.rate ?? rate ?? 0));
+
+/** Partes para `/api/visits` (solo las que tienen algo). */
+export function splitParts(s: Split, rate: number | null) {
+  const parts: { method: "efectivo" | "transferencia" | "tarjeta" | "dolares"; amount?: number; usd?: number; rate?: number }[] = [];
+  for (const m of ["efectivo", "transferencia", "tarjeta"] as const) if (s[m] > 0) parts.push({ method: m, amount: s[m] });
+  const r = s.rate ?? rate;
+  if (s.usd > 0 && r) parts.push({ method: "dolares", usd: s.usd, rate: r });
+  return parts;
+}
+
+// Dólares: «100 dólares», «100 usd», «u$s 100», «US$ 100», «100 verdes».
+const USD = /(?:\b(?:usd|u\$s|us\$)\s*(\d+(?:[.,]\d+)?))|(?:\b(\d+(?:[.,]\d+)?)\s*(?:usd|u\$s|us\$|d[oó]lares?|dolar(?:es)?|verdes)\b)/gi;
+// Medio de pago pegado a un importe (después: «20000 en efectivo»; antes: «efectivo 20000»).
+const METHOD_AFTER = /^\s*(?:en|con|por|de|x)?\s*(efectivo|efvo|cash|contado|transferencia|transf\w*|mp|mercado\s*pago|tarjeta|tarj\w*|debito|credito|posnet)\b/;
+const METHOD_BEFORE = /\b(efectivo|efvo|cash|transferencia|transf\w*|mp|tarjeta|tarj\w*|debito|credito)\s*(?:de|por|:)?\s*\$?\s*$/;
+function methodWord(w: string | undefined): keyof Omit<Split, "usd"> | null {
+  if (!w) return null;
+  if (/^(efectivo|efvo|cash|contado)$/.test(w)) return "efectivo";
+  if (/^(transf|mp|mercado)/.test(w)) return "transferencia";
+  if (/^(tarj|debito|credito|posnet)/.test(w)) return "tarjeta";
+  return null;
 }
 
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -57,9 +99,24 @@ export function extractMoney(text: string): MoneyNote {
   const direct = DIRECT.test(n);
   // Recortes a sacar del texto: [desde, hasta)
   const cuts: [number, number][] = [];
+  const split: Split = { efectivo: 0, transferencia: 0, tarjeta: 0, usd: 0 };
+  const methods = new Set<string>();
+
+  // Dólares primero (no son pesos).
+  const usdSpans: [number, number][] = [];
+  for (const m of text.matchAll(USD)) {
+    const v = Number((m[1] ?? m[2]).replace(",", "."));
+    if (!(v > 0)) continue;
+    split.usd += v;
+    const at = m.index ?? 0;
+    usdSpans.push([at, at + m[0].length]);
+    const pw = norm(text.slice(Math.max(0, at - 20), at)).match(PAID_WORDS);
+    cuts.push([at - (pw ? pw[0].length : 0), at + m[0].length]);
+  }
 
   for (const m of text.matchAll(AMOUNT)) {
     const at = m.index ?? 0;
+    if (usdSpans.some(([a, b]) => at < b && at + m[0].length > a)) continue;
     const v = toPesos(m[0]);
     if (v <= 0) continue;
     const before = norm(text.slice(Math.max(0, at - 48), at));
@@ -77,7 +134,22 @@ export function extractMoney(text: string): MoneyNote {
     }
     paid = (paid ?? 0) + v;
     const pm = before.match(PAID_WORDS);
-    cuts.push([at - (pm ? pm[0].length : 0), at + m[0].length]);
+    // ¿Con qué medio? «20000 en efectivo» / «tarjeta 20000».
+    const after = norm(text.slice(at + m[0].length, at + m[0].length + 30));
+    const ma = after.match(METHOD_AFTER);
+    const mb = before.match(METHOD_BEFORE);
+    const method = methodWord(ma?.[1]) ?? methodWord(mb?.[1]);
+    if (method) {
+      split[method] += v;
+      methods.add(method);
+    } else split.efectivo += 0;
+    cuts.push([at - (mb && !ma ? mb[0].length : pm ? pm[0].length : 0), at + m[0].length + (ma ? ma[0].length : 0)]);
+  }
+  // Es un pago dividido si hay dólares o importes con dos medios distintos. Lo que no dijo medio va a efectivo.
+  const isSplit = split.usd > 0 || methods.size >= 2;
+  if (isSplit && paid !== null) {
+    const assigned = split.efectivo + split.transferencia + split.tarjeta;
+    split.efectivo += paid - assigned;
   }
   // Las frases de «pago directo» / «abono» tampoco son paciente ni práctica.
   const dm = n.match(DIRECT);
@@ -85,8 +157,9 @@ export function extractMoney(text: string): MoneyNote {
 
   let out = text;
   for (const [a, b] of cuts.sort((x, y) => y[0] - x[0])) out = `${out.slice(0, Math.max(0, a))} ${out.slice(b)}`;
-  out = out.replace(/\s+([,;])/g, "$1").replace(/([,;])\s*([,;])+/g, "$1").replace(/\s{2,}/g, " ").replace(/^[\s,;]+|[\s,;]+$/g, "");
-  return { text: out, paid: direct && paid === null ? 0 : paid, direct, share };
+  out = out.replace(/(?:^|[\s,;]+)(?:y|e|mas|más|\+)(?=\s*(?:[,;]|$))/gi, "").replace(/\s+([,;])/g, "$1").replace(/([,;])\s*([,;])+/g, "$1").replace(/\s{2,}/g, " ").replace(/^[\s,;]+|[\s,;]+$/g, "");
+  const single = !isSplit && methods.size === 1 ? ([...methods][0] as MoneyNote["method"]) : null;
+  return { text: out, paid: direct && paid === null ? 0 : paid, direct, share, split: isSplit ? split : null, method: single };
 }
 
 /**

@@ -173,18 +173,70 @@ export interface SaleRow {
   observations?: string;
   commissionPct: number;
   commissionAmount: number;
-  paymentMethod: Payment | null;
+  /** "mixto" = varios medios (el detalle viene en `payments` de /api/sales). */
+  paymentMethod: SaleMethod | null;
   cashTotal: number;
   cardTotal: number;
 }
 
-export type Payment = "efectivo" | "transferencia" | "tarjeta";
-export const PAYMENT_LABEL: Record<Payment, string> = { efectivo: "Efectivo", transferencia: "Transferencia", tarjeta: "Tarjeta" };
+export type Payment = "efectivo" | "transferencia" | "tarjeta" | "dolares";
+export type SaleMethod = Payment | "mixto";
+export const PAYMENT_LABEL: Record<SaleMethod, string> = {
+  efectivo: "Efectivo",
+  transferencia: "Transferencia",
+  tarjeta: "Tarjeta",
+  dolares: "Dólares",
+  mixto: "Varios medios",
+};
 export const PAYMENTS: [Payment, string][] = [
   ["efectivo", "Efectivo"],
   ["transferencia", "Transf."],
   ["tarjeta", "Tarjeta"],
+  ["dolares", "Dólares"],
 ];
+
+/** Una parte del pago (varios medios o dólares). `amount` en pesos. */
+export interface PayPart {
+  method: Payment;
+  amount: number;
+  usd?: number | null;
+  rate?: number | null;
+}
+export type PaymentsMap = Record<string, PayPart[]>;
+
+/** Lo cobrado por medio (las anotaciones con varios medios se cuentan por sus partes). `usd` = dólares físicos. */
+export function methodTotals(sales: SaleRow[], payments?: PaymentsMap) {
+  const t = { efectivo: 0, transferencia: 0, tarjeta: 0, dolares: 0, usd: 0, sin: 0 };
+  const seen = new Set<string>();
+  for (const s of sales) {
+    if (s.status !== "paid") continue;
+    if ((s.paymentMethod === "mixto" || s.paymentMethod === "dolares") && s.visitId) {
+      if (seen.has(s.visitId)) continue;
+      seen.add(s.visitId);
+      for (const p of payments?.[s.visitId] ?? []) {
+        t[p.method] += p.amount;
+        if (p.method === "dolares") t.usd += p.usd ?? 0;
+      }
+    } else if (s.paymentMethod && s.paymentMethod !== "mixto") t[s.paymentMethod] += s.total;
+    else t.sin += s.total;
+  }
+  return t;
+}
+
+export const usdFmt = (n: number) => `US$\u00a0${n.toLocaleString("es-AR", { maximumFractionDigits: 2 })}`;
+
+/** Dólar de hoy: blue (compra/venta) y la cotización para cobrar (promedio, o la escrita a mano). */
+export interface DolarHoy {
+  compra: number | null;
+  venta: number | null;
+  rate: number | null;
+  manual: boolean;
+  updatedAt: string | null;
+}
+export function useDolar(): [DolarHoy | null, () => void] {
+  const [d, refresh] = usePoll<{ ok: boolean; dolar: DolarHoy }>("/api/dolar", 10 * 60_000);
+  return [d?.ok ? d.dolar : null, refresh];
+}
 
 /** Precio con tarjeta efectivo (si no se cargó, es el mismo que efectivo). */
 export const cardOf = (p: { price: number | null; cardPrice: number | null }) => p.cardPrice ?? p.price ?? 0;
@@ -192,9 +244,9 @@ export const cardOf = (p: { price: number | null; cardPrice: number | null }) =>
 /**
  * Importe a mostrar: con medio conocido, ese precio; sin medio y con precios distintos, los dos.
  */
-export function Amount({ cash, card, method, className = "" }: { cash: number; card: number; method: Payment | null; className?: string }) {
+export function Amount({ cash, card, method, className = "" }: { cash: number; card: number; method: SaleMethod | null; className?: string }) {
   if (method === "tarjeta") return <span className={`tabular-nums ${className}`}>{money(card)}</span>;
-  if (method === "efectivo" || method === "transferencia" || card === cash) return <span className={`tabular-nums ${className}`}>{money(cash)}</span>;
+  if (method || card === cash) return <span className={`tabular-nums ${className}`}>{money(cash)}</span>;
   return (
     <span className={`flex flex-col items-end leading-tight tabular-nums ${className}`}>
       <span>{money(cash)}</span>
