@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "vercel-build": "tsx scripts/migrate.mts && next build",
     "start": "next start",
     "lint": "eslint",
     "db:up": "docker compose up -d db",

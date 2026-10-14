@@ -107,8 +107,9 @@ Lo ves en Vercel → *Settings → Cron Jobs*.
 ## Después: actualizar, migrar, respaldar
 
 - **Cambios en el código:** `git push` → Vercel publica solo en ~1 minuto.
-- **Si el cambio trae migraciones nuevas** (`src/lib/db/migrations/`), corré **antes** del push el mismo
-  comando del paso 2.3 (con `DATABASE_URL_UNPOOLED`). Es idempotente: si no hay nada nuevo, no hace nada.
+- **Migraciones:** se corren solas en cada deploy de Vercel (`vercel-build` = migrar + build, con
+  `DATABASE_URL_UNPOOLED`). Son idempotentes: si no hay nada nuevo, no hacen nada. El comando manual del paso 2.3
+  sigue sirviendo para correrlas antes, desde tu Mac.
 - **Backup:** Neon guarda un historial corto para restaurar (ver *Restore* en su panel). Igual conviene uno manual
   una vez por semana, desde tu Mac, con `DATABASE_URL_UNPOOLED`:
   ```bash

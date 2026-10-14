@@ -6,7 +6,8 @@ import { migrate } from "../src/lib/db/migrate";
 config({ path: ".env", quiet: true });
 config({ path: ".env.local", override: true, quiet: true });
 
-const url = process.env.DATABASE_URL_DIRECT ?? process.env.DATABASE_URL;
+// En Vercel (build) la directa de Neon es DATABASE_URL_UNPOOLED.
+const url = process.env.DATABASE_URL_DIRECT ?? process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
 if (!url) {
   console.error("Falta DATABASE_URL_DIRECT (o DATABASE_URL). Ver .env.example.");
   process.exit(1);
