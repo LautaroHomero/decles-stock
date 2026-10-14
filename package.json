@@ -12,7 +12,8 @@
     "db:seed": "tsx scripts/seed.mts",
     "user:reset-password": "tsx scripts/reset-password.mts",
     "app:up": "docker compose --profile app up -d --build",
-    "db:catalogo": "tsx scripts/catalogo.mts"
+    "db:catalogo": "tsx scripts/catalogo.mts",
+    "db:demo-reset": "tsx scripts/demo-reset.mts"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

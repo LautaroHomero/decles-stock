@@ -5,8 +5,8 @@ import postgres from "postgres";
  * survives dev hot-reload. Same as Clavdia, except TLS is skipped for a local
  * database (docker compose) — Supabase still gets `ssl: "require"`.
  *
- * - `DATABASE_URL` is the pooled connection string (Supabase transaction pooler,
- *   port 6543) — `prepare: false` is required for that pooler.
+ * - `DATABASE_URL` is the pooled connection string (Neon `-pooler` host, or Supabase
+ *   transaction pooler on 6543) — `prepare: false` is required for those poolers.
  * - Schema lives out-of-band: `npm run db:migrate`, never on the request path.
  */
 export type Sql = ReturnType<typeof postgres>;
@@ -17,8 +17,24 @@ export function isLocalDb(url: string): boolean {
   return /@(localhost|127\.0\.0\.1|db)(:\d+)?\//.test(url);
 }
 
+/**
+ * Parámetros de libpq que postgres.js no conoce y mandaría al servidor como configuración
+ * (Postgres los rechaza: «unrecognized configuration parameter»). Neon agrega `channel_binding=require`.
+ */
+const LIBPQ_ONLY = ["channel_binding", "gssencmode", "sslcert", "sslkey", "sslcrl", "sslpassword", "krbsrvname", "requiressl"];
+
+function cleanUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    for (const k of LIBPQ_ONLY) u.searchParams.delete(k);
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function connect(url: string, max = Number(process.env.DB_POOL_MAX ?? 10)): Sql {
-  return postgres(url, {
+  return postgres(cleanUrl(url), {
     prepare: false,
     max,
     idle_timeout: 20,
