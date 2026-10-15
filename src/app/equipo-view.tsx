@@ -179,7 +179,7 @@ function MemberRow({
             {!m.email && <Pill className="!py-0 !text-[11px]">sin email</Pill>}
           </span>
         </span>
-        {m.role === "medico" && <span className="text-[14px] tabular-nums text-neutral-300">{m.commissionPct}%</span>}
+        {m.role === "medico" && <span className="text-[14px] tabular-nums text-neutral-300">{m.isAdmin ? "sin comisión" : `${m.commissionPct}%`}</span>}
       </button>
 
       {editing && (
@@ -193,12 +193,18 @@ function MemberRow({
               <span className="text-[12px] text-neutral-400">Email (para recuperar la contraseña)</span>
               <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoCapitalize="none" placeholder="opcional" className={FIELD} />
             </label>
-            {m.role === "medico" && (
-              <label className="flex flex-col gap-1">
-                <span className="text-[12px] text-neutral-400">Comisión (%) · salvo que la práctica o el producto tenga la suya</span>
-                <input value={pct} onChange={(e) => setPct(e.target.value.replace(/[^\d.,]/g, ""))} inputMode="decimal" className={FIELD} />
-              </label>
-            )}
+            {m.role === "medico" &&
+              (admin ? (
+                <div className="flex flex-col gap-1">
+                  <span className="text-[12px] text-neutral-400">Comisión</span>
+                  <span className="py-1.5 text-[13px] text-neutral-300">Sin comisión: es admin, lo suyo va todo al consultorio.</span>
+                </div>
+              ) : (
+                <label className="flex flex-col gap-1">
+                  <span className="text-[12px] text-neutral-400">Comisión (%) · salvo que la práctica o el producto tenga la suya</span>
+                  <input value={pct} onChange={(e) => setPct(e.target.value.replace(/[^\d.,]/g, ""))} inputMode="decimal" className={FIELD} />
+                </label>
+              ))}
             {m.role === "medico" && <AreaField value={area} onChange={setArea} />}
             {m.role === "medico" && (
               <label className="flex flex-col gap-1 sm:col-span-2">

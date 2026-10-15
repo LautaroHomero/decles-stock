@@ -16,6 +16,7 @@ import {
   type StockSource,
 } from "@/lib/db/stock-repo";
 import type { Actor, StaffRole } from "@/lib/domain/types";
+import { parseExpiry } from "./expiry";
 
 /**
  * Stock de insumos por consultorio. Única implementación: la usan los endpoints
@@ -59,27 +60,8 @@ async function manageCtx(actor: Actor, source: StockSource): Promise<Result<{ ct
   return { ok: true, ctx };
 }
 
-/**
- * Acepta `YYYY-MM-DD`, `DD/MM/YYYY` o mes/año (`03/2027`, `2027-03`; vence el último día del mes).
- * Devuelve null si está vacío (el lote no vence) y `undefined` si no se entiende.
- */
-export function parseExpiry(raw: string | null | undefined): string | null | undefined {
-  const s = raw?.trim();
-  if (!s) return null;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const lastDay = (y: number, m: number) => new Date(y, m, 0).getDate();
-  let y: number, m: number, d: number | undefined;
-  let g: RegExpMatchArray | null;
-  if ((g = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/))) [y, m, d] = [+g[1], +g[2], +g[3]];
-  else if ((g = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/))) [y, m, d] = [+g[3], +g[2], +g[1]];
-  else if ((g = s.match(/^(\d{4})-(\d{1,2})$/))) [y, m] = [+g[1], +g[2]];
-  else if ((g = s.match(/^(\d{1,2})[/-](\d{4})$/))) [y, m] = [+g[2], +g[1]];
-  else return undefined;
-  if (m < 1 || m > 12) return undefined;
-  const day = d ?? lastDay(y, m);
-  if (day < 1 || day > lastDay(y, m)) return undefined;
-  return `${y}-${pad(m)}-${pad(day)}`;
-}
+// `parseExpiry` vive en ./expiry (sin base: la usa también la pantalla). Se re-exporta para no cambiar los imports.
+export { parseExpiry };
 
 const cleanName = (s: unknown) => (typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "");
 const posInt = (n: unknown) => (typeof n === "number" && Number.isInteger(n) && n > 0 ? n : undefined);

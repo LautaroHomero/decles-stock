@@ -6,6 +6,7 @@ import type { Actor } from "@/lib/domain/types";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import { fmtSigned, toRows } from "./planilla-view";
 import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type Payment, type PaymentsMap, type SaleMethod, type SaleRow, methodTotals, usdFmt } from "./shared";
+import { DebtsCard, type DebtCollectionRow, type DebtRow } from "./deudas";
 
 /**
  * Cierre del día (secretaría y admin): todo lo que entró, todo lo que salió y a quién se le pagó.
@@ -29,6 +30,8 @@ interface Balance {
   share: number;
   paid: number;
   owed: number;
+  /** Es admin del consultorio (la dueña): no cobra comisión. */
+  owner?: boolean;
 }
 
 const shift = (ymd: string, days: number) => {
@@ -56,6 +59,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const [ing, refreshIng] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}&direction=ingreso`, 30_000);
   const [cash, refreshCash] = usePoll<{ ok: boolean; cash: { opening: number | null; amount: number | null } }>(`/api/day-cash?date=${date}`, 60_000);
   const [pay, refreshPay] = usePoll<{ ok: boolean; payouts: Payout[]; balances: Balance[] }>(`/api/payouts?date=${date}`, 30_000);
+  const [dd, refreshDd] = usePoll<{ ok: boolean; collections: DebtCollectionRow[]; created: DebtRow[] }>(`/api/debts/day?date=${date}`, 30_000);
   const [toast, showToast] = useToast();
   const [form, setForm] = useState<{ direction: "egreso" | "ingreso"; expense?: Expense } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -65,6 +69,12 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const ingresos = useMemo(() => (ing?.ok ? ing.expenses : []), [ing]);
   const payouts = useMemo(() => (pay?.ok ? pay.payouts : []), [pay]);
   const balances = pay?.ok ? pay.balances : [];
+  // Deudas: lo cobrado hoy entra a la caja; lo que quedó debiendo se ve en la fila de esa atención.
+  const collections = useMemo(() => (dd?.ok ? dd.collections : []), [dd]);
+  const debtByVisit = useMemo(() => new Map((dd?.ok ? dd.created : []).filter((d) => d.visitId).map((d) => [d.visitId!, d])), [dd]);
+  const debtIn = collections.reduce((n, p) => n + p.amount, 0);
+  const debtInBy = (m: Payment) => collections.filter((p) => (p.method ?? "efectivo") === m).reduce((n, p) => n + p.amount, 0);
+  const debtShares = collections.reduce((n, p) => n + p.share, 0);
 
   const egTotal = egresos.reduce((n, e) => n + e.amount, 0);
   const inTotal = ingresos.reduce((n, e) => n + e.amount, 0);
@@ -75,17 +85,27 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   // Por medio, contando las partes de lo que se pagó con varios medios o en dólares.
   const mt = useMemo(() => methodTotals(sales?.ok ? sales.sales : [], sales?.payments), [sales]);
   const byMethod = (m: Payment | null) => (m ? mt[m] : mt.sin);
-  const efectivo = mt.efectivo;
+  const efectivo = mt.efectivo + debtInBy("efectivo");
   const opening = cash?.ok ? cash.cash.opening : null;
   const contado = cash?.ok ? cash.cash.amount : null;
-  const entro = cobrado + inTotal;
+  const entro = cobrado + debtIn + inTotal;
   const salio = egTotal + paidOut;
   const esperado = (opening ?? 0) + efectivo + inTotal - egTotal - paidOut;
   const pacientes = rows.filter((r) => r.patient).length;
 
   // Movimientos del día, en orden: cada paciente, los extras y los pagos a profesionales.
   const moves = useMemo(() => {
-    type Move = { at: string; time: string; who: string; what: string; detail: string; inn: number; out: number; kind: "visita" | "ingreso" | "egreso" | "pago"; ref?: Expense | Payout };
+    type Move = {
+      at: string;
+      time: string;
+      who: string;
+      what: string;
+      detail: string;
+      inn: number;
+      out: number;
+      kind: "visita" | "ingreso" | "egreso" | "pago" | "deuda";
+      ref?: Expense | Payout | DebtCollectionRow;
+    };
     const list: Move[] = [
       ...rows.map((r) => ({
         at: r.sales[0].createdAt,
@@ -102,6 +122,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                 ? "sin medio"
                 : "no pasó por caja",
         ]
+          .concat(r.sales[0].visitId && debtByVisit.get(r.sales[0].visitId) ? [`quedó debiendo ${money(debtByVisit.get(r.sales[0].visitId!)!.amount)}`] : [])
           .filter(Boolean)
           .join(" · "),
         inn: r.total,
@@ -111,9 +132,20 @@ export function CierreSheet({ actor }: { actor: Actor }) {
       ...ingresos.map((e) => ({ at: e.createdAt, time: fmtTime(e.createdAt), who: e.concept, what: "Ingreso extra", detail: e.createdByName, inn: e.amount, out: 0, kind: "ingreso" as const, ref: e })),
       ...egresos.map((e) => ({ at: e.createdAt, time: fmtTime(e.createdAt), who: e.concept, what: "Egreso", detail: e.createdByName, inn: 0, out: e.amount, kind: "egreso" as const, ref: e })),
       ...payouts.map((p) => ({ at: p.createdAt, time: fmtTime(p.createdAt), who: short(p.providerName), what: "Pago a profesional", detail: p.createdByName, inn: 0, out: p.amount, kind: "pago" as const, ref: p })),
+      ...collections.map((p) => ({
+        at: p.createdAt,
+        time: fmtTime(p.createdAt),
+        who: p.debtor,
+        what: "Cobro de deuda",
+        detail: [p.concept, short(p.providerName ?? ""), METHOD[p.method ?? "efectivo"]].filter(Boolean).join(" · "),
+        inn: p.amount,
+        out: 0,
+        kind: "deuda" as const,
+        ref: p,
+      })),
     ];
     return list.sort((a, b) => a.at.localeCompare(b.at));
-  }, [rows, ingresos, egresos, payouts]);
+  }, [rows, ingresos, egresos, payouts, collections, debtByVisit]);
 
   async function payAll(providerId: string, name: string) {
     setBusy(providerId);
@@ -121,6 +153,13 @@ export function CierreSheet({ actor }: { actor: Actor }) {
     setBusy(null);
     if (!r.ok) return showToast(r.error ?? "No se pudo anotar el pago.");
     showToast(`Pagado a ${short(name)}: ${money((r.payout as Payout).amount)}.`);
+    refreshPay();
+  }
+  async function voidCollection(p: DebtCollectionRow) {
+    const r = await call(`/api/debts/payments/${p.id}`, "DELETE");
+    if (!r.ok) return showToast(r.error ?? "No se pudo deshacer.");
+    showToast("Cobro deshecho: la deuda vuelve a estar abierta.");
+    refreshDd();
     refreshPay();
   }
   async function voidPay(p: Payout) {
@@ -177,7 +216,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
       ) : (
         <>
           <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-neutral-800 sm:grid-cols-3">
-            <Big label="Entró" value={money(entro)} sub={`${pacientes} ${pacientes === 1 ? "paciente" : "pacientes"}${inTotal ? ` + ${money(inTotal)} extras` : ""}`} />
+            <Big label="Entró" value={money(entro)} sub={`${pacientes} ${pacientes === 1 ? "paciente" : "pacientes"}${debtIn ? ` + ${money(debtIn)} de deudas` : ""}${inTotal ? ` + ${money(inTotal)} extras` : ""}`} />
             <Big label="Salió" value={money(salio)} sub={`egresos ${money(egTotal)} · profesionales ${money(paidOut)}`} border />
             <Big
               label="Efectivo que debería haber"
@@ -210,10 +249,15 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                       const mine = rows.filter((r) => r.providerId === b.providerId);
                       return (
                         <tr key={b.providerId} className="border-t border-neutral-900">
-                          <td className="px-4 py-2">{short(b.name)}</td>
+                          <td className="px-4 py-2">
+                            {short(b.name)}
+                            {b.owner && <span className="ml-2 text-[12px] text-neutral-500">admin · sin comisión</span>}
+                          </td>
                           <td className="px-3 py-2 text-right text-neutral-300">{mine.filter((r) => r.patient).length}</td>
-                          <td className="px-3 py-2 text-right">{money(mine.reduce((n, r) => n + r.total, 0))}</td>
-                          <td className="px-3 py-2 text-right">{money(b.share)}</td>
+                          <td className="px-3 py-2 text-right">
+                            {money(mine.reduce((n, r) => n + r.total, 0) + collections.filter((p) => p.providerId === b.providerId).reduce((n, p) => n + p.amount, 0))}
+                          </td>
+                          <td className="px-3 py-2 text-right">{b.owner ? <span className="text-neutral-500">—</span> : money(b.share)}</td>
                           <td className="px-3 py-2 text-right text-neutral-300">{b.paid ? money(b.paid) : "—"}</td>
                           <td className={`px-3 py-2 text-right ${b.owed ? "font-medium" : "text-neutral-500"}`}>{b.owed ? money(b.owed) : "—"}</td>
                           <td className="cl-no-print whitespace-nowrap px-4 py-1.5 text-right">
@@ -239,8 +283,8 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                     <tr className="border-t border-neutral-800 font-medium">
                       <td className="px-4 py-2.5">Total</td>
                       <td className="px-3 py-2.5 text-right">{pacientes}</td>
-                      <td className="px-3 py-2.5 text-right">{money(cobrado)}</td>
-                      <td className="px-3 py-2.5 text-right">{money(kTotal)}</td>
+                      <td className="px-3 py-2.5 text-right">{money(cobrado + collections.filter((p) => p.providerId).reduce((n, p) => n + p.amount, 0))}</td>
+                      <td className="px-3 py-2.5 text-right">{money(kTotal + debtShares)}</td>
                       <td className="px-3 py-2.5 text-right">{money(paidOut)}</td>
                       <td className="px-3 py-2.5 text-right">{money(owedTotal)}</td>
                       <td className="cl-no-print" />
@@ -298,6 +342,11 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                           <span className="block">{m.what}</span>
                           <span className="block text-[12.5px] text-neutral-500">
                             {m.detail}
+                            {m.kind === "deuda" && canEdit && (
+                              <button onClick={() => voidCollection(m.ref as DebtCollectionRow)} className="cl-no-print ml-2 underline-offset-2 hover:text-fg hover:underline">
+                                deshacer
+                              </button>
+                            )}
                             {m.kind === "pago" && canEdit && (
                               <button onClick={() => voidPay(m.ref as Payout)} className="cl-no-print ml-2 underline-offset-2 hover:text-fg hover:underline">
                                 anular
@@ -339,6 +388,16 @@ export function CierreSheet({ actor }: { actor: Actor }) {
             </div>
           </Card>
 
+          {/* Deudas abiertas (de todos los días) */}
+          <DebtsCard
+            canAnul={!!actor.activeOrg?.canAdmin}
+            showToast={showToast}
+            onChange={() => {
+              refreshDd();
+              refreshPay();
+            }}
+          />
+
           {/* Caja y medios de pago */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Card title="Caja (efectivo)">
@@ -354,7 +413,8 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                     refreshCash();
                   }}
                 />
-                <Line label="+ Efectivo cobrado" value={money(efectivo)} />
+                <Line label="+ Efectivo cobrado" value={money(mt.efectivo)} />
+                {debtInBy("efectivo") > 0 && <Line label="+ Deudas cobradas en efectivo" value={money(debtInBy("efectivo"))} />}
                 <Line label="+ Ingresos extras" value={money(inTotal)} />
                 <Line label="− Egresos" value={money(egTotal)} />
                 <Line label="− Pagado a profesionales" value={money(paidOut)} />
@@ -377,12 +437,13 @@ export function CierreSheet({ actor }: { actor: Actor }) {
             <Card title="Cómo pagaron">
               <div className="flex flex-col px-4 pb-3">
                 <Line label="Efectivo" value={money(efectivo)} />
-                <Line label="Transferencias" value={money(byMethod("transferencia"))} />
-                <Line label="Tarjetas" value={money(byMethod("tarjeta"))} />
+                <Line label="Transferencias" value={money(byMethod("transferencia") + debtInBy("transferencia"))} />
+                <Line label="Tarjetas" value={money(byMethod("tarjeta") + debtInBy("tarjeta"))} />
                 {mt.usd > 0 && <Line label={`Dólares · ${usdFmt(mt.usd)}`} value={money(mt.dolares)} />}
                 {byMethod(null) > 0 && <Line label="Sin medio cargado" value={money(byMethod(null))} muted />}
-                <Line label="Total cobrado" value={money(cobrado)} strong />
-                <Line label="Para Decles (cobrado − profesionales)" value={fmtSigned(cobrado - kTotal)} />
+                {debtIn > 0 && <Line label="De eso, deudas cobradas" value={money(debtIn)} muted />}
+                <Line label="Total cobrado" value={money(cobrado + debtIn)} strong />
+                <Line label="Para Decles (cobrado − profesionales)" value={fmtSigned(cobrado + debtIn - kTotal - debtShares)} />
               </div>
             </Card>
           </div>

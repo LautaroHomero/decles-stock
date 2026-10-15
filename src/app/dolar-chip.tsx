@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { call, money, useDolar } from "./shared";
 
 /**
- * El dólar del día arriba a la derecha: blue compra / venta y a cuánto se cobra (el promedio), así la
- * secretaria no hace cuentas. Se puede escribir otra cotización para hoy (vuelve al blue mañana).
+ * El dólar del día arriba a la derecha: oficial compra / venta y a cuánto se cobra (el promedio), así la
+ * secretaria no hace cuentas. Se puede escribir otra cotización para hoy (vuelve al oficial mañana).
  */
 export function DolarChip({ canEdit }: { canEdit: boolean }) {
   const [d, refresh] = useDolar();
@@ -33,14 +33,14 @@ export function DolarChip({ canEdit }: { canEdit: boolean }) {
     <div ref={box} className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        title="Dólar del día: a cuánto se cobra (promedio del blue)"
+        title="Dólar del día: a cuánto se cobra (promedio del oficial)"
         className="flex items-center gap-1.5 rounded-md border border-neutral-800 px-2.5 py-1 text-[13px] tabular-nums text-neutral-200 transition-colors hover:bg-neutral-900"
       >
         <span className="text-neutral-400">US$</span>
         {d?.rate ? money(d.rate) : "—"}
         {d?.compra && d.venta && !d.manual && (
           <span className="hidden text-[11.5px] text-neutral-500 lg:inline">
-            (blue {d.compra.toLocaleString("es-AR")}–{d.venta.toLocaleString("es-AR")})
+            (oficial {d.compra.toLocaleString("es-AR")}–{d.venta.toLocaleString("es-AR")})
           </span>
         )}
         {d?.manual && <span className="text-[11px] text-neutral-500">a mano</span>}
@@ -50,12 +50,12 @@ export function DolarChip({ canEdit }: { canEdit: boolean }) {
           <p className="font-medium">Dólar de hoy</p>
           {d?.compra && d.venta ? (
             <>
-              <Line label="Blue compra" value={money(d.compra)} />
-              <Line label="Blue venta" value={money(d.venta)} />
+              <Line label="Oficial compra" value={money(d.compra)} />
+              <Line label="Oficial venta" value={money(d.venta)} />
               <Line label="Se cobra a (promedio)" value={money(Math.round(((d.compra + d.venta) / 2) * 100) / 100)} strong={!d.manual} />
             </>
           ) : (
-            <p className="text-neutral-400">No se pudo traer el blue. Escribí la cotización de hoy.</p>
+            <p className="text-neutral-400">No se pudo traer el dólar oficial. Escribí la cotización de hoy.</p>
           )}
           {d?.manual && <Line label="Hoy a mano" value={money(d.rate ?? 0)} strong />}
           {canEdit && (
@@ -74,7 +74,7 @@ export function DolarChip({ canEdit }: { canEdit: boolean }) {
               <div className="flex justify-between">
                 {d?.manual ? (
                   <button onClick={() => save(null)} className="text-[12.5px] text-neutral-400 underline-offset-2 hover:text-fg hover:underline">
-                    Volver al blue
+                    Volver al oficial
                   </button>
                 ) : (
                   <span />
@@ -86,7 +86,7 @@ export function DolarChip({ canEdit }: { canEdit: boolean }) {
               {err && <p className="text-[12.5px] text-neutral-300">{err}</p>}
             </div>
           )}
-          <p className="text-[11.5px] text-neutral-500">Fuente: dolarapi.com (blue). Se actualiza sola.</p>
+          <p className="text-[11.5px] text-neutral-500">Fuente: dolarapi.com (dólar oficial). Se actualiza sola.</p>
         </div>
       )}
     </div>

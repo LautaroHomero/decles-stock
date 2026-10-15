@@ -20,7 +20,7 @@ type Section = "vender" | "cierre" | "inventario" | "ventas" | "equipo";
 const TABS: { id: Section; label: string }[] = [
   { id: "vender", label: "Anotar" },
   { id: "cierre", label: "Cierre" },
-  { id: "ventas", label: "Ventas" },
+  { id: "ventas", label: "Planilla" },
   { id: "inventario", label: "Stock" },
   { id: "equipo", label: "Equipo" },
 ];
@@ -68,7 +68,7 @@ export function StockApp({ actor }: { actor: Actor }) {
         <span className="flex-1" />
         <span className="hidden truncate text-[13px] text-neutral-400 md:block">{actor.activeOrg?.name}</span>
         {!isMedico && <DolarChip canEdit />}
-        {(isMedico || isAdmin) && <Bell onOpenStock={() => go("inventario")} />}
+        {(isMedico || isAdmin) && <Bell onOpenStock={() => go("inventario")} onOpenClose={() => go("cierre")} />}
         <AvatarMenu actor={actor} onOnboarding={() => setOnbKey((k) => k + 1)} />
       </header>
 

@@ -6,7 +6,7 @@ import { call, usePoll } from "./shared";
 
 interface Notif {
   id: string;
-  kind: "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente";
+  kind: "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente" | "deuda";
   title: string;
   body: string;
   readAt: string | null;
@@ -19,6 +19,7 @@ const KIND_LABEL: Record<Notif["kind"], string> = {
   stock_bajo: "Stock bajo",
   sin_stock: "Sin stock cargado",
   pendiente: "Para cargar",
+  deuda: "Deuda",
 };
 
 const ago = (iso: string) => {
@@ -29,8 +30,8 @@ const ago = (iso: string) => {
   return d === ymd ? `hoy ${t.slice(0, 5)}` : `${d.slice(8, 10)}/${d.slice(5, 7)}`;
 };
 
-/** Campanita de la médica: vencimientos y stock bajo. Se refresca cada 30 s. */
-export function Bell({ onOpenStock }: { onOpenStock: () => void }) {
+/** Campanita: vencimientos y stock bajo (médicas y admins); para los admins, también pendientes y deudas. Se refresca cada 30 s. */
+export function Bell({ onOpenStock, onOpenClose }: { onOpenStock: () => void; onOpenClose?: () => void }) {
   const [data, refresh] = usePoll<{ ok: boolean; items: Notif[]; unread: number }>("/api/notifications", 30_000);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -51,7 +52,10 @@ export function Bell({ onOpenStock }: { onOpenStock: () => void }) {
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          if (!open) refresh();
+          setOpen(!open);
+        }}
         aria-label={unread ? `Notificaciones: ${unread} sin leer` : "Notificaciones"}
         className="relative flex h-8 w-8 items-center justify-center rounded-md text-neutral-300 transition-colors hover:bg-accent-900 hover:text-fg"
       >
@@ -66,7 +70,7 @@ export function Bell({ onOpenStock }: { onOpenStock: () => void }) {
       {open && (
         <div className="absolute right-0 top-10 z-40 flex max-h-[70vh] w-[min(360px,calc(100vw-24px))] animate-cl-in flex-col overflow-hidden rounded-xl bg-surface shadow-lg">
           <div className="flex items-center gap-2 border-b border-neutral-800 px-4 py-3">
-            <span className="text-[14px] font-medium">Avisos de stock</span>
+            <span className="text-[14px] font-medium">Avisos</span>
             <span className="flex-1" />
             {unread > 0 && (
               <button onClick={() => read()} className="text-[12px] text-neutral-400 hover:text-fg">
@@ -76,7 +80,7 @@ export function Bell({ onOpenStock }: { onOpenStock: () => void }) {
           </div>
           <div className="overflow-y-auto">
             {!data?.items.length ? (
-              <p className="px-4 py-6 text-[13px] text-neutral-400">Nada por ahora. Te aviso acá cuando algo esté por vencer o se esté terminando.</p>
+              <p className="px-4 py-6 text-[13px] text-neutral-400">Nada por ahora. Te aviso acá cuando algo esté por vencer, se esté terminando o alguien quede debiendo.</p>
             ) : (
               data.items.map((n) => (
                 <button
@@ -84,7 +88,8 @@ export function Bell({ onOpenStock }: { onOpenStock: () => void }) {
                   onClick={() => {
                     if (!n.readAt) read(n.id);
                     setOpen(false);
-                    onOpenStock();
+                    if (n.kind === "deuda" && onOpenClose) onOpenClose();
+                    else onOpenStock();
                   }}
                   className={`flex w-full gap-3 border-b border-neutral-900 px-4 py-3 text-left transition-colors last:border-0 hover:bg-accent-900 ${n.readAt ? "opacity-55" : ""}`}
                 >

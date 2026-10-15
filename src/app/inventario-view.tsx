@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { searchScore } from "@/lib/domain/quick-sale";
 import { CaretDownIcon, PlusIcon } from "@phosphor-icons/react";
 import { Pill, SECTION_TITLE } from "./ui";
+import { ExpiryPicker } from "./expiry-picker";
 import {
   BTN,
   BTN_DARK,
@@ -12,6 +13,10 @@ import {
   ProviderPicker,
   CommissionField,
   parsePct,
+  cutDraftOf,
+  cutsFromDraft,
+  type Cut,
+  type CutDraft,
   Toast,
   providerNames,
   useSellers,
@@ -53,7 +58,10 @@ const REASON_LABEL: Record<string, string> = {
  * lotes con su vencimiento y da de baja lo vencido. El resto del equipo lo ve sin editar.
  */
 export function InventarioView() {
-  const [data, refresh] = usePoll<CatalogResponse>("/api/catalog", 20_000);
+  const [raw, refresh] = usePoll<CatalogResponse & { error?: string }>("/api/catalog", 20_000);
+  // Si el servidor responde con error (p. ej. falta correr una migración), se muestra en vez de romper la pantalla.
+  const data = raw?.ok && Array.isArray(raw.products) ? raw : null;
+  const loadError = raw && !data ? (raw.error ?? "No se pudo cargar el stock.") : null;
   const [filter, setFilter] = useState<Filter>("todos");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -152,6 +160,10 @@ export function InventarioView() {
 
       {history ? (
         <History />
+      ) : loadError ? (
+        <p className="rounded-lg bg-surface px-4 py-3 text-[13.5px] text-fg">
+          {loadError} Si estás en tu computadora, corré <code>npm run db:migrate</code> y recargá.
+        </p>
       ) : !data ? (
         <p className="text-[13px] text-neutral-500">Cargando…</p>
       ) : (
@@ -249,7 +261,7 @@ function ProductRow({
             {p.expiredQuantity > 0 && <Pill className="!py-0 !text-[11px]">{p.expiredQuantity} vencidas</Pill>}
             {p.low && <Pill className="!py-0 !text-[11px]">stock bajo</Pill>}
             {p.owed > 0 && <Pill className="!py-0 !text-[11px]">vendido sin stock: {p.owed} · cargá el ingreso</Pill>}
-            {p.providerIds.length > 0 && <span>· {providerNames(p.providerIds, sellers)}</span>}
+            {p.providerIds.length > 0 && <span>· {providerNames(p.providerIds, sellers, p.providerCuts)}</span>}
             {p.commissionPct !== null && <span>· comisión {p.commissionPct}%</span>}
           </span>
         </span>
@@ -338,6 +350,7 @@ const Label = ({ children }: { children: React.ReactNode }) => <span className="
 function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: (v: object) => Promise<boolean> }) {
   const [f, setF] = useState({ name: "", price: "", cardPrice: "", minQuantity: "", quantity: "", expiresOn: "", lotCode: "" });
   const [providerIds, setProviderIds] = useState<string[]>([]);
+  const [cuts, setCuts] = useState<CutDraft>({});
   const [commission, setCommission] = useState("");
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
@@ -366,17 +379,17 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
           <Label>Cantidad que entra ahora</Label>
           <input value={f.quantity} onChange={set("quantity")} inputMode="numeric" placeholder="Ej. 12 (opcional)" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1">
           <Label>Vencimiento</Label>
-          <input value={f.expiresOn} onChange={set("expiresOn")} placeholder="DD/MM/AAAA o MM/AAAA" className={FIELD} />
-        </label>
+          <ExpiryPicker value={f.expiresOn} onChange={(expiresOn) => setF({ ...f, expiresOn })} />
+        </div>
         <label className="flex flex-col gap-1">
           <Label>Lote (opcional)</Label>
           <input value={f.lotCode} onChange={set("lotCode")} placeholder="Como figura en la caja" className={FIELD} />
         </label>
         <CommissionField value={commission} onChange={setCommission} />
       </div>
-      <ProviderPicker value={providerIds} onChange={setProviderIds} />
+      <ProviderPicker value={providerIds} onChange={setProviderIds} cuts={cuts} onCuts={setCuts} />
       <div className="flex gap-2">
         <button
           className={BTN_DARK}
@@ -392,6 +405,7 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
               expiresOn: f.expiresOn,
               lotCode: f.lotCode,
               providerIds,
+              providerCuts: cutsFromDraft(cuts, providerIds),
               commissionPct: parsePct(commission),
             });
             setBusy(false);
@@ -418,10 +432,10 @@ function LotForm({ unit, onCancel, onSubmit }: { unit: string; onCancel: () => v
           <Label>Cantidad ({unit})</Label>
           <input autoFocus value={f.quantity} onChange={set("quantity")} inputMode="numeric" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1">
           <Label>Vencimiento</Label>
-          <input value={f.expiresOn} onChange={set("expiresOn")} placeholder="DD/MM/AAAA o MM/AAAA" className={FIELD} />
-        </label>
+          <ExpiryPicker value={f.expiresOn} onChange={(expiresOn) => setF({ ...f, expiresOn })} />
+        </div>
         <label className="flex flex-col gap-1">
           <Label>Lote (opcional)</Label>
           <input value={f.lotCode} onChange={set("lotCode")} className={FIELD} />
@@ -454,6 +468,7 @@ type ProductPatch = {
   minQuantity?: number;
   active?: boolean;
   providerIds?: string[];
+  providerCuts?: Record<string, Cut>;
   commissionPct?: number | null;
 };
 
@@ -465,6 +480,7 @@ function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () =
     minQuantity: String(p.minQuantity),
   });
   const [providerIds, setProviderIds] = useState<string[]>(p.providerIds);
+  const [cuts, setCuts] = useState<CutDraft>(() => cutDraftOf(p.providerCuts));
   const [commission, setCommission] = useState(p.commissionPct === null ? "" : String(p.commissionPct));
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   return (
@@ -488,9 +504,9 @@ function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () =
         </label>
         <CommissionField value={commission} onChange={setCommission} />
       </div>
-      <ProviderPicker value={providerIds} onChange={setProviderIds} />
+      <ProviderPicker value={providerIds} onChange={setProviderIds} cuts={cuts} onCuts={setCuts} />
       <div className="flex flex-wrap gap-2">
-        <button className={BTN_DARK} onClick={() => onSubmit({ name: f.name, price: toInt(f.price), cardPrice: toInt(f.cardPrice) ?? null, minQuantity: toInt(f.minQuantity) ?? 0, providerIds, commissionPct: parsePct(commission) })}>
+        <button className={BTN_DARK} onClick={() => onSubmit({ name: f.name, price: toInt(f.price), cardPrice: toInt(f.cardPrice) ?? null, minQuantity: toInt(f.minQuantity) ?? 0, providerIds, providerCuts: cutsFromDraft(cuts, providerIds), commissionPct: parsePct(commission) })}>
           Guardar
         </button>
         <button className={BTN} onClick={onCancel}>

@@ -5,6 +5,6 @@ import { actorOr401, bodyOf, respond } from "../../_http";
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
-  const b = await bodyOf<{ name: string; price: number; cardPrice: number | null; active: boolean; providerIds: string[]; commissionPct: number | null }>(req);
+  const b = await bodyOf<{ name: string; price: number; cardPrice: number | null; active: boolean; providerIds: string[]; commissionPct: number | null; providerCuts: Record<string, { pct?: number | null; fixed?: number | null }> }>(req);
   return respond(await updatePractice(actor, (await ctx.params).id, b));
 }

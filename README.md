@@ -63,6 +63,15 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
   status `edited` y no se lista). Lo del día: cualquiera (la médica, lo suyo); días anteriores: solo el admin.
 - **Comisión por ítem**: cada práctica o producto puede tener su propio % (`price_list_items.commission_pct`, 0012). Si
   no tiene, se usa el % de la médica. Se congela en la venta.
+- **Parte de cada profesional en un ítem** (0018): si dos o más hacen lo mismo y se llevan distinto, a cada una se le
+  carga un % o una plata fija por unidad (`price_item_providers.commission_pct` / `commission_fixed`). Orden: eso, el %
+  del ítem, el % de la profesional (`commissionFor` en `domain/billing.ts`). La plata fija se congela en
+  `sales.commission_fixed` (corregir el importe no la recalcula; si ingresó $0, 0). Al anotar se puede pisar igual.
+- **Deudas** (0019): `debts` (quién, cuánto, por qué, profesional y su parte, anotación) y `debt_payments` (cobros, en
+  partes, con medio). Lo cobrado entra a la caja del día del cobro (Cierre: Entró, efectivo esperado, medios) y la
+  profesional cobra su parte ese día (`payouts`). Aviso `deuda` en la campanita de los admins hasta que se salda.
+- **Vencimientos**: `parseExpiry` vive en `domain/expiry.ts` (acepta también `03/27` y `15/03/27`); el calendario es
+  `expiry-picker.tsx` (abre en meses: un toque = fin de mes; después el día).
 - **Catálogo de prueba**: `npm run db:catalogo` carga 14 prácticas y 12 productos (con stock y vencimientos) en el
   consultorio que ya tengas en la base local. No borra ni duplica.
 - **Quién hace qué**: el admin vincula cada práctica y cada producto a las médicas que lo hacen o venden (Stock →
@@ -135,7 +144,7 @@ src/lib/domain/
 
 Diferencias concretas contra Clavdia; todo lo demás es igual:
 
-1. **Migraciones nuevas**: `0004` a `0012` (solo agregan tablas/columnas). Prácticas = `price_list_items.kind = 'tratamiento'`
+1. **Migraciones nuevas**: `0004` a `0019` (solo agregan tablas/columnas). Prácticas = `price_list_items.kind = 'tratamiento'`
    (sin stock). `sales.patient_label` (paciente escrito; en Clavdia se puede mapear a `patient_id`) y `sales.visit_id`.
    `price_item_providers` (0010): qué médicas ofrecen cada ítem (distinto de `price_list_items.provider_id` de Clavdia).
    0011: `stock_items.owed` (vendido sin stock) y `sales.kind = 'pendiente'` con `item_id` NULL (se resuelve después).

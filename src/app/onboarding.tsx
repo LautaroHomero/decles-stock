@@ -45,7 +45,7 @@ const STEPS: Record<StepId, { title: string; body: string; cta?: string; go?: Se
   },
   venta: {
     title: "Anotá algo de prueba",
-    body: "Escribí, por ejemplo, «María López, la atendió Laura, atención» o «laura vendió 2 cremas con tarjeta». Después lo podés anular desde Ventas.",
+    body: "Escribí, por ejemplo, «María López, la atendió Laura, atención» o «laura vendió 2 cremas con tarjeta». Después lo podés corregir desde Planilla.",
     cta: "Ir a Anotar",
     go: "vender",
   },

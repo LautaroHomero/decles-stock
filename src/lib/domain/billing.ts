@@ -12,6 +12,7 @@ import {
   updatePriceItem as persistPriceItem,
   setSalePayment,
   commissionSummary,
+  getItemCut,
   getItemProviders,
   type CommissionRow,
   type BillingSource,
@@ -21,6 +22,7 @@ import {
   type Sale,
 } from "@/lib/db/billing-repo";
 import { realNowIso } from "@/lib/domain/clock";
+import { isOwnerProvider } from "@/lib/domain/owners";
 import { addOwed, consumeStockFefo, getStockItem, restoreStockForSale } from "@/lib/db/stock-repo";
 import { getPatient, getProvider } from "@/lib/db/repo";
 import { parseExpiry } from "@/lib/domain/stock";
@@ -257,6 +259,7 @@ export async function recordSale(
   // la secretaría o un admin no-médico, tiene que indicar la médica (Decles).
   let providerId = actor.role === "medico" ? actor.activeOrg?.providerId ?? null : v.providerId ?? item.providerId ?? null;
   let commissionPct = 0;
+  let commissionFixed: number | null = null;
   if (!providerId && item.kind === "producto") return fail("Elegí qué médica hizo la venta.");
   if (!providerId && item.kind === "tratamiento") return fail("Elegí qué médica hizo la práctica.");
   if (providerId) {
@@ -264,8 +267,8 @@ export async function recordSale(
     if (!p || p.organizationId !== ctx.orgId) return fail("Profesional no encontrado en este consultorio.", 404);
     if (!p.active) return fail(`${p.name} está dada de baja.`, 409);
     providerId = p.id;
-    // Decles: el % propio del ítem manda; si no tiene, el de la médica.
-    commissionPct = item.commissionPct ?? p.commissionPct;
+    // Decles: la parte de esa profesional en ese ítem (% o plata fija) manda; si no, el % del ítem; si no, el suyo.
+    ({ pct: commissionPct, fixed: commissionFixed } = await commissionFor(ctx.orgId, item, p));
     // Decles: si el ítem tiene profesionales vinculados, solo ellos lo pueden anotar.
     const allowed = await getItemProviders(ctx.orgId, item.id);
     if (allowed.length && !allowed.includes(p.id))
@@ -282,7 +285,7 @@ export async function recordSale(
   const { id, total, cashTotal, cardTotal } = await insertSale(
     ctx.orgId,
     {
-      item, quantity, providerId, patientId: v.patientId ?? null, note: cleanName(v.note), commissionPct, paymentMethod,
+      item, quantity, providerId, patientId: v.patientId ?? null, note: cleanName(v.note), commissionPct, commissionFixed, paymentMethod,
       patientLabel: cleanName(v.patientLabel).slice(0, 120), visitId: v.visitId ?? null,
     },
     ctx.who,
@@ -333,7 +336,8 @@ export async function salesList(actor: Actor, from?: string, to?: string, limit 
   const f = from === undefined ? today : ymd(from);
   const t = to === undefined ? f : ymd(to);
   if (!f || !t) return fail("Fechas inválidas: usá AAAA-MM-DD.");
-  const all = await listSales(ctx.orgId, f, t, Math.min(Math.max(limit, 1), 500));
+  // Decles: un mes entero del consultorio pasa de 500 renglones (Ventas → Mes).
+  const all = await listSales(ctx.orgId, f, t, Math.min(Math.max(limit, 1), 5000));
   const mine = actor.role === "medico" ? actor.activeOrg?.providerId : undefined;
   return { ok: true, sales: mine ? all.filter((s) => s.providerId === mine || s.createdByName === actor.name) : all };
 }
@@ -368,4 +372,20 @@ export async function completeSalePayment(actor: Actor, saleId: string, method: 
   if (actor.role === "medico" && sale.providerId !== actor.activeOrg?.providerId) return fail("Esa venta no es tuya.", 403);
   if (!(await setSalePayment(ctx.orgId, saleId, m))) return fail("Esa venta ya tiene medio de pago (o está anulada).", 409);
   return { ok: true };
+}
+
+/**
+ * Decles: cuánto se lleva una profesional por un ítem. Orden: su parte propia en ese ítem (plata fija por
+ * unidad o %), el % del ítem, su % general.
+ */
+export async function commissionFor(
+  orgId: string,
+  item: { id: string; commissionPct: number | null },
+  provider: { id: string; commissionPct: number } | null | undefined,
+): Promise<{ pct: number; fixed: number | null }> {
+  // La dueña (médica admin) no cobra comisión: todo para el consultorio.
+  if (provider && (await isOwnerProvider(orgId, provider.id))) return { pct: 0, fixed: null };
+  const cut = provider ? await getItemCut(orgId, item.id, provider.id) : null;
+  if (cut?.fixed !== null && cut?.fixed !== undefined) return { pct: 0, fixed: cut.fixed };
+  return { pct: cut?.pct ?? item.commissionPct ?? provider?.commissionPct ?? 0, fixed: null };
 }

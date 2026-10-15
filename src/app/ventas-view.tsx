@@ -25,6 +25,7 @@ import {
   type PaymentsMap,
 } from "./shared";
 import { PlanillaView } from "./planilla-view";
+import { ProductosVendidos } from "./productos-vendidos";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 
 interface CommissionRow {
@@ -117,6 +118,8 @@ export function VentasView({ actor }: { actor: Actor }) {
       ];
 
   const [period, setPeriod] = useState<Period>("dia");
+  // Admin: «Solo productos» = qué productos se vendieron y cómo se pagaron.
+  const [onlyProducts, setOnlyProducts] = useState(false);
   // null = el período actual: a la medianoche pasa solo al día (o mes) nuevo.
   const [anchorPicked, setAnchorPicked] = useState<string | null>(null);
   const anchor = anchorPicked ?? today;
@@ -129,7 +132,7 @@ export function VentasView({ actor }: { actor: Actor }) {
   const isCurrent = from <= today && today <= to;
   const canNext = !isCurrent && rangeOf(period, shift(period, anchor, 1)).from <= today;
 
-  const [data, refresh] = usePoll<{ ok: boolean; sales: SaleRow[]; payments?: PaymentsMap }>(`/api/sales?from=${from}&to=${to}&limit=500`, 30_000);
+  const [data, refresh] = usePoll<{ ok: boolean; sales: SaleRow[]; payments?: PaymentsMap }>(`/api/sales?from=${from}&to=${to}&limit=${period === "dia" ? 500 : 5000}`, 30_000);
   const [comm, refreshComm] = usePoll<{ ok: boolean; rows: CommissionRow[] }>(
     seesCommission ? `/api/commissions?from=${from}&to=${to}` : "/api/commissions?none=1",
     60_000,
@@ -141,6 +144,10 @@ export function VentasView({ actor }: { actor: Actor }) {
   const [exData, refreshEx] = usePoll<ExpensesResponse>(seesExpenses ? `/api/expenses?from=${from}&to=${to}` : "/api/expenses?from=1900-01-01", 30_000);
   const expenses = seesExpenses && exData?.ok ? exData.expenses : [];
   const outflow = expenses.reduce((n, e) => n + e.amount, 0);
+  // Ingresos extras (cambio, varios…): también van en la planilla.
+  const [inData] = usePoll<ExpensesResponse>(seesExpenses ? `/api/expenses?from=${from}&to=${to}&direction=ingreso` : "/api/expenses?from=1900-01-01&direction=ingreso", 30_000);
+  const incomes = seesExpenses && inData?.ok ? inData.expenses : [];
+  const inflow = incomes.reduce((n, e) => n + e.amount, 0);
   const [exEdit, setExEdit] = useState<Expense | null>(null);
 
   const sales = useMemo(() => data?.sales ?? [], [data]);
@@ -214,7 +221,7 @@ export function VentasView({ actor }: { actor: Actor }) {
   ].filter(Boolean);
 
   // Día (secretaría y admin): la lista tiene la forma de la planilla en papel.
-  const sheet = period === "dia" && !isMedico;
+  const sheet = period === "dia" && !isMedico && !onlyProducts;
 
   return (
     <div className={`mx-auto flex w-full flex-col gap-6 px-5 pb-20 pt-6 text-[14px] sm:px-6 sm:pt-12 ${sheet ? "max-w-[1180px]" : "max-w-[760px]"}`}>
@@ -246,7 +253,7 @@ export function VentasView({ actor }: { actor: Actor }) {
       )}
 
       <div className="flex flex-wrap items-center gap-4">
-        <h1 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[22px]">Ventas</h1>
+        <h1 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[22px]">Planilla</h1>
         <span className="flex-1" />
         {sheet && (
           <button onClick={() => window.print()} className="cl-no-print rounded-md border border-neutral-800 px-3 py-1.5 text-[13px] text-neutral-300 hover:bg-accent-900">
@@ -311,6 +318,33 @@ export function VentasView({ actor }: { actor: Actor }) {
         )}
       </div>
 
+      {admin && (
+        <div className="cl-no-print flex justify-center">
+          <div className="inline-flex rounded-xl border border-neutral-800 p-1" role="tablist" aria-label="Qué ver">
+            {(
+              [
+                [false, "Todo"],
+                [true, "Solo productos"],
+              ] as const
+            ).map(([v, text]) => (
+              <button
+                key={text}
+                role="tab"
+                aria-selected={onlyProducts === v}
+                onClick={() => setOnlyProducts(v)}
+                className={`min-h-9 rounded-lg px-4 text-[13px] font-medium transition-colors ${onlyProducts === v ? "bg-accent text-on-accent" : "text-neutral-400 hover:text-fg"}`}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {onlyProducts && admin && (data ? <ProductosVendidos sales={sales} payments={data.payments} multiDay={period !== "dia"} /> : <p className="text-neutral-500">Cargando…</p>)}
+
+      {!onlyProducts && (
+      <>
       {sheet && <PlanillaView actor={actor} date={anchor} />}
 
       {/* Lo cobrado */}
@@ -336,13 +370,22 @@ export function VentasView({ actor }: { actor: Actor }) {
             />
           </div>
         )}
-        {outflow > 0 && (
+        {(outflow > 0 || inflow > 0) && (
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-neutral-800 pt-4 text-[14px]">
-            <span className="text-neutral-400">
-              Egresos <span className="tabular-nums text-neutral-300">− {money(outflow)}</span>
+            <span className="flex flex-wrap gap-x-4 text-neutral-400">
+              {inflow > 0 && (
+                <span>
+                  Ingresos extras <span className="tabular-nums text-neutral-300">+ {money(inflow)}</span>
+                </span>
+              )}
+              {outflow > 0 && (
+                <span>
+                  Egresos <span className="tabular-nums text-neutral-300">− {money(outflow)}</span>
+                </span>
+              )}
             </span>
             <span>
-              Queda <b className="font-medium tabular-nums">{money(total - outflow)}</b>
+              Queda <b className="font-medium tabular-nums">{money(total + inflow - outflow)}</b>
             </span>
           </div>
         )}
@@ -408,6 +451,24 @@ export function VentasView({ actor }: { actor: Actor }) {
         </section>
       )}
 
+      {!sheet && incomes.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-[15px] font-medium">Ingresos extras</h2>
+          <div className="flex flex-col">
+            {incomes.map((e) => (
+              <div key={e.id} className="flex items-baseline justify-between gap-4 border-b border-neutral-900 px-1 py-2.5">
+                <span className="min-w-0">
+                  <span className="mr-3 tabular-nums text-neutral-500">{period === "dia" ? fmtTime(e.createdAt) : `${e.createdAt.slice(8, 10)}/${e.createdAt.slice(5, 7)}`}</span>
+                  {e.concept}
+                  <span className="text-neutral-500"> · {e.createdByName}</span>
+                </span>
+                <span className="whitespace-nowrap tabular-nums text-neutral-300">+ {money(e.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {!sheet && expenses.length > 0 && (
         <section className="flex flex-col gap-2">
           <h2 className="text-[15px] font-medium">Egresos</h2>
@@ -453,6 +514,8 @@ export function VentasView({ actor }: { actor: Actor }) {
             ))}
           </div>
         </section>
+      )}
+      </>
       )}
     </div>
   );
@@ -678,7 +741,7 @@ function Calendar({
   const ref = useRef<HTMLDivElement>(null);
   const first = `${month}-01`;
   const last = rangeOf("mes", first).to;
-  const [data] = usePoll<{ ok: boolean; sales: SaleRow[] }>(`/api/sales?from=${first}&to=${last}&limit=500`, 60_000);
+  const [data] = usePoll<{ ok: boolean; sales: SaleRow[] }>(`/api/sales?from=${first}&to=${last}&limit=5000`, 60_000);
 
   useEffect(() => {
     // El contenedor incluye el botón que lo abre: tocarlo de nuevo lo cierra sin reabrirlo.

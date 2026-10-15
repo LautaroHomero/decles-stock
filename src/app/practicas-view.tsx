@@ -4,7 +4,7 @@ import { useState } from "react";
 import { PlusIcon } from "@phosphor-icons/react";
 import { InventarioView } from "./inventario-view";
 import { Pendientes } from "./pendientes";
-import { BTN, BTN_DARK, CARD, CommissionField, FIELD, ProviderPicker, Toast, call, money, parsePct, providerNames, usePoll, useSellers, useToast } from "./shared";
+import { BTN, BTN_DARK, CARD, CommissionField, FIELD, ProviderPicker, Toast, call, cutDraftOf, cutsFromDraft, money, parsePct, providerNames, usePoll, useSellers, useToast, type Cut, type CutDraft } from "./shared";
 
 /** Stock: productos (con lotes y vencimientos) o prácticas (solo precio). */
 export function StockSection({ canAdmin }: { canAdmin: boolean }) {
@@ -48,6 +48,7 @@ interface Practice {
   active: boolean;
   providerIds: string[];
   commissionPct: number | null;
+  providerCuts?: Record<string, Cut>;
 }
 
 const toInt = (s: string) => (s.trim() === "" ? null : Number(s.replace(/\./g, "").replace(",", ".")));
@@ -60,7 +61,7 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
   const sellers = useSellers();
   const list = data?.practices ?? [];
 
-  async function save(id: string | null, v: { name: string; price: string; cardPrice: string; active?: boolean; providerIds?: string[]; commission?: string }) {
+  async function save(id: string | null, v: { name: string; price: string; cardPrice: string; active?: boolean; providerIds?: string[]; commission?: string; cuts?: CutDraft }) {
     const price = toInt(v.price);
     if (price === null || !Number.isInteger(price) || price < 0) return showToast("El precio tiene que ser un número entero de pesos.");
     const card = toInt(v.cardPrice);
@@ -71,6 +72,7 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
       cardPrice: card,
       ...(v.active === undefined ? {} : { active: v.active }),
       ...(v.providerIds === undefined ? {} : { providerIds: v.providerIds }),
+      ...(v.providerIds === undefined || v.cuts === undefined ? {} : { providerCuts: cutsFromDraft(v.cuts, v.providerIds) }),
       ...(v.commission === undefined ? {} : { commissionPct: parsePct(v.commission) }),
     };
     const r = id ? await call(`/api/practices/${id}`, "PATCH", body) : await call("/api/practices", "POST", body);
@@ -86,7 +88,7 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex min-w-[220px] flex-1 flex-col">
           <h1 className="font-display text-[16px] font-medium tracking-[-.01em]">Prácticas</h1>
-          <p className="text-[13px] text-neutral-400">Lo que se hace en la consulta. Comisión: la de la práctica si tiene una, si no la de cada médica (sobre el precio en efectivo).</p>
+          <p className="text-[13px] text-neutral-400">Lo que se hace en la consulta. Lo que se lleva cada profesional: lo cargado para ella en la práctica; si no, la comisión de la práctica; si no, la suya.</p>
         </div>
         {canAdmin && editing !== "new" && (
           <button className={`${BTN_DARK} inline-flex items-center gap-1.5`} onClick={() => setEditing("new")}>
@@ -119,7 +121,7 @@ function PracticasView({ canAdmin }: { canAdmin: boolean }) {
                     {!p.active && <span className="ml-2 text-[13px] font-normal text-neutral-500">(dada de baja)</span>}
                   </span>
                   <span className="truncate text-[13.5px] text-neutral-400">
-                    {providerNames(p.providerIds, sellers)}
+                    {providerNames(p.providerIds, sellers, p.providerCuts)}
                     {p.commissionPct !== null && ` · comisión ${p.commissionPct}%`}
                   </span>
                 </span>
@@ -143,7 +145,7 @@ function PracticeForm({
   onToggle,
 }: {
   initial?: Practice;
-  onSave: (v: { name: string; price: string; cardPrice: string; providerIds: string[]; commission: string }) => void;
+  onSave: (v: { name: string; price: string; cardPrice: string; providerIds: string[]; commission: string; cuts: CutDraft }) => void;
   onCancel: () => void;
   onToggle?: () => void;
 }) {
@@ -153,6 +155,7 @@ function PracticeForm({
     cardPrice: initial?.cardPrice === null || !initial ? "" : String(initial.cardPrice),
     providerIds: initial?.providerIds ?? ([] as string[]),
     commission: initial?.commissionPct === null || !initial ? "" : String(initial.commissionPct),
+    cuts: cutDraftOf(initial?.providerCuts),
   });
   return (
     <div className={`${CARD} animate-cl-in`}>
@@ -173,7 +176,7 @@ function PracticeForm({
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <CommissionField value={f.commission} onChange={(commission) => setF({ ...f, commission })} />
       </div>
-      <ProviderPicker value={f.providerIds} onChange={(providerIds) => setF({ ...f, providerIds })} />
+      <ProviderPicker value={f.providerIds} onChange={(providerIds) => setF({ ...f, providerIds })} cuts={f.cuts} onCuts={(cuts) => setF({ ...f, cuts })} />
       <div className="flex flex-wrap gap-2">
         <button className={BTN_DARK} disabled={!f.name.trim() || !f.price} onClick={() => onSave(f)}>
           Guardar

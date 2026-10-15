@@ -141,6 +141,8 @@ const FILLER = new Set([
   "pago", "pagaron", "pagado", "abono", "abonaron", "medio",
   "atendio", "atendi", "atendida", "atendido", "atiende", "atendieron", "vino", "vinieron", "paciente", "pacienta",
   "hizo", "hice", "hicimos", "hicieron", "se", "le", "lo", "su", "sesion", "turno", "y",
+  // Muletillas de cómo se cuenta («Che, vino…», «Hola, buenas…»): no son paciente ni algo que se vendió.
+  "che", "hola", "buenas", "buen", "buenos", "dia", "dias", "tardes", "bueno", "ok", "okey", "dale", "listo", "eh", "ah",
 ]);
 
 /** Minúsculas, sin tildes, sin puntuación (conserva dígitos). */
@@ -562,6 +564,8 @@ const PAYMENT_TARGETS: [string, string][] = [
  *  · producto / práctica: las últimas palabras («crema pin», «peel», «botox»), con errores y sinónimos;
  *  · médica: «lau» → Laura;  · pago: «tarj» → «con tarjeta».
  */
+const MONEY_WORDS = new Set(["dolares", "dolar", "usd", "verdes", "mitad", "tercio", "tercios", "cuarto", "cuartos", "debe", "deuda", "debiendo", "fiado", "resto", "saldo"]);
+
 export function suggest<P extends QuickProduct, S extends QuickSeller = QuickSeller>(
   text: string,
   products: P[],
@@ -575,6 +579,8 @@ export function suggest<P extends QuickProduct, S extends QuickSeller = QuickSel
   if (!last || last.n.length < 2) return [];
   // Un importe o una cantidad («45000», «$40.000») no se completa.
   if (/\d/.test(last.n)) return [];
+  // Frase terminada («…en dólares.») o palabras de plata («dólares», «mitad», «debe»): no hay nada que completar.
+  if (/[.!?]$/.test(text.trim()) || MONEY_WORDS.has(last.n)) return [];
   const out: Suggestion[] = [];
   const replaceFrom = (at: number, value: string, sep = ", ") => `${text.slice(0, at)}${value}${sep}`;
 

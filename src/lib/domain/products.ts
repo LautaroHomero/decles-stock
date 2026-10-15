@@ -1,7 +1,7 @@
 import { createPrice, listPrices, updatePrice, canEditPrices } from "@/lib/domain/billing";
 import { addStock, createItem, editItem, stockOverview, canManageStock, type StockItem } from "@/lib/domain/stock";
 import { getStockItem } from "@/lib/db/stock-repo";
-import { listItemProviders, setItemCommission, setItemProviders } from "@/lib/db/billing-repo";
+import { listItemCuts, listItemProviders, setItemCommission, setItemProviders, type ProviderCut } from "@/lib/db/billing-repo";
 import { getProvider } from "@/lib/db/repo";
 import type { Actor } from "@/lib/domain/types";
 
@@ -22,6 +22,8 @@ export interface CatalogProduct {
   providerIds: string[];
   /** % de comisión propio (null = el de cada médica). */
   commissionPct: number | null;
+  /** Lo que se lleva cada profesional en este ítem si es distinto (% o plata fija por unidad). */
+  providerCuts: Record<string, ProviderCut>;
   name: string;
   unit: string;
   category: string;
@@ -51,6 +53,8 @@ export interface CatalogPractice {
   providerIds: string[];
   /** % de comisión propio (null = el de cada médica). */
   commissionPct: number | null;
+  /** Lo que se lleva cada profesional en esta práctica si es distinto (% o plata fija). */
+  providerCuts: Record<string, ProviderCut>;
 }
 
 export async function catalog(actor: Actor): Promise<
@@ -65,7 +69,7 @@ export async function catalog(actor: Actor): Promise<
   const [ov, prices] = await Promise.all([stockOverview(actor), listPrices(actor)]);
   if (!ov.ok) return ov;
   if (!prices.ok) return prices;
-  const links = await listItemProviders(actor.activeOrg!.id);
+  const [links, cuts] = await Promise.all([listItemProviders(actor.activeOrg!.id), listItemCuts(actor.activeOrg!.id)]);
   const byStock = new Map(
     prices.items.filter((p) => p.kind === "producto" && p.stockItemId && p.active).map((p) => [p.stockItemId!, p]),
   );
@@ -78,6 +82,7 @@ export async function catalog(actor: Actor): Promise<
       priceItemId: price?.id ?? null,
       providerIds: price ? (links.get(price.id) ?? []) : [],
       commissionPct: price?.commissionPct ?? null,
+      providerCuts: price ? (cuts.get(price.id) ?? {}) : {},
       name: i.name,
       unit: i.unit,
       category: i.category,
@@ -95,7 +100,7 @@ export async function catalog(actor: Actor): Promise<
   });
   const practices = prices.items
     .filter((p) => p.kind === "tratamiento" && p.active)
-    .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, providerIds: links.get(p.id) ?? [], commissionPct: p.commissionPct }));
+    .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, providerIds: links.get(p.id) ?? [], commissionPct: p.commissionPct, providerCuts: cuts.get(p.id) ?? {} }));
   return {
     ok: true,
     products,
@@ -133,6 +138,8 @@ export async function createProduct(
     providerIds?: string[];
     /** % de comisión propio (vacío = el de cada médica). */
     commissionPct?: number | null;
+    /** Parte propia de cada profesional marcada (% o plata fija). */
+    providerCuts?: Record<string, Partial<ProviderCut>>;
   },
 ): Promise<Result<{ stockItemId: string; priceItemId: string; lotError?: string }>> {
   const g = await adminGate(actor);
@@ -151,7 +158,7 @@ export async function createProduct(
   }
   if (pc.pct !== undefined) await setItemCommission(actor.activeOrg!.id, price.itemId, pc.pct);
   if (v.providerIds?.length) {
-    const l = await setItemLinks(actor, price.itemId, v.providerIds);
+    const l = await setItemLinks(actor, price.itemId, v.providerIds, v.providerCuts);
     if (!l.ok) return { ...l, error: `Producto creado, pero no se pudieron vincular los profesionales: ${l.error}` };
   }
   let lotError: string | undefined;
@@ -176,6 +183,7 @@ export async function updateProduct(
     active?: boolean;
     providerIds?: string[];
     commissionPct?: number | null;
+    providerCuts?: Record<string, Partial<ProviderCut>>;
   },
 ): Promise<Result<object>> {
   const g = await adminGate(actor);
@@ -191,7 +199,7 @@ export async function updateProduct(
     const u = await updatePrice(actor, linked.id, { name: v.name, amount: v.price, cardAmount: v.cardPrice, active: v.active });
     if (!u.ok) return u;
     if (v.providerIds !== undefined) {
-      const l = await setItemLinks(actor, linked.id, v.providerIds);
+      const l = await setItemLinks(actor, linked.id, v.providerIds, v.providerCuts);
       if (!l.ok) return l;
     }
     if (pc.pct !== undefined) await setItemCommission(actor.activeOrg!.id, linked.id, pc.pct);
@@ -210,26 +218,28 @@ export async function updateProduct(
 export async function listPractices(actor: Actor): Promise<Result<{ practices: (CatalogPractice & { active: boolean })[] }>> {
   const prices = await listPrices(actor, { includeInactive: true });
   if (!prices.ok) return prices;
-  const links = await listItemProviders(actor.activeOrg!.id);
+  const [links, cuts] = await Promise.all([listItemProviders(actor.activeOrg!.id), listItemCuts(actor.activeOrg!.id)]);
   return {
     ok: true,
     practices: prices.items
       .filter((p) => p.kind === "tratamiento")
-      .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, active: p.active, providerIds: links.get(p.id) ?? [], commissionPct: p.commissionPct })),
+      .map((p) => ({ id: p.id, name: p.name, price: p.amount, cardPrice: p.cardAmount, active: p.active, providerIds: links.get(p.id) ?? [], commissionPct: p.commissionPct, providerCuts: cuts.get(p.id) ?? {} })),
   };
 }
 
 export async function createPractice(
   actor: Actor,
-  v: { name: string; price: number; cardPrice?: number | null; providerIds?: string[]; commissionPct?: number | null },
+  v: { name: string; price: number; cardPrice?: number | null; providerIds?: string[]; commissionPct?: number | null; providerCuts?: Record<string, Partial<ProviderCut>> },
 ): Promise<Result<{ itemId: string }>> {
   if (!actor.activeOrg?.canAdmin) return fail("Solo un administrador puede cargar prácticas.", 403);
   const ids = await validProviders(actor, v.providerIds);
   if (!ids.ok) return ids;
+  const cu = cutsOf(v.providerCuts, ids.ids);
+  if (!cu.ok) return cu;
   const pc = pctOf(v.commissionPct);
   if (!pc.ok) return pc;
   const r = await createPrice(actor, { kind: "tratamiento", name: v.name, amount: v.price, cardAmount: v.cardPrice ?? null });
-  if (r.ok && ids.ids.length) await setItemProviders(actor.activeOrg.id, r.itemId, ids.ids);
+  if (r.ok && ids.ids.length) await setItemProviders(actor.activeOrg.id, r.itemId, ids.ids, cu.cuts);
   if (r.ok && pc.pct !== undefined) await setItemCommission(actor.activeOrg.id, r.itemId, pc.pct);
   return r;
 }
@@ -256,27 +266,59 @@ async function validProviders(actor: Actor, raw: unknown): Promise<Result<{ ids:
 }
 
 /** Admin: quién ofrece un ítem (producto o tratamiento). Lista vacía = cualquiera. */
-export async function setItemLinks(actor: Actor, priceItemId: string, providerIds: string[]): Promise<Result<object>> {
+export async function setItemLinks(
+  actor: Actor,
+  priceItemId: string,
+  providerIds: string[],
+  providerCuts?: Record<string, Partial<ProviderCut>>,
+): Promise<Result<object>> {
   if (!actor.activeOrg?.canAdmin) return fail("Solo un administrador puede vincular profesionales.", 403);
   const prices = await listPrices(actor, { includeInactive: true });
   if (!prices.ok) return prices;
   if (!prices.items.some((p) => p.id === priceItemId)) return fail("Ítem no encontrado.", 404);
   const ids = await validProviders(actor, providerIds);
   if (!ids.ok) return ids;
-  await setItemProviders(actor.activeOrg.id, priceItemId, ids.ids);
+  const cu = cutsOf(providerCuts, ids.ids);
+  if (!cu.ok) return cu;
+  await setItemProviders(actor.activeOrg.id, priceItemId, ids.ids, cu.cuts);
   return { ok: true };
+}
+
+/**
+ * Parte propia de cada profesional: `{ [providerId]: { pct } | { fixed } }`. Solo de las marcadas;
+ * `undefined` = no tocar las que ya estaban.
+ */
+function cutsOf(
+  raw: unknown,
+  providerIds: string[],
+): { ok: true; cuts: Record<string, ProviderCut> | undefined } | { ok: false; error: string; status: number } {
+  if (raw === undefined) return { ok: true, cuts: undefined };
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return fail("Partes de las profesionales inválidas.");
+  const cuts: Record<string, ProviderCut> = {};
+  for (const [pid, c] of Object.entries(raw as Record<string, Partial<ProviderCut> | null>)) {
+    if (!providerIds.includes(pid) || !c) continue;
+    const pct = c.pct ?? null;
+    const fixed = c.fixed ?? null;
+    if (pct !== null && (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 100 || Math.round(pct * 100) !== pct * 100))
+      return fail("La parte de cada profesional tiene que ser un % entre 0 y 100.");
+    if (fixed !== null && (typeof fixed !== "number" || !Number.isInteger(fixed) || fixed < 0 || fixed > 100_000_000))
+      return fail("La plata fija de cada profesional tiene que ser un número entero de pesos.");
+    if (pct !== null && fixed !== null) return fail("Para cada profesional, o un % o una plata fija (no los dos).");
+    if (pct !== null || fixed !== null) cuts[pid] = { pct, fixed };
+  }
+  return { ok: true, cuts };
 }
 
 export async function updatePractice(
   actor: Actor,
   id: string,
-  v: { name?: string; price?: number; cardPrice?: number | null; active?: boolean; providerIds?: string[]; commissionPct?: number | null },
+  v: { name?: string; price?: number; cardPrice?: number | null; active?: boolean; providerIds?: string[]; commissionPct?: number | null; providerCuts?: Record<string, Partial<ProviderCut>> },
 ): Promise<Result<object>> {
   if (!actor.activeOrg?.canAdmin) return fail("Solo un administrador puede cambiar prácticas.", 403);
   const pc = pctOf(v.commissionPct);
   if (!pc.ok) return pc;
   if (v.providerIds !== undefined) {
-    const l = await setItemLinks(actor, id, v.providerIds);
+    const l = await setItemLinks(actor, id, v.providerIds, v.providerCuts);
     if (!l.ok) return l;
   }
   const cur = (await listPrices(actor, { includeInactive: true }));

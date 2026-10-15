@@ -16,6 +16,8 @@ import { getProvider } from "@/lib/db/repo";
 import { recordSale } from "@/lib/domain/billing";
 import { insertVisitPayments, setVisitMethod, type PayPart } from "@/lib/db/payments-repo";
 import type { Actor } from "@/lib/domain/types";
+import { createDebt, relinkDebts } from "@/lib/domain/debts";
+import { isOwnerProvider } from "@/lib/domain/owners";
 
 /**
  * Anotar (Decles): un paciente (nombre escrito; obligatorio si hay una práctica), la médica, las prácticas que se
@@ -41,6 +43,11 @@ export interface VisitInput {
   payments?: { method?: string; amount?: number; usd?: number | null; rate?: number | null }[];
   /** Planilla: columna Observaciones (texto libre, se guarda tal cual). */
   observations?: string;
+  /**
+   * Lo que quedó debiendo (Decles): «pagó 80000, debe 40000». Se anota una deuda a nombre del paciente,
+   * con la parte de la profesional (su % sobre lo que debe), que se le paga a medida que se cobra.
+   */
+  debt?: number | null;
   /**
    * `pendingPrice`: lo que se cobró por unidad de algo no cargado (opcional).
    * Planilla: `generic` = renglón sin práctica elegida («Atención»); `amount` = lo que abonó por el renglón
@@ -82,7 +89,7 @@ export async function recordVisit(
     if (!providerId) return { ok: false, error: "Elegí qué médica la atendió.", status: 400 };
     const p = await getProvider(providerId);
     if (!p || p.organizationId !== orgId || !p.active) return { ok: false, error: "Profesional no encontrado en este consultorio.", status: 404 };
-    commissionPct = p.commissionPct;
+    commissionPct = (await isOwnerProvider(orgId, p.id)) ? 0 : p.commissionPct;
     for (const l of lines) {
       const pp = l.pendingPrice;
       if (pp !== undefined && pp !== null && (typeof pp !== "number" || !Number.isInteger(pp) || pp < 0 || pp > 100_000_000))
@@ -107,7 +114,10 @@ export async function recordVisit(
   const visitMethod = parts.length === 1 ? parts[0].method : parts.length > 1 ? "mixto" : null;
   const raw = parts.length ? (parts.length === 1 && parts[0].method !== "dolares" ? parts[0].method : null) : v.paymentMethod;
   const method: PaymentMethod | null = raw === "efectivo" || raw === "transferencia" || raw === "tarjeta" ? raw : null;
+  const debt = v.debt ?? null;
+  if (debt !== null && (!pesos(debt) || debt <= 0)) return { ok: false, error: "Lo que debe tiene que ser un número entero de pesos.", status: 400 };
   const patient = clean(v.patientName).slice(0, 120);
+  if (debt && !patient) return { ok: false, error: "¿Quién quedó debiendo? Escribí el nombre del paciente.", status: 400 };
   // Toda práctica es de un paciente: «Atención» genérica o un ítem de la lista que no es producto.
   if (!patient) {
     for (const l of lines) {
@@ -116,6 +126,8 @@ export async function recordVisit(
     }
   }
   const who = { id: actor.userId, name: actor.name, source: "manual" as const };
+  // La dueña (médica admin) no cobra comisión: una parte escrita a mano para ella no corre.
+  const owner = await isOwnerProvider(orgId, providerId);
 
   const visitId = newVisitId();
   const saleIds: string[] = [];
@@ -141,7 +153,7 @@ export async function recordVisit(
       );
       saleIds.push(id);
       if (!l.generic) pending++;
-      await applyManualAmounts(orgId, id, { amount: l.amount, commission: l.commission });
+      await applyManualAmounts(orgId, id, { amount: l.amount, commission: owner ? null : l.commission });
       const t = l.amount ?? (l.pendingPrice ?? 0) * qty;
       total += t;
       cashTotal += t;
@@ -168,7 +180,7 @@ export async function recordVisit(
     }
     saleIds.push(r.saleId);
     const manual = typeof l.amount === "number" && l.amount !== r.total;
-    await applyManualAmounts(orgId, r.saleId, { amount: manual ? l.amount : null, commission: l.commission });
+    await applyManualAmounts(orgId, r.saleId, { amount: manual ? l.amount : null, commission: owner ? null : l.commission });
     total += manual ? l.amount! : r.total;
     cashTotal += manual ? l.amount! : r.cashTotal;
     cardTotal += manual ? l.amount! : r.cardTotal;
@@ -178,6 +190,23 @@ export async function recordVisit(
   if (parts.length) {
     await insertVisitPayments(orgId, visitId, parts);
     if (visitMethod !== method) await setVisitMethod(orgId, visitId, visitMethod!);
+  }
+  if (debt) {
+    // La parte de la profesional en lo que se debe: su % del renglón donde va la diferencia (la primera
+    // práctica, o el primer renglón). Si su parte era plata fija o la aclaró la secretaria, ya la cobra
+    // entera con la anotación: la deuda va toda para el consultorio.
+    const sales = await listVisitSales(orgId, visitId);
+    const k = sales.find((s) => s.kind !== "producto") ?? sales[0];
+    const share = !k || k.commissionManual || k.commissionFixed !== null ? 0 : Math.round((debt * k.commissionPct) / 100);
+    const concept = sales.map((s) => (s.quantity > 1 ? `${s.quantity} ${s.itemName}` : s.itemName)).join(", ");
+    const d = await createDebt(actor, { debtor: patient, amount: debt, concept, providerId: k?.providerId ?? providerId, share, visitId });
+    if (!d.ok) {
+      for (const id of saleIds) {
+        await markSaleVoided(orgId, id, "No se pudo anotar todo junto", who);
+        await restoreStockForSale(orgId, id, who);
+      }
+      return d;
+    }
   }
   return { ok: true, visitId, saleIds, total, cashTotal, cardTotal, pending };
 }
@@ -210,5 +239,6 @@ export async function editVisit(
     if (await markSaleEdited(orgId, s.id, who)) await restoreStockForSale(orgId, s.id, who);
   }
   await stampVisit(orgId, r.visitId, old[0].createdAt, `Editado por ${actor.name}`);
+  if (old[0].visitId) await relinkDebts(orgId, old[0].visitId, r.visitId);
   return { ok: true, visitId: r.visitId };
 }

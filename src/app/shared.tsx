@@ -115,6 +115,8 @@ export interface CatalogProduct {
   providerIds: string[];
   /** % de comisión propio (null = el de cada médica). */
   commissionPct: number | null;
+  /** Lo que se lleva cada profesional en este ítem, si es distinto. */
+  providerCuts?: Record<string, Cut>;
   name: string;
   unit: string;
   category: string;
@@ -139,6 +141,7 @@ export interface CatalogPractice {
   cardPrice: number | null;
   providerIds: string[];
   commissionPct: number | null;
+  providerCuts?: Record<string, Cut>;
 }
 
 export interface CatalogResponse {
@@ -225,7 +228,7 @@ export function methodTotals(sales: SaleRow[], payments?: PaymentsMap) {
 
 export const usdFmt = (n: number) => `US$\u00a0${n.toLocaleString("es-AR", { maximumFractionDigits: 2 })}`;
 
-/** Dólar de hoy: blue (compra/venta) y la cotización para cobrar (promedio, o la escrita a mano). */
+/** Dólar de hoy: oficial (compra/venta) y la cotización para cobrar (promedio, o la escrita a mano). */
 export interface DolarHoy {
   compra: number | null;
   venta: number | null;
@@ -259,17 +262,59 @@ export const unitsLabel = (n: number, unit: string) =>
   unit === "unidad" ? `${n} ${n === 1 ? "unidad" : "unidades"}` : `${n} ${unit}`;
 
 /** Médicas activas del consultorio (para vincular y para elegir quién). */
-export function useSellers(): { id: string; name: string }[] | null {
-  const [d] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string }[] }>("/api/sellers", 60_000);
-  return d?.ok ? d.sellers.map((s) => ({ id: s.providerId, name: s.name })) : null;
+export function useSellers(): { id: string; name: string; owner?: boolean }[] | null {
+  const [d] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; owner?: boolean }[] }>("/api/sellers", 60_000);
+  return d?.ok ? d.sellers.map((s) => ({ id: s.providerId, name: s.name, owner: !!s.owner })) : null;
 }
 
-/** Elegir qué profesionales hacen / venden algo. Ninguna marcada = todas. */
-export function ProviderPicker({ value, onChange }: { value: string[]; onChange: (ids: string[]) => void }) {
+/** Parte propia de una profesional en un ítem: un % o plata fija por unidad. */
+export type Cut = { pct?: number | null; fixed?: number | null };
+/** Lo que se está escribiendo en el formulario, por profesional. */
+export type CutDraft = Record<string, { mode: "pct" | "fixed"; value: string }>;
+
+export const cutDraftOf = (c: Record<string, Cut> | undefined): CutDraft =>
+  Object.fromEntries(
+    Object.entries(c ?? {}).map(([id, x]) =>
+      x.fixed !== null && x.fixed !== undefined ? [id, { mode: "fixed", value: String(x.fixed) }] : [id, { mode: "pct", value: String(x.pct ?? "") }],
+    ),
+  );
+
+/** Para la API: solo las marcadas y con algo escrito. */
+export function cutsFromDraft(d: CutDraft, ids: string[]): Record<string, Cut> {
+  const out: Record<string, Cut> = {};
+  for (const id of ids) {
+    const c = d[id];
+    const raw = c?.value.trim() ?? "";
+    if (!raw) continue;
+    out[id] = c.mode === "fixed" ? { fixed: Number(raw.replace(/\D/g, "")) } : { pct: Number(raw.replace(",", ".")) };
+  }
+  return out;
+}
+
+export const cutLabel = (c: Cut | undefined) =>
+  !c ? "" : c.fixed !== null && c.fixed !== undefined ? money(c.fixed) : c.pct !== null && c.pct !== undefined ? `${c.pct}%` : "";
+
+/**
+ * Elegir qué profesionales hacen / venden algo. Ninguna marcada = todas.
+ * Con `onCuts`: a cada marcada se le puede poner lo que se lleva en este ítem (% o plata fija).
+ */
+export function ProviderPicker({
+  value,
+  onChange,
+  cuts,
+  onCuts,
+}: {
+  value: string[];
+  onChange: (ids: string[]) => void;
+  cuts?: CutDraft;
+  onCuts?: (c: CutDraft) => void;
+}) {
   const sellers = useSellers();
   if (!sellers) return null;
   if (!sellers.length) return <p className="text-[13px] text-neutral-500">Todavía no hay médicas: se dan de alta en Equipo.</p>;
   const toggle = (id: string) => onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  const marked = sellers.filter((s) => value.includes(s.id));
+  const setCut = (id: string, c: { mode: "pct" | "fixed"; value: string }) => onCuts?.({ ...cuts, [id]: c });
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-[12px] text-neutral-400">¿Quién lo hace o lo vende?</span>
@@ -291,15 +336,74 @@ export function ProviderPicker({ value, onChange }: { value: string[]; onChange:
           );
         })}
       </div>
-      <span className="text-[11.5px] text-neutral-500">{value.length ? "Solo las marcadas lo pueden anotar." : "Sin marcar = cualquiera de las médicas."}</span>
+      <span className="text-[11.5px] text-neutral-500">
+        {value.length ? "Solo las marcadas lo pueden anotar." : "Sin marcar = cualquiera de las médicas."}
+        {onCuts && !value.length && " Para que alguna se lleve distinto, marcala."}
+      </span>
+      {onCuts && marked.length > 0 && (
+        <div className="mt-1.5 flex flex-col gap-1.5 rounded-lg border border-neutral-800 p-3">
+          <span className="text-[12px] text-neutral-400">Cuánto se lleva cada una en esto</span>
+          {marked.map((s) => {
+            const c = cuts?.[s.id] ?? { mode: "pct" as const, value: "" };
+            if (s.owner)
+              return (
+                <div key={s.id} className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[13.5px]">{s.name}</span>
+                  <span className="text-[12.5px] text-neutral-500">admin · sin comisión</span>
+                </div>
+              );
+            return (
+              <div key={s.id} className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-[13.5px]">{s.name}</span>
+                <input
+                  value={c.value}
+                  onChange={(e) => setCut(s.id, { ...c, value: e.target.value.replace(c.mode === "pct" ? /[^\d.,]/g : /[^\d.]/g, "") })}
+                  inputMode={c.mode === "pct" ? "decimal" : "numeric"}
+                  placeholder="la general"
+                  aria-label={`Lo que se lleva ${s.name}`}
+                  className={`${FIELD} !w-[110px] shrink-0 text-right tabular-nums`}
+                />
+                <div role="radiogroup" aria-label="% o plata fija" className="inline-flex rounded-md border border-neutral-800 p-0.5">
+                  {(
+                    [
+                      ["pct", "%"],
+                      ["fixed", "$"],
+                    ] as const
+                  ).map(([m, label]) => (
+                    <button
+                      type="button"
+                      key={m}
+                      role="radio"
+                      aria-checked={c.mode === m}
+                      onClick={() => setCut(s.id, { mode: m, value: c.mode === m ? c.value : "" })}
+                      className={`min-w-8 rounded px-2 py-1 text-[12.5px] ${c.mode === m ? "bg-accent text-on-accent" : "text-neutral-400 hover:text-fg"}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          <span className="text-[11.5px] text-neutral-500">
+            % sobre lo que se cobra, o $ fijos por cada una. Vacío = la regla general (la del ítem o la de la médica). Al anotar se puede cambiar igual.
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
-/** "Laura, Paula" a partir de ids; vacío = "Todas". */
-export function providerNames(ids: string[], sellers: { id: string; name: string }[] | null): string {
+/** "Laura, Paula" a partir de ids; vacío = "Todas". Con `cuts`: "Laura 40%, Paula $ 9.000". */
+export function providerNames(ids: string[], sellers: { id: string; name: string }[] | null, cuts?: Record<string, Cut>): string {
   if (!ids.length) return "Todas las médicas";
-  return ids.map((id) => sellers?.find((s) => s.id === id)?.name ?? "—").join(", ");
+  return ids
+    .map((id) => {
+      const n = sellers?.find((s) => s.id === id)?.name ?? "—";
+      const c = cutLabel(cuts?.[id]);
+      return c ? `${n} ${c}` : n;
+    })
+    .join(", ");
 }
 
 /** "12,5" → 12.5 · "" → null (se usa el % de cada médica). */

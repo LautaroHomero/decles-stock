@@ -12,6 +12,7 @@ import {
   type NewNotification,
 } from "@/lib/db/notifications-repo";
 import type { Actor } from "@/lib/domain/types";
+import { openDebtsForAlerts } from "@/lib/domain/debts";
 
 /**
  * Avisos de stock para la campanita de las médicas y los admins del consultorio:
@@ -19,7 +20,8 @@ import type { Actor } from "@/lib/domain/types";
  *  · un lote con stock ya venció (vencido, una vez por lote);
  *  · un producto quedó bajo su mínimo (stock_bajo; se re-arma cuando se repone);
  *  · se vendió sin stock cargado (sin_stock; se va cuando entra el ingreso);
- *  · solo a los admins: algo anotado que no está en la lista de precios (pendiente; se va al resolverlo).
+ *  · solo a los admins: algo anotado que no está en la lista de precios (pendiente; se va al resolverlo);
+ *  · solo a los admins: alguien quedó debiendo (deuda; se va cuando se termina de pagar).
  *
  * `refreshStockAlerts` es idempotente: lo llaman el cron diario, cada venta / ingreso
  * y la propia campanita (con throttle), así que nunca depende de una sola vía.
@@ -103,7 +105,26 @@ export async function refreshStockAlerts(orgId: string): Promise<number> {
     }),
   );
   await clearStale(orgId, "pendiente", pending.map((p) => p.dedupeKey));
-  return (await insertNotifications(orgId, recipients, alerts)) + (await insertNotifications(orgId, admins, pending));
+  // Deudas abiertas: el aviso dice cuánto falta; si se cobra una parte, se actualiza (otra clave).
+  const money = (n: number) => `$ ${n.toLocaleString("es-AR")}`;
+  const debts = (await openDebtsForAlerts(orgId)).map(
+    (d): NewNotification => ({
+      kind: "deuda",
+      title: `${d.debtor} debe ${money(d.remaining)}`,
+      body:
+        [d.concept, d.providerName, `desde el ${fmt(d.createdAt.slice(0, 10))}`].filter(Boolean).join(" · ") +
+        (d.paid ? ` · ya pagó ${money(d.paid)} de ${money(d.amount)}` : "") +
+        ". Se cobra en Anotar o en Cierre → Deudas.",
+      refId: d.id,
+      dedupeKey: `deuda:${d.id}:${d.remaining}`,
+    }),
+  );
+  await clearStale(orgId, "deuda", debts.map((d) => d.dedupeKey));
+  return (
+    (await insertNotifications(orgId, recipients, alerts)) +
+    (await insertNotifications(orgId, admins, pending)) +
+    (await insertNotifications(orgId, admins, debts))
+  );
 }
 
 /** Para el cron: todos los consultorios. */

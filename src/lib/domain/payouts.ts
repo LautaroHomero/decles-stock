@@ -4,10 +4,12 @@ import { listSales } from "@/lib/db/billing-repo";
 import { getProvider } from "@/lib/db/repo";
 import { realNowIso } from "@/lib/domain/clock";
 import type { Actor } from "@/lib/domain/types";
+import { debtSharesOn } from "@/lib/domain/debts";
+import { isOwnerProvider, ownerProviderIds } from "@/lib/domain/owners";
 
 /**
  * Pagos a profesionales (Decles). Cada profesional tiene su parte del día ($K: su comisión o lo que
- * aclaró la secretaria). La secretaria anota lo que le pagó («ya le pagué todo a Carmen») y el cierre
+ * aclaró la secretaria, más su parte de lo que se cobró de deudas ese día). La secretaria anota lo que le pagó («ya le pagué todo a Carmen») y el cierre
  * muestra cuánto se le pagó y cuánto se le debe todavía. Lo pagado sale de la caja.
  */
 
@@ -32,6 +34,8 @@ export interface ProviderBalance {
   share: number;
   paid: number;
   owed: number;
+  /** Es la dueña (médica admin): no cobra comisión, no se le paga nada. */
+  owner?: boolean;
 }
 
 type Row = Record<string, unknown>;
@@ -67,8 +71,15 @@ async function balances(orgId: string, date: string, payouts: Payout[]): Promise
     return b;
   };
   for (const s of sales) get(s.providerId!, s.providerName ?? "—").share += s.commissionAmount;
+  // Lo cobrado de deudas ese día: la profesional cobra su parte de eso ese día.
+  for (const [id, d] of await debtSharesOn(orgId, date)) get(id, d.name).share += d.share;
   for (const p of payouts) get(p.providerId, p.providerName).paid += p.amount;
-  for (const b of map.values()) b.owed = Math.max(0, b.share - b.paid);
+  const owners = await ownerProviderIds(orgId);
+  for (const b of map.values()) {
+    b.owner = owners.has(b.providerId);
+    if (b.owner) b.share = 0;
+    b.owed = Math.max(0, b.share - b.paid);
+  }
   return [...map.values()].sort((a, b) => b.share - a.share);
 }
 
@@ -91,6 +102,7 @@ export async function createPayout(actor: Actor, v: { providerId?: unknown; amou
   if (d !== today && !c.isAdmin) return fail("Lo de días anteriores lo corrige el admin.", 403);
   const p = typeof v.providerId === "string" ? await getProvider(v.providerId) : undefined;
   if (!p || p.organizationId !== c.orgId) return fail("Elegí a qué profesional le pagaste.", 404);
+  if (await isOwnerProvider(c.orgId, p.id)) return fail(`${p.name} es admin del consultorio: no cobra comisión, no hay nada que pagarle.`, 409);
   let amount: number;
   if (v.amount === null || v.amount === undefined || v.amount === "" || v.amount === "todo") {
     const b = (await balances(c.orgId, d, await listRaw(c.orgId, d))).find((x) => x.providerId === p.id);

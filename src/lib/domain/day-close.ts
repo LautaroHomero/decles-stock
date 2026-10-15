@@ -3,6 +3,7 @@ import { realNowIso } from "@/lib/domain/clock";
 import type { Actor } from "@/lib/domain/types";
 import { listExpenses, type Expense } from "@/lib/domain/expenses";
 import { listVisitPayments } from "@/lib/db/payments-repo";
+import { debtCollections, debtsCreatedOn, type Debt, type DebtCollection } from "@/lib/domain/debts";
 
 /**
  * Cierre del día: pacientes, prácticas y ventas de productos, total cobrado y el detalle por
@@ -42,7 +43,13 @@ export interface DayClose {
   /** Ingresos extras (cambio, varios…). */
   incomes: Expense[];
   incomesTotal: number;
-  /** Cobrado + ingresos extras − egresos. */
+  /** Cobros de deudas de este día (entran a la caja; ya están sumados en `byPayment`). */
+  debtCollections: DebtCollection[];
+  debtCollectedTotal: number;
+  /** Lo que quedó debiendo la gente este día. */
+  debtsCreated: Debt[];
+  debtsCreatedTotal: number;
+  /** Cobrado + cobros de deudas + ingresos extras − egresos. */
   net: number;
 }
 
@@ -109,6 +116,12 @@ export async function dayClose(actor: Actor, date?: string): Promise<Result<{ cl
   const ex = await listExpenses(actor, day, day);
   const expenses = ex.ok ? ex.expenses : [];
   const expensesTotal = ex.ok ? ex.total : 0;
+  // Deudas: la médica no maneja caja (no las ve).
+  const orgId = actor.role !== "medico" ? actor.activeOrg?.id : undefined;
+  const collections = orgId ? await debtCollections(orgId, day) : [];
+  const created = orgId ? await debtsCreatedOn(orgId, day) : [];
+  for (const p of collections) byPayment[p.method ?? "efectivo"] += p.amount;
+  const debtCollectedTotal = collections.reduce((n, p) => n + p.amount, 0);
   const inc = await listExpenses(actor, day, day, "ingreso");
   const incomes = inc.ok ? inc.expenses : [];
   const incomesTotal = inc.ok ? inc.total : 0;
@@ -126,7 +139,11 @@ export async function dayClose(actor: Actor, date?: string): Promise<Result<{ cl
       expensesTotal,
       incomes,
       incomesTotal,
-      net: total + incomesTotal - expensesTotal,
+      debtCollections: collections,
+      debtCollectedTotal,
+      debtsCreated: created,
+      debtsCreatedTotal: created.reduce((n, d) => n + d.amount, 0),
+      net: total + debtCollectedTotal + incomesTotal - expensesTotal,
     },
   };
 }

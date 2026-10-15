@@ -18,6 +18,7 @@ export async function POST(req: Request) {
     lotCode: string;
     providerIds: string[];
     commissionPct: number | null;
+    providerCuts: Record<string, { pct?: number | null; fixed?: number | null }>;
   }>(req);
   const r = await createProduct(actor, { ...b, name: b.name ?? "", price: b.price as number });
   if (r.ok) await refreshAfterChange(actor);

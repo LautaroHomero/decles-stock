@@ -5,6 +5,7 @@ import { PlusIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { normalize, parseNote, suggest } from "@/lib/domain/quick-sale";
 import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogResponse, type PayPart, type PaymentsMap, type SaleMethod, type SaleRow } from "./shared";
+import { PlanillaMovimientos } from "./planilla-movimientos";
 
 /**
  * Planilla del día: la misma hoja que la secretaria llena en papel. Ingresos y egresos extras, caja al
@@ -55,6 +56,8 @@ export interface Row {
   k: number;
   kManual: boolean;
   total: number;
+  /** Quedó debiendo (lo anotado y lo que falta). */
+  debt: { amount: number; remaining: number } | null;
 }
 
 const METHOD_SHORT: Record<SaleMethod, string> = { efectivo: "Efvo.", transferencia: "Transf.", tarjeta: "Tarj.", dolares: "US$", mixto: "Varios" };
@@ -62,7 +65,7 @@ const GENERIC = "Atención";
 const num = (s: string) => Number(s.replace(/\D/g, "") || 0);
 
 
-export function toRows(sales: SaleRow[], payments?: PaymentsMap): Row[] {
+export function toRows(sales: SaleRow[], payments?: PaymentsMap, debts?: Record<string, { amount: number; remaining: number }>): Row[] {
   const byVisit = new Map<string, SaleRow[]>();
   for (const s of sales) {
     if (s.status !== "paid") continue;
@@ -87,6 +90,7 @@ export function toRows(sales: SaleRow[], payments?: PaymentsMap): Row[] {
         k: g.reduce((n, s) => n + s.commissionAmount, 0),
         kManual: g.some((s) => s.commissionManual),
         total: g.reduce((n, s) => n + s.total, 0),
+        debt: debts?.[key] ?? null,
       };
     })
     .sort((a, b) => a.sales[0].createdAt.localeCompare(b.sales[0].createdAt));
@@ -136,13 +140,19 @@ function itemsIn(text: string, practices: Item[], products: Item[]): Picked[] {
   return out;
 }
 
-/** Ventas → Día: las filas del día por área (paciente, qué pagó, médica, cuánto). Fecha controlada por Ventas. */
+/**
+ * Planilla → Día: las filas del día por área (paciente, qué pagó, médica, cuánto) y, abajo, todo lo demás
+ * (otros ingresos, egresos, deudas y el resumen). Fecha controlada por la pantalla Planilla.
+ */
 export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
   const today = useToday();
   const admin = !!actor.activeOrg?.canAdmin;
   const canEdit = admin || date === today;
 
-  const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[]; payments?: PaymentsMap }>(`/api/sales?from=${date}&to=${date}&limit=500`, 30_000);
+  const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[]; payments?: PaymentsMap; debts?: Record<string, { amount: number; remaining: number }> }>(
+    `/api/sales?from=${date}&to=${date}&limit=500`,
+    30_000,
+  );
   const [catalog, refreshCatalog] = usePoll<CatalogResponse>("/api/catalog", 60_000);
   const [sellersData] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; area: Area }[] }>("/api/sellers", 60_000);
   const [toast, showToast] = useToast();
@@ -159,7 +169,7 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
         .map((p) => ({ id: p.priceItemId!, name: p.name, price: p.price!, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [] })),
     [catalog],
   );
-  const rows = useMemo(() => toRows(sales?.ok ? sales.sales : [], sales?.payments), [sales]);
+  const rows = useMemo(() => toRows(sales?.ok ? sales.sales : [], sales?.payments, sales?.debts), [sales]);
   const areaOf = (providerId: string | null): Area => sellers.find((s) => s.id === providerId)?.area ?? "medicos";
   const sections = AREAS.filter((a) => a.id === "medicos" || sellers.some((s) => s.area === a.id) || rows.some((r) => areaOf(r.providerId) === a.id));
 
@@ -170,7 +180,8 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
       {!sales || !catalog || !sellersData ? (
         <p className="text-neutral-500">Cargando…</p>
       ) : (
-        sections.map((a) => (
+        <>
+        {sections.map((a) => (
           <AreaSection
             key={a.id}
             area={a}
@@ -186,7 +197,9 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
             }}
             onError={showToast}
           />
-        ))
+        ))}
+        <PlanillaMovimientos date={date} canEdit={canEdit} rows={rows} sales={sales.ok ? sales.sales : []} payments={sales.payments} onError={showToast} />
+        </>
       )}
     </div>
   );
@@ -291,7 +304,14 @@ function AreaSection({
                     </ul>
                   </td>
                   <td className="px-3 py-2 text-neutral-300">{allSellers.find((s) => s.id === r.providerId)?.name ?? r.sales[0].providerName ?? "—"}</td>
-                  <td className="px-3 py-2 text-right font-medium tabular-nums">{r.total ? money(r.total) : <span className="font-normal text-neutral-500">—</span>}</td>
+                  <td className="px-3 py-2 text-right font-medium tabular-nums">
+                    {r.total ? money(r.total) : <span className="font-normal text-neutral-500">—</span>}
+                    {r.debt && (
+                      <span className="block text-[12px] font-normal text-neutral-400">
+                        {r.debt.remaining ? `debe ${money(r.debt.remaining)}` : `pagó la deuda (${money(r.debt.amount)})`}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-neutral-400">{r.method ? METHOD_SHORT[r.method] : ""}</td>
                   {showK && <td className="px-3 py-2 text-right tabular-nums">{r.k ? money(r.k) : <span className="text-neutral-500">—</span>}</td>}
                   <td className="cl-no-print" />

@@ -76,6 +76,8 @@ export interface Sale {
   /** Planilla (Decles): importe y/o parte de la profesional escritos a mano; columna Observaciones. */
   priceManual: boolean;
   commissionManual: boolean;
+  /** Decles: plata fija por unidad para la profesional (null = fue por %). */
+  commissionFixed: number | null;
   observations: string;
 }
 
@@ -209,6 +211,7 @@ const toSale = (r: Row): Sale => ({
   visitId: (r.visit_id as string) ?? null,
   priceManual: Boolean(r.price_manual),
   commissionManual: Boolean(r.commission_manual),
+  commissionFixed: r.commission_fixed === null || r.commission_fixed === undefined ? null : Number(r.commission_fixed),
   observations: (r.observations as string) ?? "",
 });
 
@@ -222,6 +225,8 @@ export async function insertSale(
     note: string;
     /** % de comisión de la médica que vendió (0 = sin comisión). Siempre sobre el precio efectivo. */
     commissionPct?: number;
+    /** Decles: plata fija por unidad para la profesional (pisa el %). */
+    commissionFixed?: number | null;
     /** null/undefined = no se cargó: se registra a precio efectivo y se guardan los dos valores. */
     paymentMethod?: PaymentMethod | null;
     /** Paciente escrito a mano (Decles: no hay ficha). */
@@ -238,15 +243,16 @@ export async function insertSale(
   const method = v.paymentMethod ?? null;
   const unitPrice = method === "tarjeta" ? cardUnit : cashUnit;
   const total = unitPrice * v.quantity;
-  const pct = v.commissionPct ?? 0;
-  const commissionAmount = Math.round((cashTotal * pct) / 100);
+  const fixed = v.commissionFixed ?? null;
+  const pct = fixed !== null ? 0 : (v.commissionPct ?? 0);
+  const commissionAmount = fixed !== null ? fixed * v.quantity : Math.round((cashTotal * pct) / 100);
   await getSql()`
     INSERT INTO sales (id, organization_id, item_id, item_name, kind, quantity, unit_price, total, provider_id, patient_id, note,
                        created_by, created_by_name, source, created_at, commission_pct, commission_amount,
-                       payment_method, cash_total, card_total, patient_label, visit_id)
+                       payment_method, cash_total, card_total, patient_label, visit_id, commission_fixed)
     VALUES (${id}, ${orgId}, ${v.item.id}, ${v.item.name}, ${v.item.kind}, ${v.quantity}, ${unitPrice}, ${total},
             ${v.providerId}, ${v.patientId}, ${v.note}, ${who.id}, ${who.name}, ${who.source}, ${realNowIso()}, ${pct}, ${commissionAmount},
-            ${method}, ${cashTotal}, ${cardTotal}, ${v.patientLabel ?? ""}, ${v.visitId ?? null})`;
+            ${method}, ${cashTotal}, ${cardTotal}, ${v.patientLabel ?? ""}, ${v.visitId ?? null}, ${fixed})`;
   return { id, total, cashTotal, cardTotal, commissionAmount };
 }
 
@@ -337,11 +343,50 @@ export async function getItemProviders(orgId: string, itemId: string): Promise<s
   return rows.map((r) => r.provider_id as string);
 }
 
-export async function setItemProviders(orgId: string, itemId: string, providerIds: string[]): Promise<void> {
+/** Parte propia de una profesional en un ítem: un % o una plata fija por unidad (null en los dos = la regla general). */
+export interface ProviderCut {
+  pct: number | null;
+  fixed: number | null;
+}
+
+/** item_id → (provider_id → su parte), solo los que tienen una cargada. */
+export async function listItemCuts(orgId: string): Promise<Map<string, Record<string, ProviderCut>>> {
+  const rows = (await getSql()`
+    SELECT item_id, provider_id, commission_pct, commission_fixed FROM price_item_providers
+    WHERE organization_id = ${orgId} AND (commission_pct IS NOT NULL OR commission_fixed IS NOT NULL)`) as unknown as Row[];
+  const map = new Map<string, Record<string, ProviderCut>>();
+  for (const r of rows) {
+    const m = map.get(r.item_id as string) ?? {};
+    m[r.provider_id as string] = {
+      pct: r.commission_pct === null ? null : Number(r.commission_pct),
+      fixed: r.commission_fixed === null ? null : Number(r.commission_fixed),
+    };
+    map.set(r.item_id as string, m);
+  }
+  return map;
+}
+
+export async function getItemCut(orgId: string, itemId: string, providerId: string): Promise<ProviderCut | null> {
+  const rows = (await getSql()`
+    SELECT commission_pct, commission_fixed FROM price_item_providers
+    WHERE organization_id = ${orgId} AND item_id = ${itemId} AND provider_id = ${providerId}`) as unknown as Row[];
+  if (!rows.length || (rows[0].commission_pct === null && rows[0].commission_fixed === null)) return null;
+  return {
+    pct: rows[0].commission_pct === null ? null : Number(rows[0].commission_pct),
+    fixed: rows[0].commission_fixed === null ? null : Number(rows[0].commission_fixed),
+  };
+}
+
+/** `cuts` undefined = se conservan las partes ya cargadas de las profesionales que siguen. */
+export async function setItemProviders(orgId: string, itemId: string, providerIds: string[], cuts?: Record<string, ProviderCut>): Promise<void> {
   await getSql().begin(async (tx) => {
+    const keep = cuts ?? (await listItemCuts(orgId)).get(itemId) ?? {};
     await tx`DELETE FROM price_item_providers WHERE organization_id = ${orgId} AND item_id = ${itemId}`;
-    for (const pid of providerIds)
-      await tx`INSERT INTO price_item_providers (organization_id, item_id, provider_id) VALUES (${orgId}, ${itemId}, ${pid})`;
+    for (const pid of providerIds) {
+      const c = keep[pid];
+      await tx`INSERT INTO price_item_providers (organization_id, item_id, provider_id, commission_pct, commission_fixed)
+               VALUES (${orgId}, ${itemId}, ${pid}, ${c?.pct ?? null}, ${c?.fixed ?? null})`;
+    }
   });
 }
 
@@ -394,7 +439,7 @@ export async function listPendingSales(orgId: string): Promise<Sale[]> {
 export async function resolvePendingSale(
   orgId: string,
   saleId: string,
-  v: { item: PriceItem; commissionPct: number },
+  v: { item: PriceItem; commissionPct: number; commissionFixed?: number | null },
 ): Promise<boolean> {
   const rows = (await getSql()`
     SELECT quantity, payment_method, total, price_manual, commission_manual FROM sales
@@ -414,11 +459,13 @@ export async function resolvePendingSale(
   const cashTotal = v.item.amount * q;
   const cardTotal = (v.item.cardAmount ?? v.item.amount) * q;
   const unit = method === "tarjeta" ? (v.item.cardAmount ?? v.item.amount) : v.item.amount;
-  const commission = Math.round((cashTotal * v.commissionPct) / 100);
+  const fixed = v.commissionFixed ?? null;
+  const pct = fixed !== null ? 0 : v.commissionPct;
+  const commission = fixed !== null ? fixed * q : Math.round((cashTotal * pct) / 100);
   const done = (await getSql()`
     UPDATE sales SET item_id = ${v.item.id}, item_name = ${v.item.name}, kind = ${v.item.kind}, unit_price = ${unit},
       total = ${unit * q}, cash_total = ${cashTotal}, card_total = ${cardTotal},
-      commission_pct = ${v.commissionPct},
+      commission_pct = ${pct}, commission_fixed = ${fixed},
       commission_amount = CASE WHEN commission_manual THEN commission_amount ELSE ${commission} END
     WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid'
     RETURNING id`) as unknown as Row[];
@@ -456,7 +503,8 @@ export async function stampVisit(orgId: string, visitId: string, createdAt: stri
 
 /**
  * Planilla (Decles): importe ("Abona", total del renglón) y/o parte de la profesional ($K) escritos a mano.
- * Sin `commission`, la comisión se recalcula con el % congelado sobre el importe nuevo.
+ * Sin `commission`, la comisión se recalcula con el % congelado sobre el importe nuevo (si era plata fija,
+ * sigue fija; si no ingresó nada —pagó directo a la profesional—, 0).
  */
 export async function applyManualAmounts(orgId: string, saleId: string, v: { amount?: number | null; commission?: number | null }): Promise<void> {
   const amount = v.amount ?? null;
@@ -465,7 +513,9 @@ export async function applyManualAmounts(orgId: string, saleId: string, v: { amo
     await getSql()`
       UPDATE sales SET total = ${amount}, cash_total = ${amount}, card_total = ${amount},
         unit_price = ROUND(${amount}::numeric / quantity), price_manual = TRUE,
-        commission_amount = ROUND(${amount}::numeric * commission_pct / 100)
+        commission_amount = CASE WHEN ${amount}::int = 0 THEN 0
+                                 WHEN commission_fixed IS NOT NULL THEN commission_fixed * quantity
+                                 ELSE ROUND(${amount}::numeric * commission_pct / 100) END
       WHERE id = ${saleId} AND organization_id = ${orgId}`;
   }
   if (commission !== null) {

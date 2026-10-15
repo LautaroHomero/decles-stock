@@ -2,6 +2,7 @@ import { getPriceItem, listPendingSales, resolvePendingSale, type Sale } from "@
 import { addOwed, consumeStockFefo } from "@/lib/db/stock-repo";
 import { getProvider } from "@/lib/db/repo";
 import { createPractice, createProduct } from "@/lib/domain/products";
+import { commissionFor } from "@/lib/domain/billing";
 import type { Actor } from "@/lib/domain/types";
 
 /**
@@ -47,8 +48,8 @@ export async function resolvePending(
   if (!item || !item.active) return fail("Ese ítem no está en la lista de precios.", 404);
 
   const prov = sale.providerId ? await getProvider(sale.providerId) : undefined;
-  const pct = item.commissionPct ?? prov?.commissionPct ?? 0;
-  if (!(await resolvePendingSale(orgId, saleId, { item, commissionPct: pct }))) return fail("Eso ya no está pendiente.", 409);
+  const cut = await commissionFor(orgId, item, prov);
+  if (!(await resolvePendingSale(orgId, saleId, { item, commissionPct: cut.pct, commissionFixed: cut.fixed }))) return fail("Eso ya no está pendiente.", 409);
 
   if (item.stockItemId) {
     const who = { id: actor.userId, name: actor.name, source: "manual" as const };
