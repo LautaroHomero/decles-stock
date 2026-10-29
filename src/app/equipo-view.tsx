@@ -5,6 +5,7 @@ import { PlusIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { Pill } from "./ui";
 import { BTN, BTN_DARK, CARD, FIELD, Toast, call, usePoll, useToast } from "./shared";
+import { ObrasSociales } from "./obras-sociales";
 
 interface Member {
   userId: string;
@@ -134,6 +135,7 @@ export function EquipoView({ actor }: { actor: Actor }) {
           )}
         </div>
       )}
+      {actor.activeOrg?.canAdmin && <ObrasSociales showToast={showToast} />}
     </div>
   );
 }

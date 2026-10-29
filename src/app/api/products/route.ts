@@ -1,3 +1,4 @@
+import { resolvePendingByName } from "@/lib/domain/pending";
 import { createProduct } from "@/lib/domain/products";
 import { refreshAfterChange } from "@/lib/domain/notifications";
 import { actorOr401, bodyOf, respond } from "../_http";
@@ -16,11 +17,16 @@ export async function POST(req: Request) {
     quantity: number;
     expiresOn: string;
     lotCode: string;
+    infiniteStock: boolean;
+    giftCard: boolean;
     providerIds: string[];
     commissionPct: number | null;
     providerCuts: Record<string, { pct?: number | null; fixed?: number | null }>;
   }>(req);
   const r = await createProduct(actor, { ...b, name: b.name ?? "", price: b.price as number });
-  if (r.ok) await refreshAfterChange(actor);
+  if (r.ok) {
+    await resolvePendingByName(actor);
+    await refreshAfterChange(actor);
+  }
   return respond(r);
 }

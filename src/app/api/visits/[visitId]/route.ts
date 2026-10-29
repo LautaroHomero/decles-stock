@@ -13,6 +13,10 @@ export async function PUT(req: Request, ctx: { params: Promise<{ visitId: string
     paymentMethod: b.paymentMethod,
     payments: b.payments,
     observations: b.observations,
+    // Abono: sin la clave, la sesión sigue igual; con un id, es de ese abono; con null, deja de serlo.
+    ...("prepaidId" in b ? { prepaidId: b.prepaidId ?? null } : {}),
+    ...("insurerId" in b ? { insurerId: b.insurerId ?? null } : {}),
+    ...("depositId" in b ? { depositId: b.depositId ?? null } : {}),
     lines: b.lines ?? [],
   });
   if (r.ok) await refreshAfterChange(actor);

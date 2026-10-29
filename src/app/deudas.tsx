@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { call, money, usePoll, PAYMENTS } from "./shared";
+import { ReminderPicker, remindLabel, todayYmd } from "./debt-reminder";
 
 /** Espejo de `Debt` / `DebtCollection` de src/lib/domain/debts.ts. */
 export interface DebtRow {
@@ -16,6 +17,8 @@ export interface DebtRow {
   share: number;
   visitId: string | null;
   status: "open" | "paid" | "voided";
+  /** Día para acordarse de cobrarla (AAAA-MM-DD). */
+  remindOn: string | null;
   createdByName: string;
   createdAt: string;
   paidAt: string | null;
@@ -50,7 +53,19 @@ export function DebtsCard({ canAnul, onChange, showToast }: { canAnul: boolean; 
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState<DebtMethod | null>(null);
   const [busy, setBusy] = useState(false);
-  const debts = data?.ok ? data.debts : [];
+  const [reminding, setReminding] = useState<string | null>(null);
+  const today = todayYmd();
+  // Primero las que hay que cobrar hoy (o ya pasó la fecha), después por fecha de recordatorio, después el resto.
+  const debts = (data?.ok ? data.debts : []).slice().sort((a, b) => (a.remindOn ?? "9999").localeCompare(b.remindOn ?? "9999"));
+
+  async function remind(d: DebtRow, v: string | null) {
+    const r = await call(`/api/debts/${d.id}`, "PATCH", { remindOn: v });
+    if (!r.ok) return showToast(r.error ?? "No se pudo guardar el recordatorio.");
+    showToast(v ? `Recordatorio: ${remindLabel(v)}.` : "Sin recordatorio.");
+    setReminding(null);
+    refresh();
+    onChange();
+  }
 
   async function pay(d: DebtRow) {
     const n = amount ? Number(amount) : d.remaining;
@@ -93,6 +108,11 @@ export function DebtsCard({ canAnul, onChange, showToast }: { canAnul: boolean; 
                     {[d.concept, d.providerName, `desde el ${ddmm(d.createdAt)}`].filter(Boolean).join(" · ")}
                     {d.paid > 0 && ` · pagó ${money(d.paid)} de ${money(d.amount)}`}
                   </span>
+                  {d.remindOn && (
+                    <span className={`block text-[12.5px] ${d.remindOn <= today ? "font-medium text-warn" : "text-neutral-400"}`}>
+                      {d.remindOn < today ? `Había que cobrarle el ${remindLabel(d.remindOn)}` : d.remindOn === today ? "Cobrar hoy" : `Recordar: ${remindLabel(d.remindOn)}`}
+                    </span>
+                  )}
                 </span>
                 <span className="flex items-center gap-3">
                   <span className="whitespace-nowrap font-medium tabular-nums">{money(d.remaining)}</span>
@@ -108,6 +128,14 @@ export function DebtsCard({ canAnul, onChange, showToast }: { canAnul: boolean; 
                       Cobrar
                     </button>
                   )}
+                  {paying !== d.id && (
+                    <button
+                      onClick={() => setReminding(reminding === d.id ? null : d.id)}
+                      className="cl-no-print text-[12.5px] text-neutral-500 underline-offset-2 hover:text-fg hover:underline"
+                    >
+                      {d.remindOn ? "cambiar fecha" : "recordar"}
+                    </button>
+                  )}
                   {canAnul && d.paid === 0 && paying !== d.id && (
                     <button onClick={() => anul(d)} className="cl-no-print text-[12.5px] text-neutral-500 underline-offset-2 hover:text-fg hover:underline">
                       anular
@@ -115,6 +143,17 @@ export function DebtsCard({ canAnul, onChange, showToast }: { canAnul: boolean; 
                   )}
                 </span>
               </div>
+              {reminding === d.id && paying !== d.id && (
+                <div className="cl-no-print rounded-lg bg-neutral-900/40 p-3">
+                  <ReminderPicker
+                    value={d.remindOn}
+                    onChange={(v) => remind(d, v)}
+                    label={`¿Cuándo hay que cobrarle a ${d.debtor.split(" ")[0]}?`}
+                    chip="rounded-full border border-neutral-800 px-3 py-1.5 text-[13px] text-neutral-300 hover:bg-accent-900"
+                    chipOn="rounded-full border border-accent bg-accent px-3 py-1.5 text-[13px] text-on-accent"
+                  />
+                </div>
+              )}
               {paying === d.id && (
                 <div className="cl-no-print flex flex-wrap items-center gap-2">
                   <input

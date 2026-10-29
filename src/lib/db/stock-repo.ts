@@ -37,6 +37,8 @@ export interface StockItem {
   unit: string;
   category: string;
   minQuantity: number;
+  infiniteStock: boolean;
+  giftCard: boolean;
   active: boolean;
   /** Suma de lotes vigentes (lo que realmente se puede usar). */
   available: number;
@@ -104,6 +106,8 @@ function buildItem(r: Row, lots: StockLot[]): StockItem {
     unit: r.unit as string,
     category: (r.category as string) ?? "",
     minQuantity,
+    infiniteStock: Boolean(r.infinite_stock),
+    giftCard: Boolean(r.gift_card),
     active: Boolean(r.active),
     available,
     expiredQuantity: lots.filter((l) => l.expired).reduce((n, l) => n + l.quantity, 0),
@@ -157,24 +161,24 @@ export async function getStockItem(orgId: string, itemId: string): Promise<Stock
 
 export async function createStockItem(
   orgId: string,
-  v: { name: string; unit: string; category: string; minQuantity: number },
+  v: { name: string; unit: string; category: string; minQuantity: number; infiniteStock?: boolean; giftCard?: boolean },
 ): Promise<string> {
   const id = uid("sti");
   await getSql()`
-    INSERT INTO stock_items (id, organization_id, name, unit, category, min_quantity, created_at)
-    VALUES (${id}, ${orgId}, ${v.name}, ${v.unit}, ${v.category}, ${v.minQuantity}, ${realNowIso()})`;
+    INSERT INTO stock_items (id, organization_id, name, unit, category, min_quantity, infinite_stock, gift_card, created_at)
+    VALUES (${id}, ${orgId}, ${v.name}, ${v.unit}, ${v.category}, ${v.minQuantity}, ${v.infiniteStock ?? false}, ${v.giftCard ?? false}, ${realNowIso()})`;
   return id;
 }
 
 export async function updateStockItem(
   orgId: string,
   itemId: string,
-  v: { name: string; unit: string; category: string; minQuantity: number; active: boolean },
+  v: { name: string; unit: string; category: string; minQuantity: number; active: boolean; infiniteStock?: boolean; giftCard?: boolean },
 ): Promise<void> {
   await getSql()`
     UPDATE stock_items
     SET name = ${v.name}, unit = ${v.unit}, category = ${v.category},
-        min_quantity = ${v.minQuantity}, active = ${v.active}
+        min_quantity = ${v.minQuantity}, active = ${v.active}, infinite_stock = ${v.infiniteStock ?? false}, gift_card = ${v.giftCard ?? false}
     WHERE id = ${itemId} AND organization_id = ${orgId}`;
 }
 

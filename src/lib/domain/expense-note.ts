@@ -6,6 +6,8 @@
 export interface ExpenseNote {
   concept: string;
   amount: number;
+  /** «por transferencia», «con tarjeta»; si no dice nada, efectivo (sale de la caja). */
+  method: "efectivo" | "transferencia" | "tarjeta";
 }
 
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -19,7 +21,13 @@ const CUES: [RegExp, string][] = [
   [/\bcompr(?:e|amos)\b/, "Compra"],
   [/\bsalida(?: de (?:caja|plata))?\b|\bsalieron\b/, ""],
 ];
-const FILLER = new Set(["de", "del", "la", "el", "los", "las", "en", "por", "para", "un", "una", "pesos", "peso", "hoy", "se", "y", "con", "efectivo", "caja", "plata", "a", "al"]);
+const FILLER = new Set(["de", "del", "la", "el", "los", "las", "en", "por", "para", "un", "una", "pesos", "peso", "hoy", "se", "y", "con", "efectivo", "caja", "plata", "a", "al", "efvo", "transferencia", "transf", "transferi", "transferimos", "mp", "tarjeta", "debito", "credito"]);
+
+function methodIn(t: string): ExpenseNote["method"] {
+  if (/\b(?:transferencia|transf\w*|mp|mercado\s*pago)\b/.test(t)) return "transferencia";
+  if (/\b(?:tarjeta|debito|credito)\b/.test(t)) return "tarjeta";
+  return "efectivo";
+}
 
 /** «5000», «5.000», «$ 5.000», «5 mil», «5k», «1,5 millones», «1.5M». */
 function amountOf(t: string): { amount: number; span: [number, number] } | null {
@@ -49,6 +57,7 @@ export function parseExpense(text: string): ExpenseNote | null {
   // Concepto: el texto original sin la palabra clave, el importe ni las palabras de relleno.
   const original = text.trim();
   let rest = a ? original.slice(0, a.span[0]) + " " + original.slice(a.span[1]) : original;
+  rest = rest.replace(/(?:\b(?:por|con|via)\s+)?\b(?:mercado\s*pago|transferencia|transf\w*|tarjeta(?:\s+de\s+(?:debito|d[eé]bito|credito|cr[eé]dito))?|efectivo|efvo)\b/gi, " ");
   rest = rest.replace(/[:;,.\-–]+/g, " ");
   const words = rest.split(/\s+/).filter(Boolean);
   const kept = words.filter((w) => {
@@ -62,5 +71,5 @@ export function parseExpense(text: string): ExpenseNote | null {
   const inner = kept.length > 1 ? original.match(new RegExp(`${esc(kept[0])}.*${esc(kept[kept.length - 1])}`, "i")) : null;
   if (kept.length > 1 && inner && !/\d/.test(inner[0])) concept = inner[0].replace(/[:;,.]+/g, " ").replace(/\s+/g, " ").trim();
   concept = concept || cue[1];
-  return { concept: concept ? concept.charAt(0).toUpperCase() + concept.slice(1) : "", amount: a?.amount ?? 0 };
+  return { concept: concept ? concept.charAt(0).toUpperCase() + concept.slice(1) : "", amount: a?.amount ?? 0, method: methodIn(t) };
 }

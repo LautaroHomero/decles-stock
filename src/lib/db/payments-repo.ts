@@ -3,7 +3,7 @@ import { realNowIso } from "@/lib/domain/clock";
 import { getSql } from "./connection";
 
 /** Cómo se pagó una anotación cuando no es un solo medio en pesos (Decles). `amount` en pesos. */
-export type PartMethod = "efectivo" | "transferencia" | "tarjeta" | "dolares";
+export type PartMethod = "efectivo" | "transferencia" | "tarjeta" | "dolares" | "giftcard" | "profesional";
 export interface PayPart {
   method: PartMethod;
   amount: number;

@@ -16,7 +16,8 @@ export type PriceKind = "consulta" | "tratamiento" | "producto";
 export type SaleKind = PriceKind | "pendiente";
 export type BillingSource = "manual" | "agent";
 /** Medio de pago (Decles). Transferencia va al precio de efectivo. */
-export type PaymentMethod = "efectivo" | "transferencia" | "tarjeta" | "dolares" | "mixto";
+/** `profesional`: le pagaron directo a la profesional (no entra a la caja). */
+export type PaymentMethod = "efectivo" | "transferencia" | "tarjeta" | "dolares" | "mixto" | "giftcard" | "profesional";
 
 export interface PriceItem {
   id: string;
@@ -445,11 +446,18 @@ export async function resolvePendingSale(
     SELECT quantity, payment_method, total, price_manual, commission_manual FROM sales
     WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid' FOR UPDATE`) as unknown as Row[];
   if (!rows.length) return false;
-  // Si al anotar se cargó lo que se cobró (aunque sea $0: le pagaron directo a la profesional), eso manda:
-  // solo se vincula el ítem.
+  // Si al anotar se cargó lo que se cobró (aunque sea $0), el importe manda: se vincula el ítem y la parte de la
+  // profesional se recalcula con lo que tiene cargado ese ítem (salvo que se haya escrito a mano).
   if (Number(rows[0].total) > 0 || rows[0].price_manual) {
+    const total = Number(rows[0].total);
+    const kq = Number(rows[0].quantity);
+    const fx = v.commissionFixed ?? null;
+    const kpct = fx !== null ? 0 : v.commissionPct;
+    const k = total === 0 ? 0 : fx !== null ? fx * kq : Math.round((total * kpct) / 100);
     const kept = (await getSql()`
-      UPDATE sales SET item_id = ${v.item.id}, item_name = ${v.item.name}, kind = ${v.item.kind}
+      UPDATE sales SET item_id = ${v.item.id}, item_name = ${v.item.name}, kind = ${v.item.kind},
+        commission_pct = ${kpct}, commission_fixed = ${fx},
+        commission_amount = CASE WHEN commission_manual THEN commission_amount ELSE ${k} END
       WHERE id = ${saleId} AND organization_id = ${orgId} AND kind = 'pendiente' AND status = 'paid'
       RETURNING id`) as unknown as Row[];
     return kept.length > 0;

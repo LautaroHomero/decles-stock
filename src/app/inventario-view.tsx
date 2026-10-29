@@ -253,7 +253,7 @@ function ProductRow({
           <span className="block truncate text-[14.5px] font-medium">{p.name}</span>
           <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-neutral-400">
             <span className="tabular-nums">
-              {unitsLabel(p.available, p.unit)}
+              {p.giftCard ? "Gift card · stock infinito" : p.infiniteStock ? "∞ · stock infinito" : unitsLabel(p.available, p.unit)}
               {p.minQuantity > 0 && <span className="text-neutral-600"> / mín. {p.minQuantity}</span>}
             </span>
             {next && <span>· vence {fmtDate(next)}</span>}
@@ -349,6 +349,8 @@ const Label = ({ children }: { children: React.ReactNode }) => <span className="
 
 function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: (v: object) => Promise<boolean> }) {
   const [f, setF] = useState({ name: "", price: "", cardPrice: "", minQuantity: "", quantity: "", expiresOn: "", lotCode: "" });
+  const [infiniteStock, setInfiniteStock] = useState(false);
+  const [giftCard, setGiftCard] = useState(false);
   const [providerIds, setProviderIds] = useState<string[]>([]);
   const [cuts, setCuts] = useState<CutDraft>({});
   const [commission, setCommission] = useState("");
@@ -373,19 +375,23 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
         </label>
         <label className="flex flex-col gap-1">
           <Label>Avisar si quedan menos de</Label>
-          <input value={f.minQuantity} onChange={set("minQuantity")} inputMode="numeric" placeholder="Ej. 3 (opcional)" className={FIELD} />
+          <input value={f.minQuantity} onChange={set("minQuantity")} inputMode="numeric" placeholder="Ej. 3 (opcional)" className={FIELD} disabled={infiniteStock || giftCard} />
         </label>
-        <label className="flex flex-col gap-1">
-          <Label>Cantidad que entra ahora</Label>
-          <input value={f.quantity} onChange={set("quantity")} inputMode="numeric" placeholder="Ej. 12 (opcional)" className={FIELD} />
-        </label>
-        <div className="flex flex-col gap-1">
-          <Label>Vencimiento</Label>
-          <ExpiryPicker value={f.expiresOn} onChange={(expiresOn) => setF({ ...f, expiresOn })} />
+        <div className="flex flex-col gap-2 self-end pb-2 text-[13px] text-neutral-300">
+          <label className="flex items-center gap-2"><input type="checkbox" checked={infiniteStock} onChange={(e) => setInfiniteStock(e.target.checked)} />Stock infinito</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={giftCard} onChange={(e) => { setGiftCard(e.target.checked); if (e.target.checked) setInfiniteStock(true); }} />Es gift card</label>
         </div>
         <label className="flex flex-col gap-1">
+          <Label>Cantidad que entra ahora</Label>
+          <input value={f.quantity} onChange={set("quantity")} inputMode="numeric" placeholder="Ej. 12 (opcional)" className={FIELD} disabled={infiniteStock || giftCard} />
+        </label>
+        {!infiniteStock && !giftCard && <div className="flex flex-col gap-1">
+          <Label>Vencimiento</Label>
+          <ExpiryPicker value={f.expiresOn} onChange={(expiresOn) => setF({ ...f, expiresOn })} />
+        </div>}
+        <label className="flex flex-col gap-1">
           <Label>Lote (opcional)</Label>
-          <input value={f.lotCode} onChange={set("lotCode")} placeholder="Como figura en la caja" className={FIELD} />
+          <input value={f.lotCode} onChange={set("lotCode")} placeholder="Como figura en la caja" className={FIELD} disabled={infiniteStock || giftCard} />
         </label>
         <CommissionField value={commission} onChange={setCommission} />
       </div>
@@ -401,6 +407,8 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
               price: toInt(f.price),
               cardPrice: toInt(f.cardPrice) ?? null,
               minQuantity: toInt(f.minQuantity) ?? 0,
+              infiniteStock: infiniteStock || giftCard,
+              giftCard,
               quantity: toInt(f.quantity),
               expiresOn: f.expiresOn,
               lotCode: f.lotCode,
@@ -467,6 +475,8 @@ type ProductPatch = {
   cardPrice?: number | null;
   minQuantity?: number;
   active?: boolean;
+  infiniteStock?: boolean;
+  giftCard?: boolean;
   providerIds?: string[];
   providerCuts?: Record<string, Cut>;
   commissionPct?: number | null;
@@ -479,6 +489,8 @@ function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () =
     cardPrice: p.cardPrice === null ? "" : String(p.cardPrice),
     minQuantity: String(p.minQuantity),
   });
+  const [infiniteStock, setInfiniteStock] = useState(p.infiniteStock);
+  const [giftCard, setGiftCard] = useState(p.giftCard);
   const [providerIds, setProviderIds] = useState<string[]>(p.providerIds);
   const [cuts, setCuts] = useState<CutDraft>(() => cutDraftOf(p.providerCuts));
   const [commission, setCommission] = useState(p.commissionPct === null ? "" : String(p.commissionPct));
@@ -500,13 +512,17 @@ function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () =
         </label>
         <label className="flex flex-col gap-1">
           <Label>Mínimo</Label>
-          <input value={f.minQuantity} onChange={set("minQuantity")} inputMode="numeric" className={FIELD} />
+          <input value={f.minQuantity} onChange={set("minQuantity")} inputMode="numeric" className={FIELD} disabled={infiniteStock || giftCard} />
         </label>
+        <div className="flex flex-col gap-2 self-end pb-2 text-[13px] text-neutral-300">
+          <label className="flex items-center gap-2"><input type="checkbox" checked={infiniteStock} onChange={(e) => setInfiniteStock(e.target.checked)} />Stock infinito</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={giftCard} onChange={(e) => { setGiftCard(e.target.checked); if (e.target.checked) setInfiniteStock(true); }} />Es gift card</label>
+        </div>
         <CommissionField value={commission} onChange={setCommission} />
       </div>
       <ProviderPicker value={providerIds} onChange={setProviderIds} cuts={cuts} onCuts={setCuts} />
       <div className="flex flex-wrap gap-2">
-        <button className={BTN_DARK} onClick={() => onSubmit({ name: f.name, price: toInt(f.price), cardPrice: toInt(f.cardPrice) ?? null, minQuantity: toInt(f.minQuantity) ?? 0, providerIds, providerCuts: cutsFromDraft(cuts, providerIds), commissionPct: parsePct(commission) })}>
+        <button className={BTN_DARK} onClick={() => onSubmit({ name: f.name, price: toInt(f.price), cardPrice: toInt(f.cardPrice) ?? null, minQuantity: toInt(f.minQuantity) ?? 0, infiniteStock: infiniteStock || giftCard, giftCard, providerIds, providerCuts: cutsFromDraft(cuts, providerIds), commissionPct: parsePct(commission) })}>
           Guardar
         </button>
         <button className={BTN} onClick={onCancel}>

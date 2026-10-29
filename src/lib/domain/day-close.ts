@@ -35,7 +35,7 @@ export interface DayClose {
   productSales: number;
   total: number;
   /** Totales por medio de pago; `pending` = sin medio cargado (a precio efectivo; con tarjeta sería `pendingCard`). */
-  byPayment: { efectivo: number; transferencia: number; tarjeta: number; dolares: number; usd: number; pending: number; pendingCard: number };
+  byPayment: { efectivo: number; transferencia: number; tarjeta: number; dolares: number; giftcard: number; profesional: number; usd: number; pending: number; pendingCard: number };
   providers: CloseProvider[];
   /** Egresos del día (la médica no los ve: lista vacía). */
   expenses: Expense[];
@@ -69,7 +69,7 @@ export async function dayClose(actor: Actor, date?: string): Promise<Result<{ cl
   const visitKey = (s: (typeof sales)[number]) => s.visitId ?? s.id;
   const patientVisits = new Set<string>();
   const productVisits = new Set<string>();
-  const byPayment = { efectivo: 0, transferencia: 0, tarjeta: 0, dolares: 0, usd: 0, pending: 0, pendingCard: 0 };
+  const byPayment = { efectivo: 0, transferencia: 0, tarjeta: 0, dolares: 0, giftcard: 0, profesional: 0, usd: 0, pending: 0, pendingCard: 0 };
   const splitIds = [...new Set(sales.filter((s) => s.visitId && (s.paymentMethod === "mixto" || s.paymentMethod === "dolares")).map((s) => s.visitId!))];
   const split = actor.activeOrg ? await listVisitPayments(actor.activeOrg.id, splitIds) : {};
   const counted = new Set<string>();
@@ -94,6 +94,7 @@ export async function dayClose(actor: Actor, date?: string): Promise<Result<{ cl
     } else if (s.paymentMethod === "efectivo") byPayment.efectivo += s.total;
     else if (s.paymentMethod === "transferencia") byPayment.transferencia += s.total;
     else if (s.paymentMethod === "tarjeta") byPayment.tarjeta += s.total;
+    else if (s.paymentMethod === "giftcard" || s.paymentMethod === "profesional") byPayment[s.paymentMethod] += s.total;
     else {
       byPayment.pending += s.cashTotal;
       byPayment.pendingCard += s.cardTotal;

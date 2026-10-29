@@ -46,10 +46,14 @@ export interface Debt {
   share: number;
   visitId: string | null;
   status: "open" | "paid" | "voided";
+  /** Quién la anotó (recibe los avisos además de los admins). */
+  createdBy: string;
   createdByName: string;
   createdAt: string;
   paidAt: string | null;
   payments: DebtPayment[];
+  /** Día para acordarse de cobrarla (AAAA-MM-DD). null = sin recordatorio. */
+  remindOn: string | null;
 }
 
 /** Un cobro de deuda con el nombre de quién debía (para el cierre). */
@@ -108,6 +112,8 @@ async function load(orgId: string, where: { status?: "open"; ids?: string[]; vis
       share: Number(r.share ?? 0),
       visitId: (r.visit_id as string) ?? null,
       status: r.status as Debt["status"],
+      remindOn: (r.remind_on as string) ?? null,
+      createdBy: r.created_by as string,
       createdByName: r.created_by_name as string,
       createdAt: r.created_at as string,
       paidAt: (r.paid_at as string) ?? null,
@@ -165,7 +171,7 @@ const pesos = (n: unknown) => typeof n === "number" && Number.isInteger(n) && n 
  */
 export async function createDebt(
   actor: Actor,
-  v: { debtor?: unknown; amount?: unknown; concept?: unknown; providerId?: unknown; share?: unknown; visitId?: unknown },
+  v: { debtor?: unknown; amount?: unknown; concept?: unknown; providerId?: unknown; share?: unknown; visitId?: unknown; remindOn?: unknown },
 ): Promise<Result<{ debt: Debt }>> {
   // La médica no maneja caja, pero sí puede anotar que su paciente quedó debiendo (desde una atención).
   const c = ctx(actor) ?? (actor.role === "medico" && actor.activeOrg && typeof v.visitId === "string" ? { orgId: actor.activeOrg.id, isAdmin: false } : null);
@@ -189,13 +195,45 @@ export async function createDebt(
       return fail("La parte de la profesional tiene que ser entre $0 y lo que se debe.");
     share = v.share;
   }
+  const remind = remindOf(v.remindOn);
+  if (remind === undefined) return fail("La fecha del recordatorio no es válida.");
   const id = `debt_${randomUUID().slice(0, 10)}`;
   await getSql()`
-    INSERT INTO debts (id, organization_id, debtor, concept, amount, provider_id, share, visit_id, created_by, created_by_name, created_at)
+    INSERT INTO debts (id, organization_id, debtor, concept, amount, provider_id, share, visit_id, created_by, created_by_name, created_at, remind_on)
     VALUES (${id}, ${c.orgId}, ${debtor}, ${clean(v.concept).slice(0, 200)}, ${amount}, ${providerId}, ${share},
-            ${typeof v.visitId === "string" && v.visitId ? v.visitId : null}, ${actor.userId}, ${actor.name}, ${realNowIso()})`;
+            ${typeof v.visitId === "string" && v.visitId ? v.visitId : null}, ${actor.userId}, ${actor.name}, ${realNowIso()}, ${remind})`;
   const [debt] = await load(c.orgId, { ids: [id] });
   return { ok: true, debt };
+}
+
+/** AAAA-MM-DD válido → esa fecha; vacío → null (sin recordatorio); otra cosa → undefined (inválido). */
+function remindOf(raw: unknown): string | null | undefined {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (typeof raw !== "string" || !YMD.test(raw)) return undefined;
+  const d = new Date(`${raw}T12:00:00Z`);
+  return Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== raw ? undefined : raw;
+}
+
+/** Poner, cambiar o sacar (null) la fecha para acordarse de cobrar una deuda. Secretaría y admin. */
+export async function setDebtReminder(actor: Actor, id: string, remindOn: unknown): Promise<Result<{ debt: Debt }>> {
+  const c = ctx(actor);
+  if (!c) return fail("Las deudas las maneja la secretaría o el admin.", 403);
+  const remind = remindOf(remindOn);
+  if (remind === undefined) return fail("La fecha del recordatorio no es válida.");
+  const rows = (await getSql()`
+    UPDATE debts SET remind_on = ${remind} WHERE id = ${id} AND organization_id = ${c.orgId} AND status = 'open' RETURNING id`) as unknown as Row[];
+  if (!rows.length) return fail("Esa deuda ya no está abierta.", 404);
+  const [debt] = await load(c.orgId, { ids: [id] });
+  return { ok: true, debt };
+}
+
+/** Las deudas abiertas cuyo recordatorio ya llegó (hoy o antes), las más viejas primero. */
+export async function dueDebtReminders(actor: Actor): Promise<Result<{ debts: Debt[] }>> {
+  const c = ctx(actor);
+  if (!c) return { ok: true, debts: [] };
+  const today = realNowIso().slice(0, 10);
+  const debts = (await load(c.orgId, { status: "open" })).filter((d) => d.remindOn && d.remindOn <= today);
+  return { ok: true, debts: debts.sort((a, b) => a.remindOn!.localeCompare(b.remindOn!)) };
 }
 
 /** Cobrar una deuda (toda o una parte). `amount` vacío = todo lo que falta. Entra a la caja del día. */

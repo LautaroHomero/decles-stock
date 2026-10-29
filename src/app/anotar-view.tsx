@@ -1,14 +1,40 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { CaretLeftIcon, CheckIcon, MinusIcon, PlusIcon, SquaresFourIcon, XIcon } from "@phosphor-icons/react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  ArrowDownIcon,
+  ArrowRightIcon,
+  ArrowUpIcon,
+  ArrowsLeftRightIcon,
+  CaretLeftIcon,
+  CheckCircleIcon,
+  CheckIcon,
+  ClockIcon,
+  CreditCardIcon,
+  CurrencyDollarIcon,
+  HandCoinsIcon,
+  MinusIcon,
+  MoneyIcon,
+  PlusIcon,
+  SquaresFourIcon,
+  StackIcon,
+  WarningCircleIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { parseNote, searchScore, suggest } from "@/lib/domain/quick-sale";
 import { parseExpense } from "@/lib/domain/expense-note";
-import { extractMoney, fractionsToPesos, parseDebtPayment, parsePayout, splitPaid, splitParts, splitPesos, type MoneyNote, type Split } from "@/lib/domain/money-note";
+import { parsePrepaidNote, prepaidPatient, samePatient, SAYS_PREPAID, USES_PREPAID } from "@/lib/domain/prepaid-note";
+import { parsePayable, parsePayablePayment } from "@/lib/domain/payable-note";
+import { depositPatient, parseDepositNote, USES_DEPOSIT } from "@/lib/domain/deposit-note";
+import type { DepositRow } from "./senas";
+import { realNowIso } from "@/lib/domain/clock";
+import { PAY_METHODS, PayableReminderPicker, payableRemindText, type PayableRow, type PayMethod } from "./deudas-consultorio";
+import { debtorName, extractMoney, fractionsToPesos, parseDebtPayment, parsePayout, parseProviderDebt, splitPaid, splitParts, splitPesos, type MoneyNote, type Split } from "@/lib/domain/money-note";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
+import { ReminderPicker, remindLabel } from "./debt-reminder";
 import { firstName, greeting } from "./ui";
-import { Toast, call, fmtTime, money, usePoll, useToast, useDolar, type CatalogResponse, type Cut, type Payment, type PaymentsMap, type SaleRow, PAYMENTS } from "./shared";
+import { Toast, call, fmtTime, money, usePoll, useToast, useToday, useDolar, type CatalogResponse, type Cut, type Payment, type PaymentsMap, type SaleRow, PAYMENTS } from "./shared";
 
 /**
  * Anotar (diseño «Vender»): lo que pasó en el consultorio en una frase —
@@ -32,6 +58,7 @@ interface Item {
   available?: number;
   /** Médicas que lo hacen / venden (vacío = cualquiera). */
   providerIds: string[];
+  giftCard?: boolean;
   /** % de comisión propio del ítem (null = el de la médica). */
   pct?: number | null;
   /** Lo que se lleva cada profesional en este ítem, si es distinto (% o plata fija por unidad). */
@@ -84,8 +111,10 @@ interface Draft {
   patientUnsure: boolean;
   /** Lo que ingresó (null = el precio de lista). 0 = le pagaron directo a la profesional / abono. */
   paid: number | null;
-  /** Le pagaron directo a la profesional (o abono). */
+  /** Abono: no pasó por caja. (Pagado directo a la profesional es el medio «profesional».) */
   direct: boolean;
+  /** Medio «profesional»: lo nuestro que nos debe ella («nos debe 36000»); null = el resto de su parte. */
+  owesUs: number | null;
   /** Lo que le corresponde a la profesional, si se aclaró (null = según su %). */
   share: number | null;
   /** Pagó con varios medios o en dólares (null = un solo medio, o sin cargar). */
@@ -94,11 +123,37 @@ interface Draft {
   debt: number | null;
   /** «debe todo» / «fiado»: no pagó nada y debe lo que salía. */
   debtAll: boolean;
+  /** Día para acordarse de cobrar la deuda (AAAA-MM-DD), dicho en el texto o elegido. */
+  remindOn: string | null;
   /** «la mitad en efectivo y la mitad con tarjeta» (sin importes): se pasa a pesos con el precio. */
   fractions: MoneyNote["fractions"];
   /** «pagó en dólares» sin cantidad: los dólares salen de lo que salía y la cotización del día. */
   usdAll: boolean;
+  /** Sesión de un abono: ese renglón no pasa por caja. */
+  prepaidId?: string | null;
+  /** Atención por obra social / prepaga (OSMECON): las prácticas no pasan por caja. */
+  insurerId?: string | null;
+  /** Seña que se descuenta: paga solo el resto. */
+  depositId?: string | null;
 }
+type Insurer = { id: string; name: string; fee: number; active: boolean };
+/** «por osmecon», «con la prepaga osmecon», «osmecon»: la obra social nombrada y el texto sin esa parte. */
+function insurerIn(text: string, insurers: Insurer[]): { insurer: Insurer; cleaned: string } | null {
+  const n = normQ(text);
+  for (const i of insurers) {
+    if (!i.active) continue;
+    const name = normQ(i.name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = n.match(new RegExp(String.raw`(?:\b(?:por|con|de|x|via)\s+)?(?:(?:la\s+)?(?:obra\s+social|prepaga|os)\s+)?\b${name}\b`));
+    if (m) return { insurer: i, cleaned: text.slice(0, m.index!) + " " + text.slice(m.index! + m[0].length) };
+  }
+  return null;
+}
+/** Abono abierto (espejo de `Prepaid` de src/lib/domain/prepaids.ts). */
+type OpenPrepaid = { id: string; patient: string; itemId: string; itemName: string; unitPrice: number; sessions: number | null; amount: number; used: number; sessionsLeft: number; balance: number };
+const prepaidLeft = (p: OpenPrepaid) =>
+  p.sessions !== null
+    ? `${p.sessionsLeft === 1 ? "queda 1 sesión" : `quedan ${p.sessionsLeft} sesiones`} de ${p.sessions}`
+    : `le quedan ${money(p.balance)} (${p.sessionsLeft === 1 ? "1 sesión" : `${p.sessionsLeft} sesiones`} a ${money(p.unitPrice)})`;
 
 const cardOf = (i: Item) => i.cardPrice ?? i.price;
 const emptyDraft = (from: Draft["from"], sellerId: string | null): Draft => ({
@@ -111,10 +166,12 @@ const emptyDraft = (from: Draft["from"], sellerId: string | null): Draft => ({
   patientUnsure: false,
   paid: null,
   direct: false,
+  owesUs: null,
   share: null,
   split: null,
   debt: null,
   debtAll: false,
+  remindOn: null,
   fractions: null,
   usdAll: false,
 });
@@ -126,11 +183,15 @@ function buildDraft(text: string, items: Item[], sellers: Seller[], fixedSeller:
   const { lines, patient, patientSure, seller, payment } = parseNote(money.text, items, sellers);
   const d = emptyDraft("text", fixedSeller);
   d.paid = money.paid;
-  d.direct = money.direct;
+  d.direct = money.direct && !money.toProvider;
   d.share = money.share;
+  // «le transfirieron a carmen»: medio «a la profesional» (vale lo que salía; no entra a la caja).
+  if (money.toProvider) d.payment = "profesional";
+  d.owesUs = money.owesUs;
   d.split = money.split;
   d.debt = money.debt;
   d.debtAll = money.debtAll;
+  d.remindOn = money.remindOn;
   d.fractions = money.fractions;
   d.usdAll = money.usdAll;
   if (money.method) d.payment = money.method;
@@ -199,8 +260,14 @@ function DebtInput({ draft, setDraft, width = "w-[140px]" }: { draft: Draft; set
   );
 }
 
-function autoShare(d: Draft, sellers: Seller[]): number {
+function autoShare(d: Draft, sellers: Seller[], deposit?: { amount: number; itemId: string | null } | null): number {
   const amounts = lineAmounts(d);
+  // Con seña, la profesional cobra sobre el total de esa práctica (lo de hoy + la seña), como lo calcula el servidor.
+  if (deposit) {
+    const at = deposit.itemId ? d.lines.findIndex((l) => l.item.id === deposit.itemId) : -1;
+    const i = at >= 0 ? at : d.lines.findIndex((l) => l.item.kind !== "producto");
+    if (i >= 0) amounts[i] += deposit.amount;
+  }
   return d.lines.reduce((n, l, i) => {
     const sid = l.sellerId ?? d.sellerId;
     if (sellers.find((s) => s.id === sid)?.owner) return n;
@@ -250,7 +317,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [], pct: p.commissionPct, cuts: p.providerCuts }));
     const products = (catalog?.products ?? [])
       .filter((p) => p.price !== null && p.priceItemId)
-      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available, providerIds: p.providerIds ?? [], pct: p.commissionPct, cuts: p.providerCuts }));
+      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available, giftCard: p.giftCard, providerIds: p.providerIds ?? [], pct: p.commissionPct, cuts: p.providerCuts }));
     return [...practices, ...products];
   }, [catalog]);
   const sellers: Seller[] = useMemo(
@@ -274,11 +341,19 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const [pickShare, setPickShare] = useState<string | null>(null);
   // Lo que quedó debiendo, tocado en la vista previa (null = lo del texto; "" = nada).
   const [pickDebt, setPickDebt] = useState<string | null>(null);
+  // Recordatorio elegido en la vista previa (undefined = lo que dice el texto).
+  const [pickRemind, setPickRemind] = useState<string | null | undefined>(undefined);
   // Respuestas tocadas en la vista previa: «crema» → cuál, y si el nombre dudoso es la paciente.
   const [chosen, setChosen] = useState<Record<string, string>>({});
   const [unsureIs, setUnsureIs] = useState<"patient" | "item" | null>(null);
   // Paciente escrito en la vista previa cuando el texto no lo nombra.
   const [pickPatient, setPickPatient] = useState("");
+  const [giftCardKind, setGiftCardKind] = useState<"amount" | "treatment">("amount");
+  const [giftCardTreatmentId, setGiftCardTreatmentId] = useState("");
+  const [giftCardBuyer, setGiftCardBuyer] = useState("");
+  const [giftCardCodeInput, setGiftCardCodeInput] = useState("");
+  const [giftCardFound, setGiftCardFound] = useState<{ code: string; kind: "amount" | "treatment"; balance: number; treatmentItemId: string | null; treatmentName: string | null } | null>(null);
+  const [giftCardError, setGiftCardError] = useState("");
   const [draft, setDraft] = useState<Draft>(emptyDraft("text", null));
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
@@ -298,10 +373,26 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     });
   };
 
+  // Abonos abiertos: si la paciente tiene uno de lo que se hizo, se pregunta si la sesión es del abono.
+  const [prepaidsData, refreshPrepaids] = usePoll<{ ok: boolean; prepaids: OpenPrepaid[] }>("/api/prepaids", 60_000);
+  const openPrepaids = useMemo(() => (prepaidsData?.ok ? prepaidsData.prepaids : []), [prepaidsData]);
+  const [pickAbono, setPickAbono] = useState<boolean | null>(null);
+  const [pickAbonoId, setPickAbonoId] = useState<string | null>(null);
+  // Obras sociales (OSMECON): «botox a carla por osmecon» → no entra plata, la profesional se lleva el monto fijo.
+  const [insurersData] = usePoll<{ ok: boolean; insurers: Insurer[] }>("/api/insurers", 300_000);
+  const insurers = useMemo(() => (insurersData?.ok ? insurersData.insurers : []), [insurersData]);
+  const [pickInsurer, setPickInsurer] = useState<string | null | undefined>(undefined);
+  // Señas: si la paciente dejó una, se descuenta (paga el resto).
+  const [depositsData, refreshDeposits] = usePoll<{ ok: boolean; deposits: DepositRow[] }>("/api/deposits", 60_000);
+  const openDeposits = useMemo(() => (depositsData?.ok ? depositsData.deposits : []), [depositsData]);
+  const [pickDeposit, setPickDeposit] = useState<boolean | null>(null);
+
   // Vista previa en vivo de lo escrito.
   const preview = useMemo(() => {
-    const text = typed;
-    if (!text.trim() || !items.length) return null;
+    if (!typed.trim() || !items.length) return null;
+    const named = insurerIn(typed, insurers);
+    const insurer = pickInsurer === undefined ? (named?.insurer ?? null) : (insurers.find((i) => i.id === pickInsurer) ?? null);
+    const text = named && insurer?.id === named.insurer.id ? named.cleaned : typed;
     const d = buildDraft(text, items, sellers, fixedSeller);
     // Lo elegido entre opciones pasa a renglón.
     for (const u of [...d.unresolved]) {
@@ -323,8 +414,32 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       if (only?.length === 1) d.sellerId = only[0].id;
     }
     // Hay práctica y el texto no nombra al paciente: se pregunta en la vista previa.
-    const askPatient = hasPractice(d.lines) && !d.patient.trim() && !d.patientUnsure;
+    const askPatient = (hasPractice(d.lines) || !!insurer) && !d.patient.trim() && !d.patientUnsure;
     if (askPatient) d.patient = pickPatient.trim();
+    // Abono: «con abono» lo usa; si dijo cuánto pagó, no; si no dijo nada, se pregunta.
+    // «plan» / «abonado» solos también: es una sesión del plan («carla, plan»).
+    const saysAbono = USES_PREPAID.test(normQ(text)) || (SAYS_PREPAID.test(normQ(text)) && !parsePrepaidNote(text));
+    if (saysAbono) d.lines = d.lines.filter((l) => !(l.item.kind === "pendiente" && /^(?:plan|abono|abonad[oa]s?)$/.test(normQ(l.item.name))));
+    if (saysAbono) d.unresolved = d.unresolved.filter((u) => !/^(?:plan|abono|abonad[oa]s?)$/.test(normQ(u.text)));
+    let abono = d.patient.trim() ? (openPrepaids.find((p) => samePatient(p.patient, d.patient) && d.lines.some((l) => l.item.id === p.itemId)) ?? null) : null;
+    // Sin decir la práctica: la del plan de esa paciente (si tiene más de uno, se pregunta cuál).
+    let abonoChoices: OpenPrepaid[] = [];
+    if (!abono && saysAbono && d.patient.trim() && !hasPractice(d.lines)) {
+      const mine = openPrepaids.filter((p) => samePatient(p.patient, d.patient));
+      const pick = mine.find((p) => p.id === pickAbonoId) ?? (mine.length === 1 ? mine[0] : null);
+      if (pick) {
+        d.lines.push({ item: items.find((i) => i.id === pick.itemId) ?? pendingItem(pick.itemName), qty: 1, sellerId: null });
+        d.patientUnsure = false;
+        abono = pick;
+      } else abonoChoices = mine;
+    }
+    if (abonoChoices.length) d.patientUnsure = false;
+    const useAbono = abono ? (pickAbono ?? (saysAbono ? true : d.paid !== null && !d.direct ? false : null)) : false;
+    if (abono && useAbono) {
+      d.direct = false;
+      d.prepaidId = abono.id;
+      if (pickPaid === null) d.paid = d.lines.filter((l) => l.item.id !== abono.itemId).reduce((n, l) => n + lineCash(l), 0);
+    }
     if (pickPaid !== null) d.paid = toPesos(pickPaid);
     if (pickShare !== null) d.share = pickShare.trim() === "" ? null : toPesos(pickShare);
     // «la mitad en efectivo y la mitad con tarjeta»: las partes salen del precio (o de lo que dijo que pagó).
@@ -370,12 +485,51 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     // Si debe, hay que saber quién: se pregunta como con las prácticas.
     const askPatient2 = askPatient || (!!d.debt && d.lines.length > 0 && !d.patient.trim() && !d.patientUnsure);
     if (askPatient2 && !askPatient) d.patient = pickPatient.trim();
-    return { ...d, sellerId: pickSeller ?? d.sellerId, askPatient: askPatient2, listNow };
-  }, [typed, items, sellers, fixedSeller, pickSeller, pickPay, pickSplit, rate, chosen, unsureIs, pickPatient, pickPaid, pickShare, pickDebt]);
+    if (pickRemind !== undefined) d.remindOn = pickRemind;
+    // Seña: la paciente dejó una (para esta práctica, o sin práctica definida) → se descuenta, paga el resto.
+    const deposit =
+      d.patient.trim() && !(abono && useAbono)
+        ? (openDeposits.find((x) => samePatient(x.patient, d.patient) && (!x.itemId || d.lines.some((l) => l.item.id === x.itemId)) && hasPractice(d.lines)) ?? null)
+        : null;
+    const useDeposit = deposit ? (pickDeposit ?? true) : false;
+    if (deposit && useDeposit) {
+      d.depositId = deposit.id;
+      d.direct = false;
+      const listCash = d.lines.reduce((n, l) => n + lineList(l, d.payment), 0);
+      if (pickPaid === null && !d.split && (d.paid === null || USES_DEPOSIT.test(normQ(text)))) d.paid = Math.max(0, listCash - deposit.amount);
+    }
+    // Obra social: las prácticas no pasan por caja (los productos sí).
+    const byInsurer = insurer && !(abono && useAbono) ? insurer : null;
+    if (byInsurer) {
+      d.insurerId = byInsurer.id;
+      d.direct = false;
+      if (pickPaid === null) d.paid = d.lines.filter((l) => l.item.kind === "producto").reduce((n, l) => n + lineCash(l), 0);
+    }
+    // Le pagaron directo a la profesional y se dijo cuánto nos debe: su parte es lo que cobró menos eso.
+    if (d.payment === "profesional" && !d.split && d.owesUs !== null && pickShare === null) {
+      const cobro = d.paid ?? d.lines.reduce((n, l) => n + lineList(l, d.payment), 0);
+      d.share = Math.max(0, cobro - d.owesUs);
+    }
+    return {
+      ...d,
+      sellerId: pickSeller ?? d.sellerId,
+      askPatient: askPatient2,
+      // Con seña, lo que «salía» hoy es el resto (así no pregunta si quedó debiendo).
+      listNow: deposit && useDeposit ? Math.max(0, listNow - deposit.amount) : listNow,
+      abono,
+      useAbono,
+      saysAbono,
+      abonoChoices,
+      insurer: byInsurer,
+      namedInsurer: named?.insurer ?? null,
+      deposit,
+      useDeposit,
+    };
+  }, [insurers, pickInsurer, openDeposits, pickDeposit, pickAbonoId, typed, items, sellers, fixedSeller, pickSeller, pickPay, pickSplit, rate, chosen, unsureIs, pickPatient, pickPaid, pickShare, pickDebt, pickRemind, openPrepaids, pickAbono]);
   // Modo del pago para los botones: un medio, «dolares» (todo en dólares) o «varios».
   const payMode = preview
     ? preview.split
-      ? preview.split.efectivo + preview.split.transferencia + preview.split.tarjeta === 0
+      ? preview.split.efectivo + preview.split.transferencia + preview.split.tarjeta + (preview.split.giftcard ?? 0) === 0
         ? "dolares"
         : "varios"
       : preview.payment
@@ -388,28 +542,170 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     30_000,
   );
   const owedTo = (id: string) => payoutsData?.balances?.find((b) => b.providerId === id);
+  // «le quedamos debiendo 50000 a marisa» → deuda del consultorio con ella; «le pagué la deuda a marisa» → se le paga.
+  const provDebt = useMemo(() => (canExpense ? parseProviderDebt(typed, sellers) : null), [typed, canExpense, sellers]);
+  const [provDebtsData, refreshProvDebts] = usePoll<{ ok: boolean; debts: { id: string; providerId: string; date: string; remaining: number }[] }>(
+    "/api/provider-debts",
+    30_000,
+  );
+  const weOwe = (id: string) => (provDebtsData?.ok ? provDebtsData.debts : []).filter((d) => d.providerId === id).reduce((n, d) => n + d.remaining, 0);
+  const [pickPayoutMethod, setPickPayoutMethod] = useState<"efectivo" | "transferencia" | null>(null);
+  const payoutMethod = pickPayoutMethod ?? payout?.method ?? provDebt?.method ?? "efectivo";
+  const payoutAmount = payout ? (payout.debt ? Math.min(payout.amount ?? weOwe(payout.seller.id), weOwe(payout.seller.id)) : (payout.amount ?? owedTo(payout.seller.id)?.owed ?? 0)) : 0;
+  const provDebtOwed = provDebt ? Math.max(0, (owedTo(provDebt.seller.id)?.owed ?? 0) - (provDebt.paidNow ?? 0)) : 0;
+  const provDebtAmount = provDebt ? (provDebt.amount ?? provDebtOwed) : 0;
+  // «carla dejó un abono de 5 sesiones de venus freeze, pagó 250000» → abono nuevo (la plata entra hoy).
+  const prepaidNote = useMemo(() => (canExpense && !provDebt && !payout ? parsePrepaidNote(typed) : null), [typed, canExpense, provDebt, payout]);
+  const [pickPrepaidMethod, setPickPrepaidMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | null>(null);
+  const newPrepaid = prepaidNote
+    ? (() => {
+        const item = preview?.lines.find((l) => l.item.kind === "practica")?.item ?? null;
+        const sessions = prepaidNote.sessions;
+        const amount = prepaidNote.amount;
+        const unitPrice = prepaidNote.unitPrice ?? (sessions && amount ? Math.round(amount / sessions) : (item?.price ?? null));
+        const patient = titleCase(pickPatient.trim() || prepaidPatient(typed, item?.name ?? null) || preview?.patient || "");
+        return { patient, item, sessions, amount, unitPrice, method: pickPrepaidMethod ?? prepaidNote.method };
+      })()
+    : null;
+  const prepaidReady = !!newPrepaid && !!newPrepaid.patient && !!newPrepaid.item && !!newPrepaid.amount && !!newPrepaid.method;
+  // Seña nueva: «carla dejó 20000 de seña para botox, viene el 28/10» (entra a la caja hoy).
+  const depositNote = useMemo(() => (canExpense && !provDebt && !payout && !prepaidNote ? parseDepositNote(typed) : null), [typed, canExpense, provDebt, payout, prepaidNote]);
+  const [pickDepositMethod, setPickDepositMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | null>(null);
+  const [pickDepositDate, setPickDepositDate] = useState<string | null>(null);
+  const newDeposit = depositNote
+    ? (() => {
+        const item = preview?.lines.find((l) => l.item.kind === "practica")?.item ?? null;
+        return {
+          patient: titleCase(pickPatient.trim() || depositPatient(typed, item?.name ?? null) || preview?.patient || ""),
+          item,
+          amount: depositNote.amount,
+          dueOn: pickDepositDate ?? depositNote.dueOn,
+          method: pickDepositMethod ?? depositNote.method,
+        };
+      })()
+    : null;
+  const depositReady = !!newDeposit && !!newDeposit.patient && newDeposit.amount > 0 && !!newDeposit.method;
+  // Lo que debe el consultorio: «le debemos 300000 a la distribuidora, avisame todos los días» / «le pagamos a la distribuidora».
+  const [payablesData, refreshPayables] = usePoll<{ ok: boolean; payables: PayableRow[] }>("/api/payables", 60_000);
+  const openPayables = useMemo(() => (payablesData?.ok ? payablesData.payables : []), [payablesData]);
+  const duePayables = openPayables.filter((p) => p.due);
+  const payablePay = useMemo(
+    () => (canExpense && !provDebt && !payout && !prepaidNote && !depositNote ? parsePayablePayment(typed, openPayables) : null),
+    [typed, canExpense, provDebt, payout, prepaidNote, depositNote, openPayables],
+  );
+  const payableNote = useMemo(
+    () => (canExpense && !provDebt && !payout && !prepaidNote && !depositNote && !payablePay ? parsePayable(typed, realNowIso().slice(0, 16)) : null),
+    [typed, canExpense, provDebt, payout, prepaidNote, depositNote, payablePay],
+  );
+  const [pickPayableId, setPickPayableId] = useState<string | null>(null);
+  const [payablePayAmount, setPayablePayAmount] = useState<string | null>(null);
+  const [payablePayMethod, setPayablePayMethod] = useState<PayMethod | null>(null);
+  const payingPayable = payablePay ? (payablePay.payables.length === 1 ? payablePay.payables[0] : (payablePay.payables.find((p) => p.id === pickPayableId) ?? null)) : null;
+  const payableAmount = payingPayable
+    ? payablePayAmount !== null
+      ? toPesos(payablePayAmount)
+      : Math.min(payablePay?.amount ?? payingPayable.remaining, payingPayable.remaining)
+    : 0;
+  const payableMethod = payablePayMethod ?? payablePay?.method ?? null;
+  const [pickCreditor, setPickCreditor] = useState<string | null>(null);
+  const [pickPayableRemind, setPickPayableRemind] = useState<{ mode: PayableRow["remindMode"]; at: string | null } | null>(null);
+  const newPayable = payableNote
+    ? {
+        creditor: (pickCreditor ?? payableNote.creditor).trim(),
+        concept: payableNote.concept,
+        amount: payableNote.amount,
+        remindMode: pickPayableRemind ? pickPayableRemind.mode : payableNote.remindMode,
+        remindAt: pickPayableRemind ? pickPayableRemind.at : payableNote.remindAt,
+      }
+    : null;
+  const payableReady = !!newPayable && !!newPayable.creditor && !!newPayable.amount;
+  function resetPayablePicks() {
+    setPickPayableId(null);
+    setPayablePayAmount(null);
+    setPayablePayMethod(null);
+    setPickCreditor(null);
+    setPickPayableRemind(null);
+  }
   // Deudas: «carla pagó la deuda» → cobro; «carla debe 40000» (sin práctica) → deuda suelta.
-  const [debtsData, refreshDebts] = usePoll<{ ok: boolean; debts: OpenDebt[] }>("/api/debts", 30_000);
+  const [debtsData, refreshDebtsList] = usePoll<{ ok: boolean; debts: OpenDebt[] }>("/api/debts", 30_000);
+  // Deudas con recordatorio de hoy (o vencido): se muestran arriba, «Para cobrar hoy».
+  const [dueData, refreshDue] = usePoll<{ ok: boolean; debts: (OpenDebt & { remindOn: string | null })[] }>("/api/debts/reminders", 60_000);
+  const dueDebts = dueData?.ok ? dueData.debts : [];
+  const todayStr = useToday();
+  const refreshDebts = () => {
+    refreshDebtsList();
+    refreshDue();
+  };
+  async function postponeDebt(id: string) {
+    const d = new Date(`${todayStr}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 7);
+    const r = await call(`/api/debts/${id}`, "PATCH", { remindOn: d.toISOString().slice(0, 10) });
+    if (!r.ok) return showToast(r.error ?? "No se pudo cambiar el recordatorio.");
+    showToast(`Te lo recuerdo el ${remindLabel(d.toISOString().slice(0, 10))}.`);
+    refreshDue();
+  }
   const openDebts = useMemo(() => (debtsData?.ok ? debtsData.debts : []), [debtsData]);
-  const debtPay = useMemo(() => (canExpense ? parseDebtPayment(typed, openDebts) : null), [typed, canExpense, openDebts]);
+  const debtPay = useMemo(() => (canExpense && !payout && !provDebt && !prepaidNote && !depositNote && !payablePay && !payableNote ? parseDebtPayment(typed, openDebts) : null), [typed, canExpense, openDebts, payout, provDebt, prepaidNote, depositNote, payablePay, payableNote]);
   const [pickDebtId, setPickDebtId] = useState<string | null>(null);
   const [debtPayAmount, setDebtPayAmount] = useState<string | null>(null);
   const [debtPayMethod, setDebtPayMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | null>(null);
   const payingDebt = debtPay ? (debtPay.debts.length === 1 ? debtPay.debts[0] : debtPay.debts.find((d) => d.id === pickDebtId) ?? null) : null;
+  const debtMethod = debtPayMethod ?? debtPay?.method ?? null;
   const payAmount = payingDebt ? (debtPayAmount !== null ? toPesos(debtPayAmount) : Math.min(debtPay?.amount ?? payingDebt.remaining, payingDebt.remaining)) : 0;
   const newDebt =
-    canExpense && !debtPay && preview && preview.debt && !preview.lines.length && !preview.unresolved.length
-      ? { debtor: titleCase(preview.patient || extractMoney(typed).text), amount: preview.debt, providerId: preview.sellerId }
+    canExpense && !debtPay && !payout && !provDebt && !prepaidNote && !depositNote && !payablePay && !payableNote && preview && preview.debt && !preview.lines.length && !preview.unresolved.length
+      ? {
+          debtor: titleCase(preview.patient || debtorName(extractMoney(typed).text)),
+          amount: preview.debt,
+          // «marisa me debe 5000»: si el nombre se tomó como profesional, es quien debe, no de quién es la atención.
+          providerId: !preview.patient.trim() && !pickSeller ? null : preview.sellerId, remindOn: preview.remindOn }
       : null;
-  const expense = useMemo(() => (canExpense && !payout && !debtPay ? parseExpense(typed) : null), [typed, canExpense, payout, debtPay]);
+  const expense = useMemo(
+    () => (canExpense && !payout && !debtPay && !provDebt && !prepaidNote && !depositNote && !payablePay && !payableNote ? parseExpense(typed) : null),
+    [typed, canExpense, payout, debtPay, provDebt, prepaidNote, depositNote, payablePay, payableNote],
+  );
   const possible = preview ? sellersFor(preview.lines, sellers) : null;
   const notHers = !!preview && preview.lines.some((l) => !allowedFor(l.item, preview.sellerId));
   const missingSeller = !!preview && !isMedico && !preview.sellerId;
-  const nothing = !!preview && !preview.lines.length && !preview.unresolved.length && !preview.patientUnsure;
+  // Por obra social sin decir qué se hizo: es una «Atención» (la arma el servidor).
+  const nothing = !!preview && !preview.insurer && !preview.lines.length && !preview.unresolved.length && !preview.patientUnsure;
   // Lo que falta contestar en la vista previa (todo se resuelve ahí, con un toque).
-  const pendingQ = !!preview && (preview.unresolved.length > 0 || preview.patientUnsure);
-  const missingPatient = !!preview && (hasPractice(preview.lines) || !!preview.debt) && !preview.patient.trim();
-  const canSave = !!preview && !nothing && !missingSeller && !notHers && !pendingQ && !missingPatient;
+  // Sesión del abono sin nada más: no hay plata ni medio para preguntar.
+  const onlyAbono =
+    (!!preview?.abono && preview.useAbono === true && preview.lines.every((l) => l.item.id === preview.abono!.itemId)) ||
+    (!!preview?.insurer && preview.lines.every((l) => l.item.kind !== "producto"));
+  const pendingQ =
+    !!preview && (preview.unresolved.length > 0 || preview.patientUnsure || (!!preview.abono && preview.useAbono === null) || preview.abonoChoices.length > 1);
+  const missingPatient = !!preview && (hasPractice(preview.lines) || !!preview.debt || !!preview.insurer) && !preview.patient.trim();
+  const giftCardLine = preview?.lines.find((l) => l.item.giftCard) ?? null;
+  const invalidGiftCardIssue = !!giftCardLine && giftCardKind === "treatment" && !giftCardTreatmentId;
+  const canSave = !!preview && !nothing && !missingSeller && !notHers && !pendingQ && !missingPatient && !invalidGiftCardIssue;
+
+  async function lookupGiftCard() {
+    setGiftCardError("");
+    setGiftCardFound(null);
+    try {
+      const response = await fetch(`/api/gift-cards?code=${encodeURIComponent(giftCardCodeInput)}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) return setGiftCardError(data.error ?? "No se encontró la gift card.");
+      setGiftCardFound(data.giftCard);
+    } catch {
+      setGiftCardError("No se pudo consultar la gift card.");
+    }
+  }
+
+  function applyGiftCard() {
+    if (!giftCardFound || !preview) return;
+    if (giftCardFound.kind === "treatment" && !preview.lines.some((l) => l.item.id === giftCardFound.treatmentItemId)) {
+      setGiftCardError(`Este vale es para ${giftCardFound.treatmentName}.`);
+      return;
+    }
+    const amount = Math.min(giftCardFound.balance, preview.listNow);
+    setPickSplit({ efectivo: preview.listNow - amount, transferencia: 0, tarjeta: 0, giftcard: amount, usd: 0 });
+    setPickPay("varios");
+    setPickPaid(null);
+    setGiftCardError("");
+  }
 
   async function save(d: Draft) {
     if (d.debt && d.paid === null && !d.split) d = { ...d, paid: shownPaid(d) };
@@ -421,7 +717,12 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       patientName: d.patient.trim(),
       providerId: d.sellerId,
       ...(d.split ? { payments: splitParts(d.split, rate) } : { paymentMethod: d.payment }),
-      ...(d.debt ? { debt: d.debt } : {}),
+      ...(d.debt ? { debt: d.debt, debtRemindOn: d.remindOn } : {}),
+      ...(d.prepaidId ? { prepaidId: d.prepaidId } : {}),
+      ...(d.insurerId ? { insurerId: d.insurerId } : {}),
+      ...(d.depositId ? { depositId: d.depositId } : {}),
+      ...(d.split?.giftcard ? { giftCardCode: giftCardFound?.code } : {}),
+      ...(giftCardLine ? { giftCardIssue: { kind: giftCardKind, treatmentItemId: giftCardKind === "treatment" ? giftCardTreatmentId : null, buyer: giftCardBuyer } } : {}),
       lines: visitLines(d),
     });
     setBusy(false);
@@ -430,7 +731,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       return showToast(r.error ?? "No se pudo anotar.");
     }
     // ¡Registrado! → animación y de vuelta al inicio, listo para la próxima.
-    setFlash(summaryOf(d));
+    setFlash(r.giftCardCode ? `${summaryOf(d)} · Código gift card: ${r.giftCardCode}` : summaryOf(d));
     setLastVisit(String(r.visitId ?? ""));
     setText("");
     setPickSeller(null);
@@ -439,15 +740,27 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setPickPaid(null);
     setPickShare(null);
     setPickDebt(null);
+    setPickRemind(undefined);
+    setPickAbono(null);
+    setPickAbonoId(null);
+    setPickInsurer(undefined);
+    setPickDeposit(null);
     setChosen({});
     setUnsureIs(null);
     setPickPatient("");
+    setGiftCardCodeInput("");
+    setGiftCardFound(null);
+    setGiftCardBuyer("");
+    setGiftCardTreatmentId("");
+    setGiftCardKind("amount");
     setMode("idle");
     if (d.debt) refreshDebts();
+    if (d.prepaidId) refreshPrepaids();
+    if (d.depositId) refreshDeposits();
     refreshSales();
     refreshCatalog();
     refreshPayouts();
-    setTimeout(() => setFlash(null), 1400);
+    setTimeout(() => setFlash(null), 2400);
   }
 
   async function saveExpense() {
@@ -457,30 +770,128 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     const r = await call("/api/expenses", "POST", expense);
     setBusy(false);
     if (!r.ok) return showToast(r.error ?? "No se pudo anotar el egreso.");
-    expenseDone(`Egreso · ${expense.concept} · ${money(expense.amount)}`);
+    expenseDone(`Gasto anotado: ${expense.concept}, ${money(expense.amount)}.`);
   }
 
   function expenseDone(msg: string) {
     setExpenseForm(null);
+    setPickPayoutMethod(null);
     setFlash(msg);
     setText("");
     refreshExpenses();
-    setTimeout(() => setFlash(null), 1400);
+    setTimeout(() => setFlash(null), 2400);
   }
+
+  const how = (m: "efectivo" | "transferencia") => (m === "efectivo" ? "en efectivo" : "por transferencia");
 
   async function savePayout() {
     if (!payout || busy) return;
     setBusy(true);
-    const r = await call("/api/payouts", "POST", { providerId: payout.seller.id, amount: payout.amount });
+    const r = payout.debt
+      ? await call("/api/provider-debts/pay", "POST", { providerId: payout.seller.id, amount: payoutAmount, method: payoutMethod })
+      : await call("/api/payouts", "POST", { providerId: payout.seller.id, amount: payout.amount, method: payoutMethod });
     setBusy(false);
     if (!r.ok) return showToast(r.error ?? "No se pudo anotar el pago.");
-    const p = r.payout as { amount: number; providerName: string };
     refreshPayouts();
-    expenseDone(`Pagado a ${p.providerName} · ${money(p.amount)}`);
+    refreshProvDebts();
+    if (payout.debt) {
+      const left = Number(r.remaining ?? 0);
+      return expenseDone(`Pagado a ${payout.seller.name} · ${money(payoutAmount)} ${how(payoutMethod)}. ${left ? `Se le sigue debiendo ${money(left)}.` : "Ya no se le debe nada."}`);
+    }
+    const p = r.payout as { amount: number; providerName: string };
+    expenseDone(`Pagado a ${p.providerName} · ${money(p.amount)} ${how(payoutMethod)}`);
+  }
+
+  async function savePrepaid() {
+    if (!newPrepaid || !prepaidReady || busy) return;
+    setBusy(true);
+    const r = await call("/api/prepaids", "POST", {
+      patient: newPrepaid.patient,
+      itemId: newPrepaid.item!.id,
+      sessions: newPrepaid.sessions,
+      amount: newPrepaid.amount,
+      unitPrice: newPrepaid.unitPrice,
+      method: newPrepaid.method,
+    });
+    setBusy(false);
+    if (!r.ok) return showToast(r.error ?? "No se pudo anotar el abono.");
+    setPickPrepaidMethod(null);
+    refreshPrepaids();
+    expenseDone(
+      `Abono · ${newPrepaid.patient} · ${newPrepaid.sessions ? `${newPrepaid.sessions} sesiones de ` : ""}${newPrepaid.item!.name} · ${money(newPrepaid.amount!)}`,
+    );
+  }
+
+  async function saveDeposit() {
+    if (!newDeposit || !depositReady || busy) return;
+    setBusy(true);
+    const r = await call("/api/deposits", "POST", {
+      patient: newDeposit.patient,
+      itemId: newDeposit.item?.id ?? null,
+      amount: newDeposit.amount,
+      method: newDeposit.method,
+      dueOn: newDeposit.dueOn,
+    });
+    setBusy(false);
+    if (!r.ok) return showToast(r.error ?? "No se pudo anotar la seña.");
+    setPickDepositMethod(null);
+    setPickDepositDate(null);
+    refreshDeposits();
+    expenseDone(`Seña · ${newDeposit.patient}${newDeposit.item ? ` · ${newDeposit.item.name}` : ""} · ${money(newDeposit.amount)}${newDeposit.dueOn ? ` · viene el ${remindLabel(newDeposit.dueOn)}` : ""}`);
+  }
+
+  async function saveNewPayable() {
+    if (!newPayable || !payableReady || busy) return;
+    setBusy(true);
+    const r = await call("/api/payables", "POST", newPayable);
+    setBusy(false);
+    if (!r.ok) return showToast(r.error ?? "No se pudo anotar.");
+    resetPayablePicks();
+    refreshPayables();
+    expenseDone(`Debemos ${money(newPayable.amount!)} a ${newPayable.creditor} · aviso: ${payableRemindText(newPayable.remindMode, newPayable.remindAt)}`);
+  }
+
+  async function savePayablePay() {
+    if (!payingPayable || busy) return;
+    if (payableAmount <= 0) return showToast("¿Cuánto se pagó?");
+    if (!payableMethod) return showToast("¿Cómo se pagó? Tocá efectivo, transferencia o tarjeta.");
+    setBusy(true);
+    const r = await call(`/api/payables/${payingPayable.id}/pay`, "POST", { amount: payableAmount, method: payableMethod });
+    setBusy(false);
+    if (!r.ok) return showToast(r.error ?? "No se pudo anotar el pago.");
+    const left = (r.payable as PayableRow).remaining;
+    resetPayablePicks();
+    refreshPayables();
+    refreshExpenses();
+    expenseDone(`Pagado ${money(payableAmount)} a ${payingPayable.creditor}. ${left ? `Falta ${money(left)}.` : "Deuda saldada: no avisa más."}`);
+  }
+
+  async function saveProvDebt() {
+    if (!provDebt || busy) return;
+    if (provDebtAmount <= 0) return showToast(`Hoy no se le debe nada a ${provDebt.seller.name}.`);
+    setBusy(true);
+    if (provDebt.paidNow) {
+      const r = await call("/api/payouts", "POST", { providerId: provDebt.seller.id, amount: provDebt.paidNow, method: payoutMethod });
+      if (!r.ok) {
+        setBusy(false);
+        return showToast(r.error ?? "No se pudo anotar el pago.");
+      }
+    }
+    const r = await call("/api/provider-debts", "POST", { providerId: provDebt.seller.id, amount: provDebtAmount });
+    setBusy(false);
+    refreshPayouts();
+    refreshProvDebts();
+    if (!r.ok) return showToast(r.error ?? "No se pudo anotar la deuda.");
+    expenseDone(`${provDebt.paidNow ? `Pagado ${money(provDebt.paidNow)} · ` : ""}Le debemos a ${provDebt.seller.name} ${money(provDebtAmount)}`);
   }
 
   function resetDebtPicks() {
     setPickDebt(null);
+    setPickRemind(undefined);
+    setPickAbono(null);
+    setPickAbonoId(null);
+    setPickInsurer(undefined);
+    setPickDeposit(null);
     setPickDebtId(null);
     setDebtPayAmount(null);
     setDebtPayMethod(null);
@@ -489,22 +900,24 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   async function saveDebtPayment() {
     if (!payingDebt || busy) return;
     if (payAmount <= 0) return showToast("¿Cuánto pagó?");
+    if (!debtMethod) return showToast("¿Cómo pagó? Tocá efectivo, transferencia o tarjeta.");
     setBusy(true);
-    const r = await call(`/api/debts/${payingDebt.id}/pay`, "POST", { amount: payAmount, method: debtPayMethod ?? debtPay?.method ?? null });
+    const r = await call(`/api/debts/${payingDebt.id}/pay`, "POST", { amount: payAmount, method: debtMethod });
     setBusy(false);
     if (!r.ok) return showToast(r.error ?? "No se pudo cobrar.");
     const left = (r.debt as { remaining: number }).remaining;
     resetDebtPicks();
     refreshDebts();
     refreshPayouts();
-    expenseDone(`Cobrado · ${payingDebt.debtor} · ${money(payAmount)}${left ? ` · debe ${money(left)}` : " · deuda saldada"}`);
+    const how = debtMethod === "efectivo" ? "en efectivo" : debtMethod === "tarjeta" ? "con tarjeta" : "por transferencia";
+    expenseDone(`${payingDebt.debtor} pagó ${money(payAmount)} ${how}. ${left ? `Queda debiendo ${money(left)}.` : "Ya no debe nada."}`);
   }
 
   async function saveNewDebt() {
     if (!newDebt || busy) return;
     if (!newDebt.debtor) return showToast("¿Quién debe?");
     setBusy(true);
-    const r = await call("/api/debts", "POST", { debtor: newDebt.debtor, amount: newDebt.amount, providerId: newDebt.providerId });
+    const r = await call("/api/debts", "POST", { debtor: newDebt.debtor, amount: newDebt.amount, providerId: newDebt.providerId, remindOn: newDebt.remindOn });
     setBusy(false);
     if (!r.ok) return showToast(r.error ?? "No se pudo anotar la deuda.");
     resetDebtPicks();
@@ -513,6 +926,11 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   }
 
   function go() {
+    if (provDebt) return saveProvDebt();
+    if (newPrepaid) return savePrepaid();
+    if (newDeposit) return saveDeposit();
+    if (payablePay) return savePayablePay();
+    if (newPayable) return saveNewPayable();
     if (debtPay) return saveDebtPayment();
     if (newDebt) return saveNewDebt();
     if (payout) return savePayout();
@@ -525,7 +943,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const card = preview?.lines.reduce((n, l) => n + lineCard(l), 0) ?? 0;
   // Lo que ingresó (lo escrito o la lista) y el reparto: la profesional (su % o lo aclarado) y Decles.
   const ingreso = preview ? (preview.paid ?? (preview.payment === "tarjeta" ? card : cash)) : 0;
-  const auto = preview ? autoShare(preview, sellers) : 0;
+  const auto = preview ? autoShare(preview, sellers, preview.useDeposit ? preview.deposit : null) : 0;
   const sellerName = sellers.find((s) => s.id === preview?.sellerId)?.name;
   // La dueña (médica admin) no cobra comisión: lo que entra es todo del consultorio.
   const sellerOwner = !!sellers.find((s) => s.id === preview?.sellerId)?.owner;
@@ -541,6 +959,101 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
           <h1 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-.02em] sm:text-[22px]">
             {greeting()}, {firstName(actor.name)}
           </h1>
+          {canExpense && dueDebts.length > 0 && (
+            <section aria-label="Para cobrar hoy" className="flex flex-col gap-2 rounded-2xl border-2 border-warn/40 px-4 py-3">
+              <span className="text-[16px] font-semibold text-warn">Para cobrar hoy</span>
+              <ul className="flex flex-col">
+                {dueDebts.map((d) => (
+                  <li key={d.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-divider py-2.5 first:border-0">
+                    <span className="min-w-0 flex-1">
+                      <b className="font-semibold">{d.debtor}</b> debe <b className="font-semibold tabular-nums text-owe">{money(d.remaining)}</b>
+                      <span className="block text-[14px] text-neutral-500">
+                        {[d.concept, d.remindOn && d.remindOn < todayStr ? `había que cobrar el ${remindLabel(d.remindOn)}` : "recordatorio de hoy"].filter(Boolean).join(" · ")}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const t = `${d.debtor.split(" ")[0]} pagó la deuda`;
+                        setText(t);
+                        requestAnimationFrame(() => {
+                          box.current?.focus();
+                          box.current?.setSelectionRange(t.length, t.length);
+                        });
+                      }}
+                      className={CHIP_ON}
+                    >
+                      Cobrar
+                    </button>
+                    <button type="button" onClick={() => postponeDebt(d.id)} className={CHIP}>
+                      En una semana
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {canExpense && openDeposits.some((x) => x.dueOn === todayStr) && (
+            <section aria-label="Hoy vienen con seña" className="flex flex-col gap-2 rounded-2xl border-2 border-neutral-800 px-4 py-3">
+              <span className="text-[16px] font-semibold">Hoy vienen con seña</span>
+              <ul className="flex flex-col">
+                {openDeposits
+                  .filter((x) => x.dueOn === todayStr)
+                  .map((x) => (
+                    <li key={x.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-divider py-2.5 first:border-0">
+                      <span className="min-w-0 flex-1">
+                        <b className="font-semibold">{x.patient}</b>
+                        {x.itemName && <span className="text-neutral-400"> · {x.itemName}</span>}
+                        <span className="block text-[14px] text-neutral-500">dejó {money(x.amount)} de seña</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const t = `${x.itemName ? `${x.itemName.toLowerCase()} a ` : ""}${x.patient}, `;
+                          setText(t);
+                          requestAnimationFrame(() => {
+                            box.current?.focus();
+                            box.current?.setSelectionRange(t.length, t.length);
+                          });
+                        }}
+                        className={CHIP}
+                      >
+                        Anotar
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          )}
+          {canExpense && duePayables.length > 0 && (
+            <section aria-label="Para pagar" className="flex flex-col gap-2 rounded-2xl border-2 border-warn/40 px-4 py-3">
+              <span className="text-[16px] font-semibold text-warn">Para pagar</span>
+              <ul className="flex flex-col">
+                {duePayables.map((p) => (
+                  <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-divider py-2.5 first:border-0">
+                    <span className="min-w-0 flex-1">
+                      Le debemos <b className="font-semibold tabular-nums text-owe">{money(p.remaining)}</b> a <b className="font-semibold">{p.creditor}</b>
+                      <span className="block text-[14px] text-neutral-500">{[p.concept, `aviso: ${payableRemindText(p.remindMode, p.remindAt)}`].filter(Boolean).join(" · ")}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const t = `le pagamos a ${p.creditor.toLowerCase()}`;
+                        setText(t);
+                        requestAnimationFrame(() => {
+                          box.current?.focus();
+                          box.current?.setSelectionRange(t.length, t.length);
+                        });
+                      }}
+                      className={CHIP_ON}
+                    >
+                      Pagar
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           <div className="flex flex-col gap-3">
             <label htmlFor="anotar" className="text-[15px] font-medium">
               ¿Qué querés anotar?
@@ -561,6 +1074,11 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                   setPickPaid(null);
                   setPickShare(null);
                   setPickDebt(null);
+    setPickRemind(undefined);
+    setPickAbono(null);
+    setPickAbonoId(null);
+    setPickInsurer(undefined);
+    setPickDeposit(null);
                   setPickDebtId(null);
                   setDebtPayAmount(null);
                   setDebtPayMethod(null);
@@ -591,153 +1109,437 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     key={h.label + i}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => accept(h.text)}
-                    className={`rounded-full border px-3.5 py-1.5 text-[14px] font-medium transition-colors ${
+                    className={`min-h-[44px] rounded-full border px-4 py-2 text-[15px] font-medium transition-colors ${
                       i === 0 ? "border-accent-600 text-fg" : "border-neutral-800 text-neutral-300 hover:border-accent-600"
                     }`}
                   >
                     {h.label}
                   </button>
                 ))}
-                <span className="hidden text-[12.5px] text-neutral-500 sm:inline">Tab para completar</span>
               </div>
             )}
 
-            {debtPay ? (
-              <div className="flex animate-cl-in flex-col gap-3 rounded-xl border border-neutral-800 px-5 py-4">
-                <p className="text-[12px] uppercase tracking-[.06em] text-neutral-500">Cobro de deuda · entra a la caja de hoy</p>
-                {!payingDebt ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[14px]">¿Cuál?</span>
-                    {debtPay.debts.map((d) => (
-                      <button key={d.id} onClick={() => setPickDebtId(d.id)} className={CHIP}>
-                        {d.debtor} · {money(d.remaining)}
-                      </button>
-                    ))}
+            {provDebt ? (
+              <Understood tone="owe" icon={<ClockIcon size={20} weight="bold" />} title="Le quedamos debiendo" note="Deuda del consultorio con la profesional">
+                <Person name={provDebt.seller.name}>
+                  Le debemos <b className="font-semibold tabular-nums text-owe">{money(provDebtAmount)}</b>
+                  {provDebt.amount === null && (provDebt.paidNow ? " · el resto de hoy" : " · todo lo de hoy")}
+                </Person>
+                <p className="text-[15px] text-neutral-400">
+                  Su parte de hoy <span className="tabular-nums text-fg">{money(owedTo(provDebt.seller.id)?.share ?? 0)}</span> · ya se le pagó{" "}
+                  <span className="tabular-nums text-fg">{money(owedTo(provDebt.seller.id)?.paid ?? 0)}</span>
+                  {weOwe(provDebt.seller.id) > 0 && (
+                    <>
+                      {" "}
+                      · ya anotado como deuda <span className="tabular-nums text-fg">{money(weOwe(provDebt.seller.id))}</span>
+                    </>
+                  )}
+                </p>
+                {provDebt.paidNow ? (
+                  <div className="flex flex-col gap-2">
+                    <span className="text-[16px] font-semibold">
+                      Ahora se le pagan <span className="tabular-nums">{money(provDebt.paidNow)}</span>. ¿Cómo?
+                    </span>
+                    <PayoutMethodChips value={payoutMethod} onChange={setPickPayoutMethod} />
                   </div>
-                ) : (
-                  <>
-                    <div className="flex flex-col gap-0.5">
-                      <p className="flex items-baseline justify-between gap-3 text-[14px]">
-                        <b className="font-medium">{payingDebt.debtor}</b>
-                        <span className="whitespace-nowrap tabular-nums text-neutral-300">debe {money(payingDebt.remaining)}</span>
-                      </p>
-                      <p className="text-[13px] text-neutral-500">
-                        {[payingDebt.concept, payingDebt.providerName, `desde el ${payingDebt.createdAt.slice(8, 10)}/${payingDebt.createdAt.slice(5, 7)}`]
-                          .filter(Boolean)
-                          .join(" · ")}
-                        {payingDebt.paid > 0 && ` · ya pagó ${money(payingDebt.paid)}`}
-                      </p>
-                    </div>
-                    <label className="flex flex-wrap items-center gap-2 text-[14px]">
-                      <span className="w-[112px] text-neutral-400">Paga ahora</span>
-                      <input
-                        value={`$ ${payAmount.toLocaleString("es-AR")}`}
-                        onChange={(e) => setDebtPayAmount(e.target.value.replace(/\D/g, ""))}
-                        inputMode="numeric"
-                        className={MONEY_IN}
-                      />
-                      <span className="text-[13px] text-neutral-500">
-                        {payAmount >= payingDebt.remaining ? "salda la deuda" : `queda debiendo ${money(Math.max(0, payingDebt.remaining - payAmount))}`}
-                      </span>
-                    </label>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {PAYMENTS.filter(([m]) => m !== "dolares").map(([m, label]) => {
-                        const on = (debtPayMethod ?? debtPay.method) === m;
-                        return (
-                          <button key={m} aria-pressed={on} onClick={() => setDebtPayMethod(on ? null : (m as "efectivo" | "transferencia" | "tarjeta"))} className={on ? CHIP_ON : CHIP}>
-                            {label}
-                          </button>
-                        );
-                      })}
-                      {!(debtPayMethod ?? debtPay.method) && <span className="text-[13px] text-neutral-500">sin elegir = efectivo</span>}
-                    </div>
-                  </>
-                )}
-              </div>
-            ) : newDebt ? (
-              <div className="flex animate-cl-in flex-col gap-2 rounded-xl border border-neutral-800 px-5 py-4">
-                <p className="text-[12px] uppercase tracking-[.06em] text-neutral-500">Deuda · le debe al consultorio</p>
-                <p className="flex items-baseline justify-between gap-3 text-[14px]">
-                  <b className="font-medium">{newDebt.debtor || "¿Quién?"}</b>
-                  <span className="whitespace-nowrap tabular-nums">{money(newDebt.amount)}</span>
+                ) : null}
+                {provDebtAmount <= 0 && <Missing>Hoy no se le debe nada para dejar pendiente</Missing>}
+                <p className="text-[14px] text-neutral-500">
+                  Queda en Cierre, «Le debemos a profesionales». Se le paga escribiendo «le pagué la deuda a {provDebt.seller.name.split(" ")[0]}» o desde ahí.
                 </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[13px] text-neutral-400">¿De la atención de quién? (opcional)</span>
-                  {sellers.map((x) => (
-                    <button key={x.id} onClick={() => setPickSeller(pickSeller === x.id ? null : x.id)} className={newDebt.providerId === x.id ? CHIP_ON : CHIP}>
-                      {x.name}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[13px] text-neutral-500">El admin recibe el aviso. Se cobra escribiendo «{newDebt.debtor.split(" ")[0] || "carla"} pagó la deuda» o desde Cierre.</p>
-              </div>
-            ) : payout ? (
-              <div className="flex animate-cl-in flex-col gap-1 rounded-xl border border-neutral-800 px-5 py-4">
-                <p className="text-[12px] uppercase tracking-[.06em] text-neutral-500">Pago a profesional</p>
-                <p className="flex items-baseline justify-between gap-3 text-[14px]">
-                  <b className="font-medium">{payout.seller.name}</b>
-                  <span className="whitespace-nowrap tabular-nums">
-                    {payout.amount !== null ? money(payout.amount) : `todo lo de hoy · ${money(owedTo(payout.seller.id)?.owed ?? 0)}`}
-                  </span>
-                </p>
-                <p className="text-[13px] text-neutral-500">
-                  Su parte de hoy {money(owedTo(payout.seller.id)?.share ?? 0)} · ya pagado {money(owedTo(payout.seller.id)?.paid ?? 0)}. Sale de la caja.
-                </p>
-              </div>
-            ) : expense ? (
-              <div className="flex animate-cl-in flex-col gap-1 rounded-xl border border-neutral-800 px-5 py-4">
-                <p className="text-[12px] uppercase tracking-[.06em] text-neutral-500">Egreso de plata</p>
-                <p className="flex items-baseline justify-between gap-3 text-[14px]">
-                  <b className="font-medium">{expense.concept || "¿En qué?"}</b>
-                  <span className="whitespace-nowrap tabular-nums">{expense.amount ? `− ${money(expense.amount)}` : "¿Cuánto?"}</span>
-                </p>
-                <button onClick={() => setExpenseForm({ initial: expense })} className="self-start pt-1 text-[13px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline">
-                  Corregir
-                </button>
-              </div>
-            ) : preview ? (
-              <div className="flex animate-cl-in flex-col gap-3 rounded-xl border border-neutral-800 px-5 py-4">
-                {preview.askPatient && (
-                  <label className="flex flex-col gap-1">
-                    <span className={`text-[14px] ${preview.patient ? "text-neutral-400" : "text-accent"}`}>¿A qué paciente?</span>
+              </Understood>
+            ) : newPrepaid ? (
+              <Understood tone="in" icon={<ArrowDownIcon size={20} weight="bold" />} title="Abono nuevo" note="Lo paga antes: entra a la caja de hoy">
+                <Person name={newPrepaid.patient}>Paciente</Person>
+                {!newPrepaid.patient && (
+                  <div className="flex flex-col gap-2">
+                    <Missing>Falta de qué paciente es</Missing>
                     <input
                       value={pickPatient}
                       onChange={(e) => setPickPatient(e.target.value)}
-                      placeholder="Nombre de la paciente"
-                      className="border-b-2 border-neutral-800 bg-transparent pb-1 text-[16px] font-medium outline-none placeholder:text-neutral-600 focus:border-accent-600"
+                      placeholder="Nombre y apellido"
+                      className="min-h-[52px] rounded-xl border-2 border-neutral-800 bg-transparent px-4 text-[17px] outline-none focus:border-accent-700"
                     />
-                  </label>
-                )}
-                {preview.patient && !preview.patientUnsure && !preview.askPatient && (
-                  <p className="text-[14px]">
-                    <span className="text-neutral-400">Paciente </span>
-                    <b>{preview.patient}</b>
-                  </p>
-                )}
-                {preview.patientUnsure && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[14px]">
-                      <b>«{preview.patient}»</b> es…
-                    </span>
-                    <button onClick={() => setUnsureIs("patient")} className={CHIP}>
-                      la paciente
-                    </button>
-                    <button onClick={() => setUnsureIs("item")} className={CHIP}>
-                      lo que se hizo o vendió
-                    </button>
                   </div>
                 )}
+                {newPrepaid.item ? (
+                  <div className="flex flex-col gap-1">
+                    <b className="text-[18px] font-semibold">
+                      {newPrepaid.sessions ? `${newPrepaid.sessions} sesiones de ${newPrepaid.item.name}` : `Saldo para ${newPrepaid.item.name}`}
+                    </b>
+                    {newPrepaid.unitPrice && newPrepaid.amount ? (
+                      <span className="text-[15px] text-neutral-400">
+                        Precio congelado <span className="tabular-nums text-fg">{money(newPrepaid.unitPrice)}</span> por sesión
+                        {!newPrepaid.sessions && ` · alcanza para ${Math.floor(newPrepaid.amount / newPrepaid.unitPrice)} sesiones`}
+                        {newPrepaid.item.price !== newPrepaid.unitPrice && ` · hoy sale ${money(newPrepaid.item.price)}`}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : preview?.unresolved.length ? (
+                  <div className="flex flex-col gap-2">
+                    <Missing>¿Para qué tratamiento?</Missing>
+                    <div className="flex flex-wrap gap-2.5">
+                      {preview.unresolved[0].candidates.map((c) => (
+                        <button key={c.id} onClick={() => setChosen({ ...chosen, [preview.unresolved[0].text]: c.id })} className={CHIP}>
+                          {c.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <Missing>Falta para qué tratamiento: escribilo («… de venus freeze»)</Missing>
+                )}
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-[16px] font-semibold">Pagó</span>
+                  <b className="text-[22px] font-semibold tabular-nums text-in">{newPrepaid.amount ? `+ ${money(newPrepaid.amount)}` : "—"}</b>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <span className="text-[16px] font-semibold">¿Cómo pagó?</span>
+                  {!newPrepaid.method && <Missing>Falta cómo pagó</Missing>}
+                  <div className="flex flex-wrap gap-2.5">
+                    {(["efectivo", "transferencia", "tarjeta"] as const).map((m) => (
+                      <button key={m} aria-pressed={newPrepaid.method === m} onClick={() => setPickPrepaidMethod(m)} className={newPrepaid.method === m ? CHIP_ON : CHIP}>
+                        {m === "efectivo" ? "Efectivo" : m === "transferencia" ? "Transferencia" : "Tarjeta"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <p className="text-[14px] text-neutral-500">
+                  Cuando venga a hacerse una sesión, escribí «{newPrepaid.item?.name.toLowerCase() ?? "venus freeze"} a {newPrepaid.patient.split(" ")[0] || "carla"}, con abono»: no entra plata y la profesional cobra su parte ese día.
+                </p>
+              </Understood>
+            ) : newDeposit ? (
+              <Understood tone="in" icon={<ArrowDownIcon size={20} weight="bold" />} title="Seña" note="Entra a la caja de hoy; el día que viene paga el resto">
+                <Person name={newDeposit.patient}>Paciente</Person>
+                {!newDeposit.patient && (
+                  <div className="flex flex-col gap-2">
+                    <Missing>Falta de qué paciente es</Missing>
+                    <input
+                      value={pickPatient}
+                      onChange={(e) => setPickPatient(e.target.value)}
+                      placeholder="Nombre y apellido"
+                      className="min-h-[52px] rounded-xl border-2 border-neutral-800 bg-transparent px-4 text-[17px] outline-none focus:border-accent-700"
+                    />
+                  </div>
+                )}
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-[16px]">
+                    <b className="font-semibold">{newDeposit.item?.name ?? "Práctica sin definir"}</b>
+                    {newDeposit.item && <span className="text-neutral-400"> · ese día paga {money(Math.max(0, newDeposit.item.price - newDeposit.amount))}</span>}
+                  </span>
+                  <b className="whitespace-nowrap text-[22px] font-semibold tabular-nums text-in">+ {money(newDeposit.amount)}</b>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <span className="text-[16px] font-semibold">
+                    ¿Qué día viene?{" "}
+                    <span className="text-[14px] font-normal text-neutral-500">{newDeposit.dueOn ? `· ${remindLabel(newDeposit.dueOn)}` : "· si no sabés, dejalo"}</span>
+                  </span>
+                  <input
+                    type="date"
+                    value={newDeposit.dueOn ?? ""}
+                    onChange={(e) => setPickDepositDate(e.target.value || null)}
+                    className="min-h-[48px] self-start rounded-xl border-2 border-neutral-800 bg-transparent px-3 text-[16px] outline-none focus:border-accent-700 [color-scheme:light_dark]"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <span className="text-[16px] font-semibold">¿Cómo pagó la seña?</span>
+                  {!newDeposit.method && <Missing>Falta cómo pagó</Missing>}
+                  <div className="flex flex-wrap gap-2.5">
+                    {PAY_METHODS.map(([m, label]) => (
+                      <button key={m} aria-pressed={newDeposit.method === m} onClick={() => setPickDepositMethod(m)} className={newDeposit.method === m ? CHIP_ON : CHIP}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <p className="text-[14px] text-neutral-500">
+                  Cuando venga, anotá la atención como siempre («{newDeposit.item?.name.toLowerCase() ?? "botox"} a {newDeposit.patient.split(" ")[0] || "carla"}»): se descuenta la seña y paga el resto.
+                </p>
+              </Understood>
+            ) : payablePay ? (
+              <Understood
+                tone="out"
+                icon={<ArrowUpIcon size={20} weight="bold" />}
+                title="Pago de lo que debemos"
+                note={payableMethod === "efectivo" ? "Sale de la caja" : payableMethod ? "No sale de la caja" : "Es un egreso de hoy"}
+              >
+                {!payingPayable ? (
+                  <div className="flex flex-col gap-2">
+                    <Missing>¿Cuál de estas?</Missing>
+                    <div className="flex flex-wrap gap-2.5">
+                      {payablePay.payables.map((p) => (
+                        <button key={p.id} onClick={() => setPickPayableId(p.id)} className={CHIP}>
+                          {p.creditor}
+                          {p.concept ? ` · ${p.concept}` : ""} · {money(p.remaining)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <Person name={payingPayable.creditor}>
+                      Se le paga <b className="font-semibold tabular-nums text-fg">{money(payableAmount)}</b>
+                      {payableAmount === payingPayable.remaining ? " · todo" : ` de ${money(payingPayable.remaining)}`}
+                    </Person>
+                    <label className="flex flex-wrap items-center gap-3 text-[15px]">
+                      <span className="w-[120px] font-semibold">Pagó</span>
+                      <input
+                        value={payablePayAmount !== null ? (payablePayAmount ? `$ ${toPesos(payablePayAmount).toLocaleString("es-AR")}` : "") : `$ ${payableAmount.toLocaleString("es-AR")}`}
+                        onChange={(e) => setPayablePayAmount(e.target.value.replace(/\D/g, ""))}
+                        inputMode="numeric"
+                        className={MONEY_IN}
+                      />
+                    </label>
+                    <div className="flex flex-col gap-2">
+                      <span className="text-[16px] font-semibold">¿Cómo se pagó?</span>
+                      {!payableMethod && <Missing>Falta cómo se pagó</Missing>}
+                      <div className="flex flex-wrap gap-2.5">
+                        {PAY_METHODS.map(([m, label]) => (
+                          <button key={m} aria-pressed={payableMethod === m} onClick={() => setPayablePayMethod(m)} className={payableMethod === m ? CHIP_ON : CHIP}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <After label="Falta pagar después de esto" from={payingPayable.remaining} to={Math.max(0, payingPayable.remaining - payableAmount)} good />
+                  </>
+                )}
+              </Understood>
+            ) : newPayable ? (
+              <Understood tone="owe" icon={<ClockIcon size={20} weight="bold" />} title="Lo que debemos" note="Deuda del consultorio: te aviso hasta que se pague">
+                {newPayable.creditor ? (
+                  <Person name={titleCase(newPayable.creditor)}>
+                    Le debemos <b className="font-semibold tabular-nums text-owe">{newPayable.amount ? money(newPayable.amount) : "—"}</b>
+                    {newPayable.concept && ` · ${newPayable.concept}`}
+                  </Person>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <Missing>Falta a quién se le debe</Missing>
+                    <input
+                      value={pickCreditor ?? ""}
+                      onChange={(e) => setPickCreditor(e.target.value)}
+                      placeholder="Ej. Distribuidora"
+                      className="min-h-[52px] rounded-xl border-2 border-neutral-800 bg-transparent px-4 text-[17px] outline-none focus:border-accent-700"
+                    />
+                  </div>
+                )}
+                {!newPayable.amount && <Missing>Falta cuánto se debe: escribilo («… 300000 …»)</Missing>}
+                <div className="flex flex-col gap-2">
+                  <span className="text-[16px] font-semibold">
+                    ¿Cuándo te aviso? <span className="text-[14px] font-normal text-neutral-500">· {payableRemindText(newPayable.remindMode, newPayable.remindAt)}</span>
+                  </span>
+                  <PayableReminderPicker
+                    mode={newPayable.remindMode}
+                    at={newPayable.remindAt}
+                    onChange={(mode, at) => setPickPayableRemind({ mode, at })}
+                    chip={CHIP}
+                    chipOn={CHIP_ON}
+                    field="min-h-[44px] rounded-xl border-2 border-neutral-800 bg-transparent px-3 text-[16px] outline-none focus:border-accent-700"
+                  />
+                </div>
+                <p className="text-[14px] text-neutral-500">
+                  Se paga escribiendo «le pagamos a {newPayable.creditor || "la distribuidora"}» o desde Cierre → Lo que debemos. Pagada, no avisa más.
+                </p>
+              </Understood>
+            ) : debtPay ? (
+              <Understood tone="in" icon={<ArrowDownIcon size={20} weight="bold" />} title="Cobro de deuda" note="Entra a la caja de hoy">
+                {!payingDebt ? (
+                  <div className="flex flex-col gap-2">
+                    <Missing>¿Cuál de estas deudas?</Missing>
+                    <div className="flex flex-wrap gap-2.5">
+                      {debtPay.debts.map((d) => (
+                        <button key={d.id} onClick={() => setPickDebtId(d.id)} className={CHIP}>
+                          {d.debtor} · {money(d.remaining)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <Person name={payingDebt.debtor}>
+                      Debe <b className="font-semibold tabular-nums text-owe">{money(payingDebt.remaining)}</b> desde el{" "}
+                      {payingDebt.createdAt.slice(8, 10)}/{payingDebt.createdAt.slice(5, 7)}
+                      {(payingDebt.concept || payingDebt.providerName || payingDebt.paid > 0) && (
+                        <span className="block text-[14px] text-neutral-500">
+                          {[payingDebt.concept, payingDebt.providerName, payingDebt.paid > 0 ? `ya pagó ${money(payingDebt.paid)}` : null].filter(Boolean).join(" · ")}
+                        </span>
+                      )}
+                    </Person>
+
+                    <div className="h-px bg-divider" />
+
+                    <div className="flex flex-col gap-2">
+                      <label htmlFor="cobro-monto" className="text-[16px] font-semibold">
+                        ¿Cuánto paga?
+                      </label>
+                      <div className="flex flex-wrap items-center gap-4">
+                        <input
+                          id="cobro-monto"
+                          value={`$ ${payAmount.toLocaleString("es-AR")}`}
+                          onChange={(e) => setDebtPayAmount(e.target.value.replace(/\D/g, ""))}
+                          inputMode="numeric"
+                          className="h-14 w-[200px] rounded-xl border-2 border-neutral-800 bg-surface px-4 text-right text-[24px] font-semibold tabular-nums text-fg outline-none focus:border-in"
+                        />
+                        {payAmount >= payingDebt.remaining ? (
+                          <span className="inline-flex items-center gap-2 text-[16px] font-semibold text-in-fg">
+                            <CheckCircleIcon size={22} weight="bold" aria-hidden="true" /> Paga toda la deuda
+                          </span>
+                        ) : (
+                          <Missing>Queda debiendo {money(Math.max(0, payingDebt.remaining - payAmount))}</Missing>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <span id="cobro-medio" className="text-[16px] font-semibold">
+                        ¿Cómo pagó?
+                      </span>
+                      {!debtMethod && <Missing>Falta decir cómo pagó. Tocá una opción:</Missing>}
+                      <div role="radiogroup" aria-labelledby="cobro-medio" className="grid grid-cols-3 gap-2.5">
+                        {PAY_OPTIONS.filter(([m]) => m === "efectivo" || m === "transferencia" || m === "tarjeta").map(([m, label, Icon]) => {
+                          const on = debtMethod === m;
+                          return (
+                            <button key={m} role="radio" aria-checked={on} onClick={() => setDebtPayMethod(m as "efectivo" | "transferencia" | "tarjeta")} className={on ? PICK_ON : PICK}>
+                              <Icon size={24} aria-hidden="true" />
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <After
+                      label={`Deuda de ${firstName(payingDebt.debtor)} después de esto`}
+                      from={payingDebt.remaining}
+                      to={Math.max(0, payingDebt.remaining - payAmount)}
+                      good={payAmount >= payingDebt.remaining}
+                    />
+                  </>
+                )}
+              </Understood>
+            ) : newDebt ? (
+              <Understood tone="owe" icon={<ClockIcon size={20} weight="bold" />} title="Deuda nueva" note="Le debe al consultorio">
+                <Person name={newDebt.debtor}>
+                  Debe <b className="font-semibold tabular-nums text-owe">{money(newDebt.amount)}</b>
+                </Person>
+                {!newDebt.debtor && <Missing>Falta quién debe</Missing>}
+                <div className="flex flex-col gap-2">
+                  <span className="text-[16px] font-semibold">
+                    ¿De la atención de quién? <span className="text-[14px] font-normal text-neutral-500">(si no sabés, dejalo)</span>
+                  </span>
+                  <div className="flex flex-wrap gap-2.5">
+                    {sellers.map((x) => (
+                      <button key={x.id} aria-pressed={newDebt.providerId === x.id} onClick={() => setPickSeller(pickSeller === x.id ? null : x.id)} className={newDebt.providerId === x.id ? CHIP_ON : CHIP}>
+                        {x.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <ReminderPicker value={newDebt.remindOn} onChange={(v) => setPickRemind(v)} chip={CHIP} chipOn={CHIP_ON} />
+                <p className="text-[14px] text-neutral-500">
+                  El aviso te llega a vos y a los admins. Se cobra escribiendo «{newDebt.debtor.split(" ")[0] || "carla"} pagó la deuda» o desde Cierre.
+                </p>
+              </Understood>
+            ) : payout ? (
+              <Understood
+                tone="out"
+                icon={<ArrowUpIcon size={20} weight="bold" />}
+                title={payout.debt ? "Pago de lo que se le debía" : "Pago a profesional"}
+                note={payoutMethod === "efectivo" ? "Sale de la caja" : "Por transferencia: no sale de la caja"}
+              >
+                <Person name={payout.seller.name}>
+                  Se le paga <b className="font-semibold tabular-nums text-fg">{money(payoutAmount)}</b>
+                  {payout.amount === null && (payout.debt ? " · todo lo que se le debía" : " · todo lo de hoy")}
+                </Person>
+                <div className="flex flex-col gap-2">
+                  <span className="text-[16px] font-semibold">¿Cómo se le paga?</span>
+                  <PayoutMethodChips value={payoutMethod} onChange={setPickPayoutMethod} />
+                </div>
+                {payout.debt ? (
+                  <>
+                    {weOwe(payout.seller.id) <= 0 && <Missing>No figura nada que se le deba de otros días</Missing>}
+                    <After label="Se le debe después de esto" from={weOwe(payout.seller.id)} to={Math.max(0, weOwe(payout.seller.id) - payoutAmount)} good />
+                  </>
+                ) : (
+                <>
+                <p className="text-[15px] text-neutral-400">
+                  Su parte de hoy <span className="tabular-nums text-fg">{money(owedTo(payout.seller.id)?.share ?? 0)}</span> · ya se le pagó{" "}
+                  <span className="tabular-nums text-fg">{money(owedTo(payout.seller.id)?.paid ?? 0)}</span>
+                </p>
+                <After
+                  label="Se le debe después de esto"
+                  from={owedTo(payout.seller.id)?.owed ?? 0}
+                  to={Math.max(0, (owedTo(payout.seller.id)?.owed ?? 0) - (payout.amount ?? owedTo(payout.seller.id)?.owed ?? 0))}
+                  good
+                />
+                {weOwe(payout.seller.id) > 0 && (
+                  <p className="text-[14px] text-neutral-500">
+                    Aparte, ya anotado como deuda se le deben {money(weOwe(payout.seller.id))}: para eso escribí «le pagué la deuda a {payout.seller.name.split(" ")[0]}».
+                  </p>
+                )}
+                </>
+                )}
+              </Understood>
+            ) : expense ? (
+              <Understood tone="out" icon={<ArrowUpIcon size={20} weight="bold" />} title="Gasto" note={expense.method === "efectivo" ? "Sale de la caja" : expense.method === "tarjeta" ? "Con tarjeta: no sale de la caja" : "Por transferencia: no sale de la caja"}>
+                <div className="flex items-baseline justify-between gap-3">
+                  <b className="text-[20px] font-semibold leading-tight">{expense.concept}</b>
+                  {!!expense.amount && <span className="whitespace-nowrap text-[20px] font-semibold tabular-nums">− {money(expense.amount)}</span>}
+                </div>
+                {!expense.concept && <Missing>Falta en qué se gastó</Missing>}
+                {!expense.amount && <Missing>Falta cuánto se gastó</Missing>}
+                <button onClick={() => setExpenseForm({ initial: expense })} className="self-start text-[15px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline">
+                  Cambiar detalles
+                </button>
+              </Understood>
+            ) : preview ? (
+              <Understood
+                tone="in"
+                icon={<ArrowDownIcon size={20} weight="bold" />}
+                title={hasPractice(preview.lines) ? "Atención" : preview.lines.length ? "Venta" : "Anotación"}
+                note={preview.insurer ? `Por ${preview.insurer.name}: no entra plata` : preview.useAbono ? "Sesión del plan: ya está pagada" : preview.direct ? "No pasó por caja" : preview.payment === "profesional" ? "Le pagaron directo a la profesional: no entra a la caja" : preview.split?.giftcard ? "Gift card + otros medios: caja solo lo que se cobra hoy" : "Entra a la caja de hoy"}
+              >
+                {preview.askPatient ? (
+                  <div className="flex flex-col gap-2">
+                    <label htmlFor="ver-paciente" className="text-[16px] font-semibold">
+                      ¿A qué paciente?
+                    </label>
+                    {!preview.patient && <Missing>Falta el nombre del paciente</Missing>}
+                    <input
+                      id="ver-paciente"
+                      value={pickPatient}
+                      onChange={(e) => setPickPatient(e.target.value)}
+                      placeholder="Nombre del paciente"
+                      className="h-12 rounded-xl border-2 border-neutral-800 bg-surface px-4 text-[17px] font-medium text-fg outline-none placeholder:text-neutral-600 focus:border-in"
+                    />
+                  </div>
+                ) : preview.patientUnsure ? (
+                  <div className="flex flex-col gap-2">
+                    <Missing>«{preview.patient}» es…</Missing>
+                    <div className="flex flex-wrap gap-2.5">
+                      <button onClick={() => setUnsureIs("patient")} className={CHIP}>
+                        el paciente
+                      </button>
+                      <button onClick={() => setUnsureIs("item")} className={CHIP}>
+                        lo que se hizo o vendió
+                      </button>
+                    </div>
+                  </div>
+                ) : preview.patient ? (
+                  <Person name={preview.patient}>Paciente</Person>
+                ) : null}
+
                 {(preview.lines.length > 0 || preview.unresolved.length > 0) && (
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-2">
                     {preview.lines.map((l, i) => (
-                      <li key={i} className="flex items-baseline justify-between gap-3 text-[14px]">
+                      <li key={i} className="flex items-baseline justify-between gap-3 text-[16px]">
                         <span>
                           {l.qty > 1 && <span className="tabular-nums text-neutral-400">{l.qty} × </span>}
-                          <b className="font-medium">{l.item.name}</b>
-                          {l.item.kind === "pendiente" && <span className="text-[13px] text-neutral-400"> · no está cargado, va como pendiente</span>}
-                          {!allowedFor(l.item, preview.sellerId) && <span className="text-[13px] text-accent"> · no es de esa médica</span>}
+                          <b className="font-semibold">{l.item.name}</b>
+                          {l.item.kind === "pendiente" && <span className="text-[14px] text-neutral-400"> · no está cargado, va como pendiente</span>}
+                          {!allowedFor(l.item, preview.sellerId) && <span className="text-[14px] font-medium text-warn"> · no es de esa médica</span>}
                           {l.item.kind === "producto" && l.qty > (l.item.available ?? 0) && (
-                            <span className="text-[13px] text-neutral-400"> · sin stock cargado, se avisa al admin</span>
+                            <span className="text-[14px] text-neutral-400"> · sin stock cargado, se avisa al admin</span>
                           )}
                         </span>
                         <span className="whitespace-nowrap tabular-nums text-neutral-300">
@@ -746,43 +1548,171 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                       </li>
                     ))}
                     {preview.unresolved.map((u, k) => (
-                      <li key={`u${k}`} className="flex flex-wrap items-center gap-2 py-1">
-                        <span className="text-[14px]">«{u.text}»: ¿cuál?</span>
-                        {(u.candidates.some((c) => allowedFor(c, preview.sellerId)) ? u.candidates.filter((c) => allowedFor(c, preview.sellerId)) : u.candidates).map((c) => (
-                          <button key={c.id} onClick={() => setChosen({ ...chosen, [u.text]: c.id })} className={CHIP}>
-                            {c.name}
-                          </button>
-                        ))}
+                      <li key={`u${k}`} className="flex flex-col gap-2 py-1">
+                        <Missing>«{u.text}»: ¿cuál es?</Missing>
+                        <div className="flex flex-wrap gap-2.5">
+                          {(u.candidates.some((c) => allowedFor(c, preview.sellerId)) ? u.candidates.filter((c) => allowedFor(c, preview.sellerId)) : u.candidates).map((c) => (
+                            <button key={c.id} onClick={() => setChosen({ ...chosen, [u.text]: c.id })} className={CHIP}>
+                              {c.name}
+                            </button>
+                          ))}
+                        </div>
                       </li>
                     ))}
                   </ul>
                 )}
-                {nothing && <p className="text-[14px] text-neutral-400">Falta qué se hizo o se vendió.</p>}
+                {preview.deposit && (
+                  <div className="flex flex-col gap-2.5 rounded-xl bg-neutral-900/60 px-4 py-3">
+                    <span className="text-[16px] font-semibold">
+                      Dejó seña de {money(preview.deposit.amount)}{" "}
+                      <span className="font-normal text-neutral-400">
+                        el {preview.deposit.createdAt.slice(8, 10)}/{preview.deposit.createdAt.slice(5, 7)}
+                        {preview.deposit.itemName ? ` para ${preview.deposit.itemName}` : ""}
+                      </span>
+                    </span>
+                    {preview.useDeposit ? (
+                      <span className="text-[14px] text-neutral-500">
+                        Se descuenta: hoy paga el resto y no queda deuda. La profesional cobra sobre el total.
+                      </span>
+                    ) : (
+                      <span className="text-[14px] text-neutral-500">No se descuenta: la seña sigue guardada para otro día.</span>
+                    )}
+                    <button type="button" onClick={() => setPickDeposit(!preview.useDeposit)} className={`${CHIP} self-start`}>
+                      {preview.useDeposit ? "No descontar la seña" : "Descontar la seña"}
+                    </button>
+                  </div>
+                )}
+                {giftCardLine && (
+                  <div className="flex flex-col gap-3 rounded-xl bg-neutral-900/60 px-4 py-3">
+                    <span className="text-[16px] font-semibold">Emitir gift card</span>
+                    <p className="text-[13px] text-neutral-400">El valor se toma de «Pagó» y puede ser distinto del precio de lista del producto.</p>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" aria-pressed={giftCardKind === "amount"} onClick={() => setGiftCardKind("amount")} className={giftCardKind === "amount" ? CHIP_ON : CHIP}>Por monto</button>
+                      <button type="button" aria-pressed={giftCardKind === "treatment"} onClick={() => setGiftCardKind("treatment")} className={giftCardKind === "treatment" ? CHIP_ON : CHIP}>Por tratamiento</button>
+                    </div>
+                    {giftCardKind === "treatment" && (
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[13px] text-neutral-400">Tratamiento incluido</span>
+                        <select value={giftCardTreatmentId} onChange={(e) => setGiftCardTreatmentId(e.target.value)} className="min-h-11 rounded-lg border border-neutral-700 bg-surface px-3 text-[14px] text-fg">
+                          <option value="">Elegí un tratamiento…</option>
+                          {(catalog?.practices ?? []).map((p) => <option key={p.id} value={p.id}>{p.name} · {money(p.price)}</option>)}
+                        </select>
+                        {!giftCardTreatmentId && <Missing>Elegí el tratamiento del vale</Missing>}
+                      </label>
+                    )}
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[13px] text-neutral-400">Comprador (opcional)</span>
+                      <input value={giftCardBuyer} onChange={(e) => setGiftCardBuyer(e.target.value)} placeholder="Nombre de quien compra" className="min-h-11 rounded-lg border border-neutral-700 bg-surface px-3 text-[14px] text-fg" />
+                    </label>
+                  </div>
+                )}
+                {!giftCardLine && preview.lines.length > 0 && (
+                  <div className="flex flex-col gap-2 rounded-xl bg-neutral-900/60 px-4 py-3">
+                    <span className="text-[15px] font-semibold">Canjear gift card</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input value={giftCardCodeInput} onChange={(e) => setGiftCardCodeInput(e.target.value.toUpperCase())} placeholder="Código GC-…" className="min-h-11 min-w-[190px] flex-1 rounded-lg border border-neutral-700 bg-surface px-3 text-[14px] text-fg" />
+                      <button type="button" disabled={!giftCardCodeInput.trim()} onClick={lookupGiftCard} className={CHIP}>Consultar</button>
+                    </div>
+                    {giftCardError && <p role="alert" className="text-[13px] text-warn">{giftCardError}</p>}
+                    {giftCardFound && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[14px]">
+                        <span>{giftCardFound.code}{giftCardFound.kind === "treatment" ? ` · ${giftCardFound.treatmentName}` : " · saldo"} · disponible {money(giftCardFound.balance)}</span>
+                        <button type="button" onClick={applyGiftCard} className={CHIP_ON}>Aplicar hasta {money(Math.min(giftCardFound.balance, preview.listNow))}</button>
+                      </div>
+                    )}
+                    {!!preview.split?.giftcard && <p className="text-[13px] text-neutral-400">Se aplican {money(preview.split.giftcard)} de la gift card; el resto queda distribuido en los otros medios.</p>}
+                  </div>
+                )}
+                {preview.insurer ? (
+                  <div className="flex flex-col gap-2.5 rounded-xl bg-neutral-900/60 px-4 py-3">
+                    <span className="text-[16px] font-semibold">
+                      Por {preview.insurer.name}
+                      {preview.sellerId && (
+                        <span className="font-normal text-neutral-400">
+                          {" "}
+                          · {sellers.find((x) => x.id === preview.sellerId)?.owner
+                            ? "es admin: no se lleva nada"
+                            : `${firstName((sellers.find((x) => x.id === preview.sellerId)?.name ?? "").replace(/^(Dra?\.|Lic\.)\s*/i, ""))} se lleva ${money(preview.insurer.fee)}`}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-[14px] text-neutral-500">No entra plata por la atención. El consultorio le paga a la profesional el monto de {preview.insurer.name}.</span>
+                    <button type="button" onClick={() => setPickInsurer(null)} className={`${CHIP} self-start`}>
+                      No es por {preview.insurer.name}, pagó
+                    </button>
+                  </div>
+                ) : preview.namedInsurer && pickInsurer === null ? (
+                  <button type="button" onClick={() => setPickInsurer(undefined)} className={`${CHIP} self-start`}>
+                    Es por {preview.namedInsurer.name}
+                  </button>
+                ) : null}
+                {preview.abono ? (
+                  <div className="flex flex-col gap-2.5 rounded-xl bg-neutral-900/60 px-4 py-3">
+                    <span className="text-[16px] font-semibold">
+                      Tiene un plan de {preview.abono.itemName}: {prepaidLeft(preview.abono)}
+                    </span>
+                    {preview.useAbono === null && <Missing>¿Esta sesión es del plan?</Missing>}
+                    <div className="flex flex-wrap gap-2.5">
+                      <button aria-pressed={preview.useAbono === true} onClick={() => setPickAbono(true)} className={preview.useAbono === true ? CHIP_ON : CHIP}>
+                        Sí, descontar del plan
+                      </button>
+                      <button aria-pressed={preview.useAbono === false} onClick={() => setPickAbono(false)} className={preview.useAbono === false ? CHIP_ON : CHIP}>
+                        No, pagó aparte
+                      </button>
+                    </div>
+                    {preview.useAbono && (
+                      <span className="text-[14px] text-neutral-500">
+                        No entra plata: ya la pagó. La profesional cobra su parte sobre {money(preview.abono.unitPrice)}. Después{" "}
+                        {preview.abono.sessionsLeft - 1 <= 0 ? "el plan queda terminado" : preview.abono.sessionsLeft - 1 === 1 ? "queda 1 sesión" : `quedan ${preview.abono.sessionsLeft - 1} sesiones`}.
+                      </span>
+                    )}
+                  </div>
+                ) : preview.abonoChoices.length > 1 ? (
+                  <div className="flex flex-col gap-2.5 rounded-xl bg-neutral-900/60 px-4 py-3">
+                    <Missing>¿De cuál plan?</Missing>
+                    <div className="flex flex-wrap gap-2.5">
+                      {preview.abonoChoices.map((p) => (
+                        <button key={p.id} type="button" onClick={() => setPickAbonoId(p.id)} className={CHIP}>
+                          {p.itemName} · {prepaidLeft(p)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : preview.saysAbono && preview.patient ? (
+                  <p className="text-[14px] text-neutral-500">No encontré un plan de {preview.patient} para esto: se anota sin que entre plata.</p>
+                ) : null}
+                {nothing && <Missing>Falta qué se hizo o se vendió</Missing>}
 
                 {/* Quién: lo dice el texto, se deduce o se toca acá */}
                 {!isMedico &&
                   (preview.sellerId && !pickSeller && !notHers ? (
-                    <p className="text-[14px] text-neutral-400">
-                      Atiende <span className="text-fg">{sellers.find((x) => x.id === preview.sellerId)?.name}</span>
+                    <p className="text-[15px] text-neutral-400">
+                      Atiende <span className="font-semibold text-fg">{sellers.find((x) => x.id === preview.sellerId)?.name}</span>
                     </p>
                   ) : (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`text-[14px] ${notHers ? "text-accent" : "text-neutral-400"}`}>
-                        {notHers ? "Eso no lo hace la médica nombrada. ¿Quién la atendió?" : "¿Quién la atendió?"}
-                      </span>
-                      {(possible?.length ? possible : sellers).map((x) => (
-                        <button key={x.id} onClick={() => setPickSeller(pickSeller === x.id ? null : x.id)} className={pickSeller === x.id ? CHIP_ON : CHIP}>
-                          {x.name}
-                        </button>
-                      ))}
+                    <div className="flex flex-col gap-2">
+                      {notHers ? (
+                        <Missing>Eso no lo hace la médica nombrada. ¿Quién la atendió?</Missing>
+                      ) : preview.sellerId ? (
+                        <span className="text-[16px] font-semibold">¿Quién la atendió?</span>
+                      ) : (
+                        <Missing>Falta quién la atendió. Tocá una opción:</Missing>
+                      )}
+                      <div className="flex flex-wrap gap-2.5">
+                        {(possible?.length ? possible : sellers).map((x) => (
+                          <button key={x.id} aria-pressed={pickSeller === x.id} onClick={() => setPickSeller(pickSeller === x.id ? null : x.id)} className={pickSeller === x.id ? CHIP_ON : CHIP}>
+                            {x.name}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ))}
 
                 {/* Plata: cuánto ingresó (siempre) y el reparto que hace el sistema */}
-                {preview.lines.length > 0 && (
-                  <div className="flex flex-col gap-2 border-t border-neutral-900 pt-3 text-[14px]">
-                    <label className="flex flex-wrap items-center gap-2">
-                      <span className="w-[112px] text-neutral-400">Ingresó</span>
+                {preview.lines.length > 0 && !onlyAbono && (
+                  <div className="flex flex-col gap-3 border-t border-divider pt-4 text-[15px]">
+                    <label className="flex flex-wrap items-center gap-3">
+                      <span className="w-[120px] font-semibold">Pagó</span>
                       <input
                         value={pickPaid !== null ? (pickPaid ? `$ ${toPesos(pickPaid).toLocaleString("es-AR")}` : "") : `$ ${ingreso.toLocaleString("es-AR")}`}
                         onChange={(e) => setPickPaid(e.target.value.replace(/\D/g, ""))}
@@ -792,39 +1722,46 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                         className={MONEY_IN}
                       />
                       {preview.split ? (
-                        <span className="text-[13px] text-neutral-500">suma de los medios de abajo</span>
+                        <span className="text-[14px] text-neutral-500">suma de los medios de abajo</span>
+                      ) : preview.payment === "profesional" ? (
+                        <span className="text-[14px] text-neutral-500">lo cobró ella · no entra a la caja</span>
                       ) : preview.direct ? (
-                        <span className="text-[13px] text-neutral-500">le pagaron directo a la profesional</span>
+                        <span className="text-[14px] text-neutral-500">no pasó por caja</span>
                       ) : preview.paid === null && pickPaid === null ? (
-                        <span className="text-[13px] text-neutral-500">precio de lista · cambialo si pagó otro importe</span>
+                        <span className="text-[14px] text-neutral-500">precio de lista · cambialo si pagó otro importe</span>
                       ) : null}
                     </label>
                     {sellerOwner ? (
-                      <p className="flex items-center gap-2">
-                        <span className="w-[112px] truncate text-neutral-400">Para {firstName(sellerName!.replace(/^(Dra?\.|Lic\.)\s*/i, ""))}</span>
-                        <span className="text-[13px] text-neutral-500">nada aparte: es admin, todo va para el consultorio</span>
+                      <p className="flex flex-wrap items-center gap-3">
+                        <span className="w-[120px] truncate text-neutral-400">Para {firstName(sellerName!.replace(/^(Dra?\.|Lic\.)\s*/i, ""))}</span>
+                        <span className="text-[14px] text-neutral-500">nada aparte: es admin, todo va para el consultorio</span>
                       </p>
                     ) : (
-                    <label className="flex flex-wrap items-center gap-2">
-                      <span className="w-[112px] truncate text-neutral-400">Para {sellerName ? firstName(sellerName.replace(/^(Dra?\.|Lic\.)\s*/i, "")) : "la profesional"}</span>
-                      <input
-                        value={pickShare !== null ? (pickShare ? `$ ${toPesos(pickShare).toLocaleString("es-AR")}` : "") : preview.share !== null ? `$ ${preview.share.toLocaleString("es-AR")}` : ""}
-                        onChange={(e) => setPickShare(e.target.value.replace(/\D/g, ""))}
-                        inputMode="numeric"
-                        placeholder={`$ ${auto.toLocaleString("es-AR")}`}
-                        className={MONEY_IN}
-                      />
-                      <span className="text-[13px] text-neutral-500">{preview.share === null ? "según su comisión" : "lo que aclaraste"}</span>
-                    </label>
+                      <label className="flex flex-wrap items-center gap-3">
+                        <span className="w-[120px] truncate text-neutral-400">Para {sellerName ? firstName(sellerName.replace(/^(Dra?\.|Lic\.)\s*/i, "")) : "la profesional"}</span>
+                        <input
+                          value={pickShare !== null ? (pickShare ? `$ ${toPesos(pickShare).toLocaleString("es-AR")}` : "") : preview.share !== null ? `$ ${preview.share.toLocaleString("es-AR")}` : ""}
+                          onChange={(e) => setPickShare(e.target.value.replace(/\D/g, ""))}
+                          inputMode="numeric"
+                          placeholder={`$ ${auto.toLocaleString("es-AR")}`}
+                          className={MONEY_IN}
+                        />
+                        <span className="text-[14px] text-neutral-500">
+                          {preview.share === null ? "según su comisión" : preview.payment === "profesional" && preview.owesUs !== null && pickShare === null ? "lo que cobró menos lo que nos debe" : "lo que aclaraste"}
+                        </span>
+                      </label>
                     )}
-                    <p className="flex items-center gap-2">
-                      <span className="w-[112px] text-neutral-400">Para Decles</span>
-                      <span className="tabular-nums">{ingreso - parte < 0 ? `− ${money(parte - ingreso)}` : money(ingreso - parte)}</span>
+                    <p className="flex flex-wrap items-center gap-3">
+                      <span className="w-[120px] text-neutral-400">Para Decles</span>
+                      <span className="font-semibold tabular-nums">{ingreso - parte < 0 ? `− ${money(parte - ingreso)}` : money(ingreso - parte)}</span>
+                      {preview.payment === "profesional" && !sellerOwner && ingreso - parte > 0 && (
+                        <span className="text-[14px] text-neutral-500">nos lo debe {sellerName ? firstName(sellerName.replace(/^(Dra?\.|Lic\.)\s*/i, "")) : "ella"} · se descuenta en el cierre</span>
+                      )}
                     </p>
                     {canExpense &&
                       (preview.debt ? (
-                        <label className="flex flex-wrap items-center gap-2">
-                          <span className="w-[112px] text-neutral-400">Queda debiendo</span>
+                        <label className="flex flex-wrap items-center gap-3">
+                          <span className="w-[120px] font-semibold text-owe">Queda debiendo</span>
                           <input
                             value={pickDebt !== null ? (pickDebt ? `$ ${toPesos(pickDebt).toLocaleString("es-AR")}` : "") : `$ ${preview.debt.toLocaleString("es-AR")}`}
                             onChange={(e) => setPickDebt(e.target.value.replace(/\D/g, ""))}
@@ -832,43 +1769,54 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                             placeholder="$ 0"
                             className={MONEY_IN}
                           />
-                          <span className="text-[13px] text-neutral-500">se anota como deuda · el admin recibe el aviso</span>
+                          <span className="text-[14px] text-neutral-500">se anota como deuda · el admin recibe el aviso</span>
                         </label>
                       ) : !preview.direct && !preview.split && ingreso < preview.listNow ? (
                         <button onClick={() => setPickDebt(String(preview.listNow - ingreso))} className={`${CHIP} self-start`}>
                           ¿Quedó debiendo {money(preview.listNow - ingreso)}?
                         </button>
                       ) : pickDebt === "" ? null : (
-                        <button onClick={() => setPickDebt("")} className="self-start text-[13px] text-neutral-500 underline-offset-4 hover:text-fg hover:underline">
+                        <button onClick={() => setPickDebt("")} className="self-start text-[14px] text-neutral-500 underline-offset-4 hover:text-fg hover:underline">
                           Quedó debiendo algo
                         </button>
                       ))}
                     {pickDebt === "" && !preview.debt && (
-                      <label className="flex flex-wrap items-center gap-2">
-                        <span className="w-[112px] text-neutral-400">Queda debiendo</span>
+                      <label className="flex flex-wrap items-center gap-3">
+                        <span className="w-[120px] font-semibold text-owe">Queda debiendo</span>
                         <input autoFocus value="" onChange={(e) => setPickDebt(e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder="$ 0" className={MONEY_IN} />
                       </label>
                     )}
+                    {canExpense && !!preview.debt && <ReminderPicker value={preview.remindOn} onChange={(v) => setPickRemind(v)} chip={CHIP} chipOn={CHIP_ON} />}
                   </div>
                 )}
 
                 {/* Pago: un medio, dólares o varios medios */}
-                <div className="flex flex-wrap items-center gap-2">
-                  {[...PAYMENTS, ["varios", "Varios medios"] as const].map(([m, label]) => (
-                    <button
-                      key={m}
-                      aria-pressed={payMode === m}
-                      onClick={() => {
-                        setPickSplit(null);
-                        setPickPay(payMode === m ? null : (m as Payment | "varios"));
-                      }}
-                      className={payMode === m ? CHIP_ON : CHIP}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                  {!payMode && <span className="text-[13px] text-neutral-500">pago opcional</span>}
+                {!onlyAbono && (
+                <div className="flex flex-col gap-2">
+                  <span className="text-[16px] font-semibold">
+                    ¿Cómo pagó? {!payMode && <span className="text-[14px] font-normal text-neutral-500">(si no sabés, dejalo)</span>}
+                  </span>
+                  <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-6">
+                    {PAY_OPTIONS.map(([m, label, Icon]) => {
+                      const on = payMode === m;
+                      return (
+                        <button
+                          key={m}
+                          aria-pressed={on}
+                          onClick={() => {
+                            setPickSplit(null);
+                            setPickPay(on ? null : m);
+                          }}
+                          className={on ? PICK_ON : PICK}
+                        >
+                          <Icon size={24} aria-hidden="true" />
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
+                )}
                 {preview.split && (
                   <SplitInputs
                     split={preview.split}
@@ -880,42 +1828,90 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     }}
                   />
                 )}
-              </div>
+              </Understood>
             ) : (
-              <p className="text-[13.5px] text-neutral-400">
+              <p className="text-[14px] text-neutral-400">
                 Sirve para pacientes y para ventas. Ej: «Gabriela vendió 2 cremas con tarjeta»
-                {canExpense && <> · y para egresos: «pagué 5000 de luz»</>}.
+                {canExpense && <> · y para gastos: «pagué 5000 de luz»</>}.
               </p>
             )}
 
-            <button onClick={go} disabled={debtPay ? !payingDebt || busy : newDebt || payout || expense ? busy : !canSave || busy || loading} className={CTA}>
+            <button
+              onClick={go}
+              disabled={
+                provDebt
+                  ? provDebtAmount <= 0 || busy
+                  : newDeposit
+                    ? !depositReady || busy
+                  : newPrepaid
+                    ? !prepaidReady || busy
+                    : payablePay
+                      ? !payingPayable || !payableMethod || payableAmount <= 0 || busy
+                      : newPayable
+                        ? !payableReady || busy
+                        : payout ? payoutAmount <= 0 || busy : debtPay ? !payingDebt || !debtMethod || busy : newDebt || expense ? busy : !canSave || busy || loading}
+              className={debtPay || newPrepaid || newDeposit ? CTA_IN : provDebt || newDebt || payablePay || newPayable || payout || expense ? CTA : CTA_IN}
+            >
               {busy
                 ? "Guardando…"
+                : provDebt
+                  ? provDebt.paidNow
+                    ? `Sí, pagar ${money(provDebt.paidNow)} y dejar debiendo ${money(provDebtAmount)}`
+                    : `Sí, anotar que le debemos ${money(provDebtAmount)}`
+                : newDeposit
+                  ? depositReady
+                    ? `Sí, anotar seña de ${money(newDeposit.amount)}`
+                    : "Completá lo que falta"
+                : payablePay
+                  ? !payingPayable
+                    ? "Elegí cuál"
+                    : !payableMethod
+                      ? "Primero elegí cómo se pagó"
+                      : `Sí, anotar pago de ${money(payableAmount)}`
+                : newPayable
+                  ? payableReady
+                    ? `Sí, anotar que debemos ${money(newPayable.amount!)}`
+                    : "Completá lo que falta"
+                : newPrepaid
+                  ? prepaidReady
+                    ? `Sí, anotar abono de ${money(newPrepaid.amount!)}`
+                    : "Completá lo que falta"
                 : debtPay
-                  ? payingDebt
-                    ? `Cobrar · ${money(payAmount)}`
-                    : "Elegí cuál"
+                  ? !payingDebt
+                    ? "Elegí cuál deuda"
+                    : !debtMethod
+                      ? "Primero elegí cómo pagó"
+                      : `Sí, anotar cobro de ${money(payAmount)}`
                   : newDebt
-                  ? `Anotar deuda · ${money(newDebt.amount)}`
-                  : payout
-                  ? `Guardar pago · ${money(payout.amount ?? owedTo(payout.seller.id)?.owed ?? 0)}`
-                  : expense
-                  ? expense.concept && expense.amount
-                    ? `Guardar egreso · ${money(expense.amount)}`
-                    : "Completar el egreso"
-                  : !preview
-                  ? "Guardar"
-                  : nothing
-                    ? "Falta qué se hizo"
-                    : pendingQ
-                      ? "Tocá la opción correcta"
-                      : missingPatient
-                        ? "Falta el paciente"
-                        : missingSeller || notHers
-                        ? "Elegí quién la atendió"
-                        : `Guardar · ${money(ingreso)}`}
+                    ? `Sí, anotar deuda de ${money(newDebt.amount)}`
+                    : payout
+                      ? `Sí, anotar pago de ${money(payoutAmount)}`
+                      : expense
+                        ? expense.concept && expense.amount
+                          ? `Sí, anotar gasto de ${money(expense.amount)}`
+                          : "Completar el gasto"
+                        : !preview
+                          ? "Guardar"
+                          : nothing
+                            ? "Falta qué se hizo"
+                            : pendingQ
+                              ? "Primero tocá la opción correcta"
+                              : missingPatient
+                                ? "Falta el paciente"
+                                : missingSeller || notHers
+                                  ? "Primero elegí quién la atendió"
+                                  : onlyAbono
+                                    ? preview.insurer
+                                      ? `Sí, anotar atención por ${preview.insurer.name}`
+                                      : "Sí, anotar sesión del plan"
+                                    : `Sí, anotar ${hasPractice(preview.lines) ? "atención" : "venta"} de ${money(ingreso)}`}
             </button>
-            {preview && !nothing && !expense && !payout && !debtPay && !newDebt && (
+            {(provDebt || newPrepaid || newDeposit || payablePay || newPayable || debtPay || newDebt || payout || expense || preview) && (
+              <button onClick={() => box.current?.focus()} className={`${GHOST} -mt-1 min-h-[52px] text-[15px] font-medium`}>
+                No, quiero corregirlo
+              </button>
+            )}
+            {preview && !nothing && !expense && !payout && !debtPay && !newDebt && !provDebt && !newPrepaid && !newDeposit && !payablePay && !newPayable && (
               <button
                 onClick={() => {
                   setDraft(preview);
@@ -926,21 +1922,26 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                 Editar detalles (cantidades, precio de lo no cargado)
               </button>
             )}
-            <button
-              onClick={() => {
-                setDraft(emptyDraft("manual", fixedSeller));
-                setMode("manual");
-              }}
-              disabled={loading}
-              className={`${GHOST} min-h-[44px] gap-3`}
-            >
-              <SquaresFourIcon size={20} /> Prefiero elegirlo de una lista
-            </button>
-            {canExpense && (
-              <button onClick={() => setExpenseForm({})} className={`${GHOST} min-h-[44px] gap-3`}>
-                <MinusIcon size={18} /> Anotar un egreso de plata
-              </button>
-            )}
+            <div className="flex flex-col gap-2 pt-2">
+              {text.trim() && <span className="text-[13.5px] text-neutral-500">¿No era esto?</span>}
+              <div className={`grid gap-2.5 ${canExpense ? "sm:grid-cols-2" : ""}`}>
+                <button
+                  onClick={() => {
+                    setDraft(emptyDraft("manual", fixedSeller));
+                    setMode("manual");
+                  }}
+                  disabled={loading}
+                  className={`${GHOST} min-h-[48px] gap-2.5 border-transparent bg-neutral-900`}
+                >
+                  <SquaresFourIcon size={20} /> Elegir de una lista
+                </button>
+                {canExpense && (
+                  <button onClick={() => setExpenseForm({})} className={`${GHOST} min-h-[48px] gap-2.5 border-transparent bg-neutral-900`}>
+                    <MinusIcon size={18} /> Anotar un gasto
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -982,7 +1983,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
           onSaved={() => {
             setEditing(null);
             setFlash("Cambios guardados");
-            setTimeout(() => setFlash(null), 1400);
+            setTimeout(() => setFlash(null), 2400);
             refreshSales();
             refreshCatalog();
           }}
@@ -1008,7 +2009,7 @@ export function EditVisit({ sales, isMedico, onClose, onSaved }: { sales: SaleRo
     const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [], pct: p.commissionPct, cuts: p.providerCuts }));
     const products = (catalog?.products ?? [])
       .filter((p) => p.price !== null && p.priceItemId)
-      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available, providerIds: p.providerIds ?? [], pct: p.commissionPct, cuts: p.providerCuts }));
+      .map((p): Item => ({ id: p.priceItemId!, name: p.name, kind: "producto", price: p.price!, cardPrice: p.cardPrice, available: p.available, giftCard: p.giftCard, providerIds: p.providerIds ?? [], pct: p.commissionPct, cuts: p.providerCuts }));
     return [...practices, ...products];
   }, [catalog]);
   const sellers: Seller[] = useMemo(
@@ -1035,7 +2036,8 @@ export function EditVisit({ sales, isMedico, onClose, onSaved }: { sales: SaleRo
         if (p.method === "dolares") {
           s.usd += p.usd ?? 0;
           s.rate = p.rate ?? s.rate;
-        } else s[p.method] += p.amount;
+        } else if (p.method === "efectivo" || p.method === "transferencia" || p.method === "tarjeta") s[p.method] += p.amount;
+        else if (p.method === "giftcard") s.giftcard = (s.giftcard ?? 0) + p.amount;
       }
       d.split = s;
       d.paid = splitPesos(s, null);
@@ -1116,8 +2118,8 @@ function Registered({ summary, onClose }: { summary: string; onClose: () => void
       <span className="cl-pop flex h-24 w-24 items-center justify-center rounded-full bg-success text-on-success shadow-lg">
         <CheckIcon size={52} weight="bold" />
       </span>
-      <span className="text-[22px] font-medium">¡Registrado!</span>
-      {summary && <span className="max-w-[480px] text-[14px] text-neutral-300">{summary}</span>}
+      <span className="text-[26px] font-semibold">¡Listo, anotado!</span>
+      {summary && <span className="max-w-[480px] text-[17px] leading-[1.5] text-neutral-300">{summary}</span>}
     </button>
   );
 }
@@ -1168,7 +2170,7 @@ function ManualView({
   const missingPatient = (hasPractice(draft.lines) || !!draft.debt) && !draft.patient.trim();
   const [dolar] = useDolar();
   const rate = dolar?.rate ?? null;
-  const mode = draft.split ? (draft.split.efectivo + draft.split.transferencia + draft.split.tarjeta === 0 ? "dolares" : "varios") : draft.payment;
+  const mode = draft.split ? (draft.split.efectivo + draft.split.transferencia + draft.split.tarjeta + (draft.split.giftcard ?? 0) === 0 ? "dolares" : "varios") : draft.payment;
 
   return (
     <section className="flex flex-col gap-6">
@@ -1642,7 +2644,7 @@ function Confirm({
         )}
         <div className="flex flex-wrap gap-2" role="group" aria-label="¿Cómo pagó?">
           {[...PAYMENTS, ["varios", "Varios medios"] as const].map(([m, label]) => {
-            const mode = draft.split ? (draft.split.efectivo + draft.split.transferencia + draft.split.tarjeta === 0 ? "dolares" : "varios") : draft.payment;
+            const mode = draft.split ? (draft.split.efectivo + draft.split.transferencia + draft.split.tarjeta + (draft.split.giftcard ?? 0) === 0 ? "dolares" : "varios") : draft.payment;
             return (
               <button
                 key={m}
@@ -1666,7 +2668,7 @@ function Confirm({
         {draft.split && (
           <SplitInputs
             split={draft.split}
-            onlyUsd={draft.split.efectivo + draft.split.transferencia + draft.split.tarjeta === 0}
+            onlyUsd={draft.split.efectivo + draft.split.transferencia + draft.split.tarjeta + (draft.split.giftcard ?? 0) === 0}
             rate={draft.split.rate ?? rate}
             onChange={(s) => setDraft({ ...draft, split: s, paid: splitPesos(s, rate) })}
           />
@@ -1866,6 +2868,12 @@ function SplitInputs({ split, onlyUsd, rate, onChange }: { split: Split; onlyUsd
           {field("efectivo", "Efectivo")}
           {field("transferencia", "Transferencia")}
           {field("tarjeta", "Tarjeta")}
+          {split.giftcard !== undefined && (
+            <label className="flex items-center gap-2">
+              <span className="w-[112px] text-neutral-400">Gift card</span>
+              <input value={split.giftcard ? `$ ${split.giftcard.toLocaleString("es-AR")}` : ""} onChange={(e) => onChange({ ...split, giftcard: toPesos(e.target.value) })} inputMode="numeric" placeholder="$ 0" className={MONEY_IN} />
+            </label>
+          )}
         </>
       )}
       <label className="flex flex-wrap items-center gap-2">
@@ -1886,12 +2894,118 @@ function SplitInputs({ split, onlyUsd, rate, onChange }: { split: Split; onlyUsd
 }
 
 const MONEY_IN =
-  "w-[130px] rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-right tabular-nums text-fg outline-none placeholder:text-neutral-500 focus:border-accent-700";
+  "h-11 w-[150px] rounded-lg border-2 border-neutral-800 bg-surface px-3 text-right text-[17px] font-semibold tabular-nums text-fg outline-none placeholder:text-neutral-500 focus:border-in disabled:opacity-60";
 const CTA =
-  "flex min-h-12 items-center justify-center rounded-lg border border-accent bg-accent px-5 text-[15px] font-medium text-on-accent transition-opacity hover:opacity-85 active:opacity-70 disabled:cursor-not-allowed disabled:border-neutral-800 disabled:bg-neutral-900 disabled:text-neutral-500";
+  "flex min-h-14 items-center justify-center gap-2 rounded-lg border border-accent bg-accent px-5 text-[17px] font-semibold text-on-accent transition-opacity hover:opacity-85 active:opacity-70 disabled:cursor-not-allowed disabled:border-dashed disabled:border-neutral-700 disabled:bg-neutral-900 disabled:text-neutral-400";
+const CTA_IN =
+  "flex min-h-14 items-center justify-center gap-2 rounded-lg border border-in bg-in px-5 text-[17px] font-semibold text-on-in transition-opacity hover:opacity-90 active:opacity-75 disabled:cursor-not-allowed disabled:border-dashed disabled:border-neutral-700 disabled:bg-neutral-900 disabled:text-neutral-400";
+/** Medios de pago en la confirmación, con nombre completo e ícono (no se abrevia). */
+const PAY_OPTIONS = [
+  ["efectivo", "Efectivo", MoneyIcon],
+  ["transferencia", "Transferencia", ArrowsLeftRightIcon],
+  ["tarjeta", "Tarjeta", CreditCardIcon],
+  ["dolares", "Dólares", CurrencyDollarIcon],
+  ["varios", "Varios medios", StackIcon],
+  ["profesional", "A la profesional", HandCoinsIcon],
+] as const;
+const PICK =
+  "flex min-h-[68px] flex-col items-center justify-center gap-1 rounded-xl border-2 border-neutral-800 px-2 text-center text-[15px] font-semibold text-neutral-300 transition-colors hover:border-neutral-600";
+const PICK_ON =
+  "flex min-h-[68px] flex-col items-center justify-center gap-1 rounded-xl border-2 border-in bg-in-bg px-2 text-center text-[15px] font-semibold text-in-fg";
+
+/**
+ * «Lo que entendí»: la tarjeta de confirmación de Anotar. El color dice qué pasa con la plata:
+ * `in` entra (verde), `out` sale (neutro), `owe` queda debiendo (óxido).
+ */
+const TONES = {
+  in: { border: "border-in-line", band: "bg-in-bg", dot: "bg-in text-on-in", fg: "text-in-fg" },
+  out: { border: "border-neutral-800", band: "bg-neutral-900", dot: "bg-fg text-bg", fg: "text-neutral-300" },
+  owe: { border: "border-neutral-800", band: "bg-neutral-900", dot: "bg-owe text-surface", fg: "text-neutral-300" },
+} as const;
+
+function Understood({ tone, icon, title, note, children }: { tone: keyof typeof TONES; icon: ReactNode; title: string; note: string; children: ReactNode }) {
+  const t = TONES[tone];
+  return (
+    <section aria-label="Lo que entendí" className={`flex animate-cl-in flex-col overflow-hidden rounded-2xl border-2 bg-surface ${t.border}`}>
+      <div className={`flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 ${t.band}`}>
+        <div className="flex items-center gap-3">
+          <span aria-hidden="true" className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${t.dot}`}>
+            {icon}
+          </span>
+          <div className="flex flex-col">
+            <span className={`text-[17px] font-semibold ${t.fg}`}>{title}</span>
+            <span className={`text-[14px] ${t.fg}`}>{note}</span>
+          </div>
+        </div>
+        <span className={`text-[14px] ${t.fg}`}>Revisá que esté bien</span>
+      </div>
+      <div className="flex flex-col gap-5 px-5 py-5 text-[15px]">{children}</div>
+    </section>
+  );
+}
+
+/** Persona de la anotación: iniciales, nombre grande y una línea de detalle. */
+function Person({ name, children }: { name: string; children?: ReactNode }) {
+  return (
+    <div className="flex items-center gap-4">
+      <span aria-hidden="true" className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-[16px] font-semibold text-neutral-300">
+        {initials(name) || "?"}
+      </span>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <b className="text-[20px] font-semibold leading-tight">{name || "¿Quién?"}</b>
+        {children && <span className="text-[15px] text-neutral-400">{children}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** Efectivo (sale de la caja) o transferencia, para pagarle a una profesional. */
+function PayoutMethodChips({ value, onChange }: { value: "efectivo" | "transferencia"; onChange: (m: "efectivo" | "transferencia") => void }) {
+  return (
+    <div className="flex flex-wrap gap-2.5">
+      {(["efectivo", "transferencia"] as const).map((m) => (
+        <button key={m} type="button" aria-pressed={value === m} onClick={() => onChange(m)} className={value === m ? CHIP_ON : CHIP}>
+          {m === "efectivo" ? "Efectivo" : "Transferencia"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Algo que falta o hay que mirar (ámbar). */
+function Missing({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-2 text-[15px] font-medium text-warn">
+      <WarningCircleIcon size={20} weight="bold" aria-hidden="true" className="shrink-0" />
+      <span>{children}</span>
+    </span>
+  );
+}
+
+/** Cómo queda un saldo después de anotar: antes tachado → después. */
+function After({ label, from, to, good }: { label: string; from: number; to: number; good?: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-neutral-900 px-4 py-3 text-[15px]">
+      <span className="text-neutral-400">{label}</span>
+      <span className="inline-flex items-center gap-2 tabular-nums">
+        <span className="text-neutral-500 line-through">{money(from)}</span>
+        <ArrowRightIcon size={16} className="text-neutral-500" aria-hidden="true" />
+        <b className={`text-[17px] font-semibold ${good || to === 0 ? "text-in-fg" : "text-owe"}`}>{money(to)}</b>
+      </span>
+    </div>
+  );
+}
+const initials = (name: string) =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w.replace(/[^\p{L}]/gu, "")[0] ?? "")
+    .map((c) => c.toUpperCase())
+    .join("");
 const GHOST =
   "flex items-center justify-center rounded-lg border border-neutral-800 px-4 text-[14px] text-neutral-300 transition-colors hover:border-accent-700 hover:bg-accent-900 hover:text-fg";
 const ROUND =
   "flex h-9 w-9 items-center justify-center rounded-md border border-neutral-800 text-fg transition-colors hover:bg-accent-900 disabled:opacity-30";
-const CHIP = "rounded-pill border border-neutral-700 px-3 py-1.5 text-[13px] transition-colors hover:border-accent hover:bg-accent-900";
-const CHIP_ON = "rounded-pill border border-accent bg-accent px-3 py-1.5 text-[13px] text-on-accent";
+const CHIP = "min-h-[44px] rounded-pill border-2 border-neutral-800 px-4 py-2 text-[15px] font-medium transition-colors hover:border-neutral-600";
+const CHIP_ON = "min-h-[44px] rounded-pill border-2 border-accent bg-accent px-4 py-2 text-[15px] font-medium text-on-accent";

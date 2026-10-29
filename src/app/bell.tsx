@@ -6,7 +6,7 @@ import { call, usePoll } from "./shared";
 
 interface Notif {
   id: string;
-  kind: "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente" | "deuda";
+  kind: "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente" | "deuda" | "deuda_cobrar" | "pagar";
   title: string;
   body: string;
   readAt: string | null;
@@ -20,6 +20,8 @@ const KIND_LABEL: Record<Notif["kind"], string> = {
   sin_stock: "Sin stock cargado",
   pendiente: "Para cargar",
   deuda: "Deuda",
+  deuda_cobrar: "Para cobrar",
+  pagar: "Para pagar",
 };
 
 const ago = (iso: string) => {
@@ -88,7 +90,7 @@ export function Bell({ onOpenStock, onOpenClose }: { onOpenStock: () => void; on
                   onClick={() => {
                     if (!n.readAt) read(n.id);
                     setOpen(false);
-                    if (n.kind === "deuda" && onOpenClose) onOpenClose();
+                    if ((n.kind === "deuda" || n.kind === "deuda_cobrar" || n.kind === "pagar") && onOpenClose) onOpenClose();
                     else onOpenStock();
                   }}
                   className={`flex w-full gap-3 border-b border-neutral-900 px-4 py-3 text-left transition-colors last:border-0 hover:bg-accent-900 ${n.readAt ? "opacity-55" : ""}`}

@@ -10,12 +10,12 @@ export async function GET(req: Request) {
   return respond(await listDebts(actor, Number.isFinite(recent) ? Math.min(Math.max(recent, 0), 365) : 0));
 }
 
-/** `{ debtor, amount, concept?, providerId?, share? }` */
+/** `{ debtor, amount, concept?, providerId?, share?, remindOn? (AAAA-MM-DD) }` */
 export async function POST(req: Request) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
-  const b = await bodyOf<{ debtor: string; amount: number; concept: string; providerId: string | null; share: number | null }>(req);
-  const r = await createDebt(actor, { debtor: b.debtor, amount: b.amount, concept: b.concept, providerId: b.providerId, share: b.share });
+  const b = await bodyOf<{ debtor: string; amount: number; concept: string; providerId: string | null; share: number | null; remindOn: string | null }>(req);
+  const r = await createDebt(actor, { debtor: b.debtor, amount: b.amount, concept: b.concept, providerId: b.providerId, share: b.share, remindOn: b.remindOn });
   if (r.ok) await refreshAfterChange(actor);
   return respond(r);
 }

@@ -275,11 +275,11 @@ export async function recordSale(
       return fail(`${p.name} no tiene asignado "${item.name}". El admin lo vincula en Stock.`, 409);
   }
 
+  const stockItem = item.stockItemId ? await getStockItem(ctx.orgId, item.stockItemId) : undefined;
   if (item.stockItemId) {
-    const s = await getStockItem(ctx.orgId, item.stockItemId);
-    if (!s) return fail("El producto de stock vinculado ya no existe.", 409);
-    if (s.available < quantity && !v.allowNoStock)
-      return fail(`No alcanza el stock de "${s.name}": hay ${s.available} y querés vender ${quantity}.`, 409);
+    if (!stockItem) return fail("El producto de stock vinculado ya no existe.", 409);
+    if (!stockItem.infiniteStock && stockItem.available < quantity && !v.allowNoStock)
+      return fail(`No alcanza el stock de "${stockItem.name}": hay ${stockItem.available} y querés vender ${quantity}.`, 409);
   }
 
   const { id, total, cashTotal, cardTotal } = await insertSale(
@@ -292,7 +292,7 @@ export async function recordSale(
   );
 
   let stockLeft: number | undefined;
-  if (item.stockItemId) {
+  if (item.stockItemId && !stockItem?.infiniteStock) {
     const r = await consumeStockFefo(
       ctx.orgId,
       { itemId: item.stockItemId, quantity, reason: "uso", note: `Venta de ${item.name}`, saleId: id, preferExpiry },

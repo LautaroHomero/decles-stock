@@ -1,4 +1,4 @@
-import { getPriceItem, listPendingSales, resolvePendingSale, type Sale } from "@/lib/db/billing-repo";
+import { getPriceItem, listPendingSales, listPriceItems, resolvePendingSale, type PriceItem, type Sale } from "@/lib/db/billing-repo";
 import { addOwed, consumeStockFefo } from "@/lib/db/stock-repo";
 import { getProvider } from "@/lib/db/repo";
 import { createPractice, createProduct } from "@/lib/domain/products";
@@ -46,15 +46,47 @@ export async function resolvePending(
   if (!itemId) return fail("Elegí qué es o crealo.");
   const item = await getPriceItem(orgId, itemId);
   if (!item || !item.active) return fail("Ese ítem no está en la lista de precios.", 404);
+  if (!(await resolveWith(actor, orgId, sale, item))) return fail("Eso ya no está pendiente.", 409);
+  return { ok: true, item: item.name };
+}
 
+/** Vincula un pendiente a `item`: toma la parte de la profesional de ese ítem y, si es producto, descuenta stock. */
+async function resolveWith(actor: Actor, orgId: string, sale: Sale, item: PriceItem): Promise<boolean> {
   const prov = sale.providerId ? await getProvider(sale.providerId) : undefined;
   const cut = await commissionFor(orgId, item, prov);
-  if (!(await resolvePendingSale(orgId, saleId, { item, commissionPct: cut.pct, commissionFixed: cut.fixed }))) return fail("Eso ya no está pendiente.", 409);
-
+  if (!(await resolvePendingSale(orgId, sale.id, { item, commissionPct: cut.pct, commissionFixed: cut.fixed }))) return false;
   if (item.stockItemId) {
     const who = { id: actor.userId, name: actor.name, source: "manual" as const };
-    const r = await consumeStockFefo(orgId, { itemId: item.stockItemId, quantity: sale.quantity, reason: "uso", note: `Venta de ${item.name}`, saleId }, who);
-    if (r.shortfall > 0) await addOwed(orgId, { itemId: item.stockItemId, quantity: r.shortfall, saleId, note: `Venta de ${item.name} sin stock cargado` }, who);
+    const r = await consumeStockFefo(orgId, { itemId: item.stockItemId, quantity: sale.quantity, reason: "uso", note: `Venta de ${item.name}`, saleId: sale.id }, who);
+    if (r.shortfall > 0) await addOwed(orgId, { itemId: item.stockItemId, quantity: r.shortfall, saleId: sale.id, note: `Venta de ${item.name} sin stock cargado` }, who);
   }
-  return { ok: true, item: item.name };
+  return true;
+}
+
+const norm = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+/**
+ * Al cargar o editar algo en la lista de precios: los pendientes que se anotaron con ese mismo nombre
+ * («glicolico» → «Glicólico») se resuelven solos, con su precio escrito y la parte de la profesional de ese ítem.
+ * Así el cierre (lo que se le debe a cada una) queda al día sin pasar por Pendientes. Devuelve cuántos resolvió.
+ */
+export async function resolvePendingByName(actor: Actor): Promise<number> {
+  if (!actor.activeOrg?.canAdmin) return 0;
+  const orgId = actor.activeOrg.id;
+  const pending = await listPendingSales(orgId);
+  if (!pending.length) return 0;
+  const byName = new Map<string, PriceItem>();
+  for (const i of await listPriceItems(orgId)) if (i.active) byName.set(norm(i.name), i);
+  let n = 0;
+  for (const s of pending) {
+    const item = byName.get(norm(s.itemName));
+    if (item && (await resolveWith(actor, orgId, s, item))) n++;
+  }
+  return n;
 }

@@ -12,6 +12,9 @@ export type Result<T> = ({ ok: true } & T) | { ok: false; error: string; status:
 
 export type Direction = "egreso" | "ingreso";
 const dirOf = (d: unknown): Direction => (d === "ingreso" ? "ingreso" : "egreso");
+/** Con qué se pagó (o entró): solo el efectivo toca la caja. */
+export type ExpenseMethod = "efectivo" | "transferencia" | "tarjeta";
+const methodOf = (m: unknown): ExpenseMethod => (m === "transferencia" || m === "tarjeta" ? m : "efectivo");
 
 export interface Expense {
   id: string;
@@ -19,6 +22,7 @@ export interface Expense {
   direction: Direction;
   concept: string;
   amount: number;
+  method: ExpenseMethod;
   createdByName: string;
   createdAt: string;
   updatedByName: string | null;
@@ -31,6 +35,7 @@ const toExpense = (r: Row): Expense => ({
   direction: dirOf(r.direction),
   concept: r.concept as string,
   amount: Number(r.amount),
+  method: methodOf(r.method),
   createdByName: r.created_by_name as string,
   createdAt: r.created_at as string,
   updatedByName: (r.updated_by_name as string | null) ?? null,
@@ -68,41 +73,48 @@ export async function listExpenses(actor: Actor, from?: string, to?: string, dir
   return { ok: true, expenses, total: expenses.reduce((n, e) => n + e.amount, 0) };
 }
 
-export async function createExpense(actor: Actor, v: { concept?: unknown; amount?: unknown; direction?: unknown }): Promise<Result<{ expense: Expense }>> {
+export async function createExpense(actor: Actor, v: { concept?: unknown; amount?: unknown; direction?: unknown; method?: unknown }): Promise<Result<{ expense: Expense }>> {
   const c = ctx(actor);
   if (!c) return fail("Los egresos los anota la secretaría o el admin.", 403);
   const x = clean(v);
   if (typeof x === "string") return fail(x);
   const rows = (await getSql()`
-    INSERT INTO expenses (id, organization_id, direction, concept, amount, created_by, created_by_name, created_at)
-    VALUES (${`egr_${randomUUID().slice(0, 8)}`}, ${c.orgId}, ${dirOf(v.direction)}, ${x.concept}, ${x.amount}, ${actor.userId}, ${actor.name}, ${realNowIso()})
+    INSERT INTO expenses (id, organization_id, direction, concept, amount, method, created_by, created_by_name, created_at)
+    VALUES (${`egr_${randomUUID().slice(0, 8)}`}, ${c.orgId}, ${dirOf(v.direction)}, ${x.concept}, ${x.amount}, ${methodOf(v.method)}, ${actor.userId}, ${actor.name}, ${realNowIso()})
     RETURNING *`) as unknown as Row[];
   return { ok: true, expense: toExpense(rows[0]) };
 }
 
-async function editable(actor: Actor, id: string) {
+async function editable(actor: Actor, id: string, fromPrepaid = false) {
   const c = ctx(actor);
   if (!c) return fail("No autorizado.", 403);
   const rows = (await getSql()`SELECT * FROM expenses WHERE id = ${id} AND organization_id = ${c.orgId} AND status = 'active'`) as unknown as Row[];
   if (!rows.length) return fail("Ese egreso ya no existe.", 404);
+  // La plata de un abono se corrige desde el abono (si no, el abono queda sin su pago).
+  if (!fromPrepaid) {
+    const ab = (await getSql()`SELECT 1 FROM prepaids WHERE organization_id = ${c.orgId} AND income_id = ${id} AND status <> 'voided'`) as unknown as Row[];
+    if (ab.length) return fail("Es la plata de un abono: se anula desde Cierre → Abonos.", 409);
+    const se = (await getSql()`SELECT 1 FROM deposits WHERE organization_id = ${c.orgId} AND income_id = ${id} AND status <> 'voided'`) as unknown as Row[];
+    if (se.length) return fail("Es una seña: se anula desde Cierre → Señas.", 409);
+  }
   if (!c.isAdmin && (rows[0].created_at as string).slice(0, 10) !== realNowIso().slice(0, 10))
     return fail("Lo de días anteriores lo corrige el admin.", 403);
   return { ok: true as const, orgId: c.orgId };
 }
 
-export async function updateExpense(actor: Actor, id: string, v: { concept?: unknown; amount?: unknown }): Promise<Result<{ expense: Expense }>> {
+export async function updateExpense(actor: Actor, id: string, v: { concept?: unknown; amount?: unknown; method?: unknown }): Promise<Result<{ expense: Expense }>> {
   const e = await editable(actor, id);
   if (!e.ok) return e;
   const x = clean(v);
   if (typeof x === "string") return fail(x);
   const rows = (await getSql()`
-    UPDATE expenses SET concept = ${x.concept}, amount = ${x.amount}, updated_at = ${realNowIso()}, updated_by_name = ${actor.name}
+    UPDATE expenses SET concept = ${x.concept}, amount = ${x.amount}, method = COALESCE(${v.method === undefined ? null : methodOf(v.method)}::text, method), updated_at = ${realNowIso()}, updated_by_name = ${actor.name}
     WHERE id = ${id} AND organization_id = ${e.orgId} RETURNING *`) as unknown as Row[];
   return { ok: true, expense: toExpense(rows[0]) };
 }
 
-export async function voidExpense(actor: Actor, id: string): Promise<Result<object>> {
-  const e = await editable(actor, id);
+export async function voidExpense(actor: Actor, id: string, fromPrepaid = false): Promise<Result<object>> {
+  const e = await editable(actor, id, fromPrepaid);
   if (!e.ok) return e;
   await getSql()`UPDATE expenses SET status = 'voided', voided_at = ${realNowIso()}, voided_by = ${actor.userId} WHERE id = ${id} AND organization_id = ${e.orgId}`;
   return { ok: true };

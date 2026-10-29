@@ -131,7 +131,7 @@ export async function findStockItems(actor: Actor, query: string): Promise<Resul
 
 export async function createItem(
   actor: Actor,
-  v: { name: string; unit?: string; category?: string; minQuantity?: number },
+  v: { name: string; unit?: string; category?: string; minQuantity?: number; infiniteStock?: boolean; giftCard?: boolean },
   source: StockSource = "manual",
 ): Promise<Result<{ itemId: string }>> {
   const g = await manageCtx(actor, source);
@@ -147,6 +147,8 @@ export async function createItem(
     unit: cleanName(v.unit) || "unidad",
     category: cleanName(v.category),
     minQuantity: min,
+    infiniteStock: v.infiniteStock ?? false,
+    giftCard: v.giftCard ?? false,
   });
   return { ok: true, itemId };
 }
@@ -154,7 +156,7 @@ export async function createItem(
 export async function editItem(
   actor: Actor,
   itemId: string,
-  v: { name?: string; unit?: string; category?: string; minQuantity?: number; active?: boolean },
+  v: { name?: string; unit?: string; category?: string; minQuantity?: number; active?: boolean; infiniteStock?: boolean; giftCard?: boolean },
 ): Promise<Result<object>> {
   const g = await manageCtx(actor, "manual");
   if (!g.ok) return g;
@@ -170,6 +172,8 @@ export async function editItem(
     category: v.category === undefined ? cur.category : cleanName(v.category),
     minQuantity: min,
     active: v.active ?? cur.active,
+    infiniteStock: v.infiniteStock ?? cur.infiniteStock,
+    giftCard: v.giftCard ?? cur.giftCard,
   });
   return { ok: true };
 }

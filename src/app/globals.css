@@ -9,7 +9,9 @@
  * propósito: el mismo nombre sirve en los dos (900 = fondo tenue / hover,
  * 800 = bordes, 400 = texto secundario, 300/200 = texto sobre tintes).
  *
- * La única excepción al monocromo es la esfera del dictado (ver `.cl-orb`).
+ * Excepciones al monocromo: la esfera del dictado (ver `.cl-orb`) y los colores con
+ * significado, siempre sutiles: `in` = plata que entra (verde), `owe` = deuda (óxido),
+ * `warn` = falta un dato (ámbar). Nada más lleva color.
  */
 
 :root,
@@ -50,6 +52,13 @@
   --cl-shadow-md: 0 0 0 1px #2e2e2e, 0 8px 24px rgba(0, 0, 0, 0.6);
   --cl-shadow-lg: 0 0 0 1px #3a3a3a, 0 16px 40px rgba(0, 0, 0, 0.7);
   --cl-ring: rgba(242, 242, 242, 0.45);
+  --cl-in: #4cc38a;
+  --cl-on-in: #06140d;
+  --cl-in-bg: rgba(76, 195, 138, 0.1);
+  --cl-in-line: rgba(76, 195, 138, 0.38);
+  --cl-in-fg: #7fd8aa;
+  --cl-owe: #ec9a72;
+  --cl-warn: #e6b866;
 }
 
 :root[data-theme="light"] {
@@ -88,6 +97,13 @@
   --cl-shadow-md: 0 0 0 1px #e3e3e3, 0 8px 24px rgba(0, 0, 0, 0.06);
   --cl-shadow-lg: 0 0 0 1px #dcdcdc, 0 16px 40px rgba(0, 0, 0, 0.08);
   --cl-ring: rgba(10, 10, 10, 0.35);
+  --cl-in: #1f7a4d;
+  --cl-on-in: #ffffff;
+  --cl-in-bg: #eef7f1;
+  --cl-in-line: #cfe7d8;
+  --cl-in-fg: #145234;
+  --cl-owe: #9a3b12;
+  --cl-warn: #8a4a0e;
 }
 
 @theme inline {
@@ -103,6 +119,13 @@
   --color-tag-bg: var(--cl-tag-bg);
   --color-tag-fg: var(--cl-tag-fg);
   --color-divider: var(--cl-divider);
+  --color-in: var(--cl-in);
+  --color-on-in: var(--cl-on-in);
+  --color-in-bg: var(--cl-in-bg);
+  --color-in-line: var(--cl-in-line);
+  --color-in-fg: var(--cl-in-fg);
+  --color-owe: var(--cl-owe);
+  --color-warn: var(--cl-warn);
 
   --color-neutral-100: var(--cl-n100);
   --color-neutral-200: var(--cl-n200);

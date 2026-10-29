@@ -1,3 +1,4 @@
+import { resolvePendingByName } from "@/lib/domain/pending";
 import { createPractice, listPractices } from "@/lib/domain/products";
 import { actorOr401, bodyOf, respond } from "../_http";
 
@@ -13,7 +14,8 @@ export async function POST(req: Request) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
   const b = await bodyOf<{ name: string; price: number; cardPrice: number | null; providerIds: string[]; commissionPct: number | null; providerCuts: Record<string, { pct?: number | null; fixed?: number | null }> }>(req);
-  return respond(
-    await createPractice(actor, { name: b.name ?? "", price: b.price as number, cardPrice: b.cardPrice, providerIds: b.providerIds, commissionPct: b.commissionPct, providerCuts: b.providerCuts }),
-  );
+  const r = await createPractice(actor, { name: b.name ?? "", price: b.price as number, cardPrice: b.cardPrice, providerIds: b.providerIds, commissionPct: b.commissionPct, providerCuts: b.providerCuts });
+  // Lo anotado antes con este nombre (pendiente) se resuelve solo.
+  if (r.ok) await resolvePendingByName(actor);
+  return respond(r);
 }

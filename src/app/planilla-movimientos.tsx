@@ -4,8 +4,12 @@ import { useState } from "react";
 import { PlusIcon } from "@phosphor-icons/react";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import type { DebtCollectionRow, DebtRow } from "./deudas";
+import { remindLabel } from "./debt-reminder";
+import { AbonoForm, AbonosCard } from "./abonos";
+import { PayablesCard } from "./deudas-consultorio";
+import { SenaForm, SenasCard } from "./senas";
 import { fmtSigned, type Row } from "./planilla-view";
-import { call, fmtTime, methodTotals, money, usdFmt, usePoll, type PaymentsMap, type SaleRow } from "./shared";
+import { call, fmtTime, methodTotals, money, outsideOf, usdFmt, usePoll, type PaymentsMap, type SaleRow } from "./shared";
 
 /**
  * Planilla → Día, debajo de los pacientes: todo lo demás que pasó con la plata ese día, como en la hoja de papel.
@@ -17,8 +21,13 @@ import { call, fmtTime, methodTotals, money, usdFmt, usePoll, type PaymentsMap, 
 
 interface Payout {
   id: string;
+  /** 'cobro' = la profesional nos dio lo nuestro (le habían pagado directo). */
+  direction?: "pago" | "cobro";
   providerName: string;
   amount: number;
+  method?: "efectivo" | "transferencia";
+  debtId?: string | null;
+  debtDate?: string | null;
   createdByName: string;
   createdAt: string;
 }
@@ -33,6 +42,7 @@ export function PlanillaMovimientos({
   sales,
   payments,
   onError,
+  onAbonosChange,
 }: {
   date: string;
   canEdit: boolean;
@@ -40,7 +50,11 @@ export function PlanillaMovimientos({
   sales: SaleRow[];
   payments?: PaymentsMap;
   onError: (m: string) => void;
+  onAbonosChange?: () => void;
 }) {
+  const [abonoForm, setAbonoForm] = useState(false);
+  const [senaForm, setSenaForm] = useState(false);
+  const [abonosKey, setAbonosKey] = useState(0);
   const [egr, refreshEgr] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}`, 30_000);
   const [ing, refreshIng] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}&direction=ingreso`, 30_000);
   const [pay, refreshPay] = usePoll<{ ok: boolean; payouts: Payout[] }>(`/api/payouts?date=${date}`, 30_000);
@@ -49,20 +63,29 @@ export function PlanillaMovimientos({
 
   const egresos = egr?.ok ? egr.expenses : [];
   const ingresos = ing?.ok ? ing.expenses : [];
-  const payouts = pay?.ok ? pay.payouts : [];
+  const allPayouts = pay?.ok ? pay.payouts : [];
+  const payouts = allPayouts.filter((p) => p.direction !== "cobro");
+  const cobros = allPayouts.filter((p) => p.direction === "cobro");
   const collections = dd?.ok ? dd.collections : [];
   const created = dd?.ok ? dd.created : [];
 
-  const pacientes = rows.reduce((n, r) => n + r.total, 0);
+  // Lo que le pagaron directo a la profesional (o con gift card) no entró hoy.
+  const directo = rows.reduce((n, r) => n + outsideOf(r).profesional, 0);
+  const pacientes = rows.reduce((n, r) => n + r.total - outsideOf(r).profesional - outsideOf(r).giftcard, 0);
+  const deProfesionales = cobros.reduce((n, p) => n + p.amount, 0);
   const extras = ingresos.reduce((n, e) => n + e.amount, 0);
   const cobrosDeuda = collections.reduce((n, p) => n + p.amount, 0);
   const gastos = egresos.reduce((n, e) => n + e.amount, 0);
   const aProfesionales = payouts.reduce((n, p) => n + p.amount, 0);
-  const entro = pacientes + extras + cobrosDeuda;
+  const entro = pacientes + extras + cobrosDeuda + deProfesionales;
   const salio = gastos + aProfesionales;
   // Medios: lo de los pacientes (por partes si fue con varios medios) + los cobros de deudas.
   const mt = methodTotals(sales, payments);
   const deudaPor = (m: "efectivo" | "transferencia" | "tarjeta") => collections.filter((p) => (p.method ?? "efectivo") === m).reduce((n, p) => n + p.amount, 0);
+  // Ingresos extras (señas, abonos, otros) también entraron por algún medio.
+  const extraPor = (m: "efectivo" | "transferencia" | "tarjeta") => ingresos.filter((e) => (e.method ?? "efectivo") === m).reduce((n, e) => n + e.amount, 0);
+  const cobroPor = (m: "efectivo" | "transferencia" | "tarjeta") => cobros.filter((p) => (p.method ?? "efectivo") === m).reduce((n, p) => n + p.amount, 0);
+  const porMedio = (m: "efectivo" | "transferencia" | "tarjeta") => mt[m] + deudaPor(m) + extraPor(m) + cobroPor(m);
 
   async function voidPayout(p: Payout) {
     const r = await call(`/api/payouts/${p.id}`, "DELETE");
@@ -81,8 +104,8 @@ export function PlanillaMovimientos({
     ...ingresos.map((e) => ({
       key: e.id,
       time: fmtTime(e.createdAt),
-      who: e.concept,
-      what: `Ingreso extra · ${e.createdByName}`,
+      who: /^(Abono|Seña) · /.test(e.concept) ? e.concept.replace(/^(Abono|Seña) · /, "") : e.concept,
+      what: `${e.concept.startsWith("Abono · ") ? "Abono" : e.concept.startsWith("Seña · ") ? "Seña" : "Ingreso extra"} · ${METHOD[e.method ?? "efectivo"]} · ${e.createdByName}`,
       amount: e.amount,
       onClick: canEdit ? () => setForm({ direction: "ingreso", expense: e }) : undefined,
     })),
@@ -94,13 +117,21 @@ export function PlanillaMovimientos({
       amount: p.amount,
       undo: canEdit ? () => voidCollection(p) : undefined,
     })),
+    ...cobros.map((p) => ({
+      key: p.id,
+      time: fmtTime(p.createdAt),
+      who: short(p.providerName),
+      what: `${p.debtId ? "Nos pagó lo que debía" : "Nos dio lo nuestro (le pagaron directo)"} · ${METHOD[p.method ?? "efectivo"]} · ${p.createdByName}`,
+      amount: p.amount,
+      undo: canEdit ? () => voidPayout(p) : undefined,
+    })),
   ].sort((a, b) => a.time.localeCompare(b.time));
   const outLines: Line[] = [
     ...egresos.map((e) => ({
       key: e.id,
       time: fmtTime(e.createdAt),
       who: e.concept,
-      what: `Egreso · ${e.createdByName}`,
+      what: `Egreso · ${METHOD[e.method ?? "efectivo"]} · ${e.createdByName}`,
       amount: e.amount,
       onClick: canEdit ? () => setForm({ direction: "egreso", expense: e }) : undefined,
     })),
@@ -108,7 +139,7 @@ export function PlanillaMovimientos({
       key: p.id,
       time: fmtTime(p.createdAt),
       who: short(p.providerName),
-      what: `Pago a profesional · ${p.createdByName}`,
+      what: `${p.debtId ? `Pago de lo que se le debía${p.debtDate ? ` (del ${p.debtDate.slice(8, 10)}/${p.debtDate.slice(5, 7)})` : ""}` : "Pago a profesional"} · ${METHOD[p.method ?? "efectivo"]} · ${p.createdByName}`,
       amount: p.amount,
       undo: canEdit ? () => voidPayout(p) : undefined,
     })),
@@ -131,6 +162,28 @@ export function PlanillaMovimientos({
         />
       )}
 
+      {senaForm && (
+        <SenaForm
+          onClose={() => setSenaForm(false)}
+          onSaved={() => {
+            setSenaForm(false);
+            refreshIng();
+            setAbonosKey((k) => k + 1);
+            onAbonosChange?.();
+          }}
+        />
+      )}
+      {abonoForm && (
+        <AbonoForm
+          onClose={() => setAbonoForm(false)}
+          onSaved={() => {
+            setAbonoForm(false);
+            refreshIng();
+            setAbonosKey((k) => k + 1);
+            onAbonosChange?.();
+          }}
+        />
+      )}
       <Block
         title="Otros ingresos"
         total={extras + cobrosDeuda}
@@ -139,9 +192,17 @@ export function PlanillaMovimientos({
         loading={loading}
         action={
           canEdit && (
-            <button onClick={() => setForm({ direction: "ingreso" })} className={ADD}>
-              <PlusIcon size={12} weight="bold" /> Ingreso extra
-            </button>
+            <span className="flex gap-3">
+              <button onClick={() => setSenaForm(true)} className={ADD}>
+                <PlusIcon size={12} weight="bold" /> Seña
+              </button>
+              <button onClick={() => setAbonoForm(true)} className={ADD}>
+                <PlusIcon size={12} weight="bold" /> Abono
+              </button>
+              <button onClick={() => setForm({ direction: "ingreso" })} className={ADD}>
+                <PlusIcon size={12} weight="bold" /> Ingreso extra
+              </button>
+            </span>
           )
         }
       />
@@ -171,11 +232,43 @@ export function PlanillaMovimientos({
             key: d.id,
             time: fmtTime(d.createdAt),
             who: d.debtor,
-            what: [d.concept, d.providerName && short(d.providerName), d.remaining ? (d.paid ? `ya pagó ${money(d.paid)}` : "") : "ya la pagó"].filter(Boolean).join(" · "),
+            what: [
+              d.concept,
+              d.providerName && short(d.providerName),
+              d.remaining ? (d.paid ? `ya pagó ${money(d.paid)}` : "") : "ya la pagó",
+              d.remaining && d.remindOn ? `cobrar: ${remindLabel(d.remindOn)}` : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
             amount: d.amount,
           }))}
         />
       )}
+
+      {/* Lo que debe el consultorio (de todos los días) */}
+      <PayablesCard canAnul={canEdit} showToast={onError} onChange={() => refreshEgr()} />
+
+      {/* Señas sin usar (de todos los días) */}
+      <SenasCard
+        key={`s${abonosKey}`}
+        canAdd={false}
+        showToast={onError}
+        onChange={() => {
+          refreshIng();
+          onAbonosChange?.();
+        }}
+      />
+
+      {/* Abonos abiertos (de todos los días) */}
+      <AbonosCard
+        key={abonosKey}
+        canAdd={false}
+        showToast={onError}
+        onChange={() => {
+          refreshIng();
+          onAbonosChange?.();
+        }}
+      />
 
       {/* Resumen del día */}
       <section className="flex flex-col gap-2">
@@ -185,6 +278,7 @@ export function PlanillaMovimientos({
             <Sum label="Pacientes" value={money(pacientes)} />
             {extras > 0 && <Sum label="+ Ingresos extras" value={money(extras)} />}
             {cobrosDeuda > 0 && <Sum label="+ Cobros de deudas" value={money(cobrosDeuda)} />}
+            {deProfesionales > 0 && <Sum label="+ Nos dieron profesionales" value={money(deProfesionales)} />}
             <Sum label="Entró" value={money(entro)} strong />
             {gastos > 0 && <Sum label="− Egresos" value={money(gastos)} />}
             {aProfesionales > 0 && <Sum label="− Pagado a profesionales" value={money(aProfesionales)} />}
@@ -192,12 +286,13 @@ export function PlanillaMovimientos({
             <Sum label="Queda (entró − salió)" value={fmtSigned(entro - salio)} strong />
           </div>
           <div className="flex flex-col">
-            <span className="pb-1 text-[12px] text-neutral-500">Cómo pagaron (pacientes y deudas)</span>
-            <Sum label="Efectivo" value={money(mt.efectivo + deudaPor("efectivo"))} />
-            <Sum label="Transferencias" value={money(mt.transferencia + deudaPor("transferencia"))} />
-            <Sum label="Tarjetas" value={money(mt.tarjeta + deudaPor("tarjeta"))} />
+            <span className="pb-1 text-[12px] text-neutral-500">Cómo entró la plata</span>
+            <Sum label="Efectivo" value={money(porMedio("efectivo"))} />
+            <Sum label="Transferencias" value={money(porMedio("transferencia"))} />
+            <Sum label="Tarjetas" value={money(porMedio("tarjeta"))} />
             {mt.usd > 0 && <Sum label={`Dólares · ${usdFmt(mt.usd)}`} value={money(mt.dolares)} />}
             {mt.sin > 0 && <Sum label="Sin medio cargado" value={money(mt.sin)} muted />}
+            {directo > 0 && <Sum label="Le pagaron directo a profesionales (no entró)" value={money(directo)} muted />}
           </div>
         </div>
       </section>

@@ -12,6 +12,6 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
-  const b = await bodyOf<{ concept: string; amount: number; direction: string }>(req);
+  const b = await bodyOf<{ concept: string; amount: number; direction: string; method: string }>(req);
   return respond(await createExpense(actor, b));
 }

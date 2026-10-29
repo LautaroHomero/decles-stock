@@ -133,12 +133,12 @@ const PATIENT_CUES = new Set(["paciente", "pacienta", "vino", "vinieron", "a", "
 const SELLER_CUES = new Set(["atendio", "atendi", "atendida", "atendido", "atiende", "dra", "dr", "doctora", "doctor", "lic", "licenciada"]);
 
 const FILLER = new Set([
-  "vendi", "vendimos", "vendio", "vendieron", "vender", "venta", "ventas", "se", "me", "le", "les",
+  "vendi", "vendimos", "vendio", "vendieron", "vender", "venta", "ventas", "se", "me", "le", "les", "nos", "te", "consultorio",
   "compro", "compraron", "llevo", "llevaron", "hoy", "recien", "otra", "otro", "mas",
   "de", "del", "la", "el", "los", "las", "al", "a", "con", "para", "por", "en",
   "marca", "unidad", "unidades", "u", "x", "cant", "cantidad", "producto", "productos",
   "dra", "dr", "doctora", "doctor", "lic", "licenciada",
-  "pago", "pagaron", "pagado", "abono", "abonaron", "medio",
+  "pago", "pagaron", "pagado", "abono", "abonaron", "abonado", "abonada", "plan", "medio",
   "atendio", "atendi", "atendida", "atendido", "atiende", "atendieron", "vino", "vinieron", "paciente", "pacienta",
   "hizo", "hice", "hicimos", "hicieron", "se", "le", "lo", "su", "sesion", "turno", "y",
   // Muletillas de cómo se cuenta («Che, vino…», «Hola, buenas…»): no son paciente ni algo que se vendió.

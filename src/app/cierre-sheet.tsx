@@ -1,37 +1,39 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CaretLeftIcon, CaretRightIcon, CheckIcon, PlusIcon } from "@phosphor-icons/react";
+import { CaretLeftIcon, CaretRightIcon, PlusIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import { fmtSigned, toRows } from "./planilla-view";
-import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type Payment, type PaymentsMap, type SaleMethod, type SaleRow, methodTotals, usdFmt } from "./shared";
+import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type Payment, type PaymentsMap, type SaleMethod, type SaleRow, methodTotals, outsideOf, usdFmt } from "./shared";
 import { DebtsCard, type DebtCollectionRow, type DebtRow } from "./deudas";
+import { ProviderDebtsCard } from "./deudas-profesionales";
+import { CuentasProfesionales, type Balance } from "./cuentas-profesionales";
+import { AbonosCard } from "./abonos";
+import { PayablesCard } from "./deudas-consultorio";
+import { SenasCard } from "./senas";
 
 /**
  * Cierre del día (secretaría y admin): todo lo que entró, todo lo que salió y a quién se le pagó.
  *  · Arriba: entró, salió y el efectivo que debería haber.
- *  · Profesionales: pacientes, lo cobrado, su parte, lo que ya se le pagó y lo que se le debe («Pagar»).
+ *  · Cuentas con profesionales: sus atenciones (quién cobró, su parte) y quién le debe a quién («Pagar» / «Cobrar»).
  *  · Movimientos: cada paciente (qué, con quién, cómo pagó), ingresos y egresos extras y pagos a profesionales.
  *  · Caja y medios de pago.
  */
 
 interface Payout {
   id: string;
+  /** 'pago' = le dimos plata (sale); 'cobro' = nos dio lo que nos debía (entra). */
+  direction: "pago" | "cobro";
   providerId: string;
   providerName: string;
   amount: number;
+  method: "efectivo" | "transferencia";
+  /** Pago de lo que se le debía de otro día. */
+  debtId: string | null;
+  debtDate: string | null;
   createdByName: string;
   createdAt: string;
-}
-interface Balance {
-  providerId: string;
-  name: string;
-  share: number;
-  paid: number;
-  owed: number;
-  /** Es admin del consultorio (la dueña): no cobra comisión. */
-  owner?: boolean;
 }
 
 const shift = (ymd: string, days: number) => {
@@ -44,7 +46,15 @@ const longDate = (ymd: string) => {
   return s.charAt(0).toUpperCase() + s.slice(1);
 };
 const num = (s: string) => Number(s.replace(/\D/g, "") || 0);
-const METHOD: Record<SaleMethod, string> = { efectivo: "efectivo", transferencia: "transferencia", tarjeta: "tarjeta", dolares: "dólares", mixto: "varios medios" };
+const METHOD: Record<SaleMethod, string> = {
+  efectivo: "efectivo",
+  transferencia: "transferencia",
+  tarjeta: "tarjeta",
+  dolares: "dólares",
+  giftcard: "gift card",
+  profesional: "le pagaron a la profesional",
+  mixto: "varios medios",
+};
 const short = (name: string) => name.replace(/^(Dra?\.|Lic\.)\s*/i, "");
 
 export function CierreSheet({ actor }: { actor: Actor }) {
@@ -58,16 +68,18 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const [egr, refreshEgr] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}`, 30_000);
   const [ing, refreshIng] = usePoll<ExpensesResponse>(`/api/expenses?from=${date}&to=${date}&direction=ingreso`, 30_000);
   const [cash, refreshCash] = usePoll<{ ok: boolean; cash: { opening: number | null; amount: number | null } }>(`/api/day-cash?date=${date}`, 60_000);
-  const [pay, refreshPay] = usePoll<{ ok: boolean; payouts: Payout[]; balances: Balance[] }>(`/api/payouts?date=${date}`, 30_000);
+  const [pay, refreshPay] = usePoll<{ ok: boolean; error?: string; payouts: Payout[]; balances: Balance[] }>(`/api/payouts?date=${date}`, 30_000);
   const [dd, refreshDd] = usePoll<{ ok: boolean; collections: DebtCollectionRow[]; created: DebtRow[] }>(`/api/debts/day?date=${date}`, 30_000);
   const [toast, showToast] = useToast();
   const [form, setForm] = useState<{ direction: "egreso" | "ingreso"; expense?: Expense } | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
 
   const rows = useMemo(() => toRows(sales?.ok ? sales.sales : [], sales?.payments), [sales]);
   const egresos = useMemo(() => (egr?.ok ? egr.expenses : []), [egr]);
   const ingresos = useMemo(() => (ing?.ok ? ing.expenses : []), [ing]);
-  const payouts = useMemo(() => (pay?.ok ? pay.payouts : []), [pay]);
+  const allPayouts = useMemo(() => (pay?.ok ? pay.payouts : []), [pay]);
+  // Pagos (le damos plata) y cobros (nos da lo que nos debía de lo que le pagaron directo).
+  const payouts = useMemo(() => allPayouts.filter((p) => p.direction !== "cobro"), [allPayouts]);
+  const cobros = useMemo(() => allPayouts.filter((p) => p.direction === "cobro"), [allPayouts]);
   const balances = pay?.ok ? pay.balances : [];
   // Deudas: lo cobrado hoy entra a la caja; lo que quedó debiendo se ve en la fila de esa atención.
   const collections = useMemo(() => (dd?.ok ? dd.collections : []), [dd]);
@@ -79,18 +91,30 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const egTotal = egresos.reduce((n, e) => n + e.amount, 0);
   const inTotal = ingresos.reduce((n, e) => n + e.amount, 0);
   const paidOut = payouts.reduce((n, p) => n + p.amount, 0);
-  const cobrado = rows.reduce((n, r) => n + r.total, 0);
+  // Lo que no entró hoy al consultorio: lo pagado directo a la profesional y con gift card.
+  const outside = rows.reduce((n, r) => { const o = outsideOf(r); return { profesional: n.profesional + o.profesional, giftcard: n.giftcard + o.giftcard }; }, { profesional: 0, giftcard: 0 });
+  const cobrado = rows.reduce((n, r) => n + r.total, 0) - outside.profesional - outside.giftcard;
+  const cobrosTotal = cobros.reduce((n, p) => n + p.amount, 0);
+  const cobroBy = (m: Payment) => cobros.filter((p) => (p.method ?? "efectivo") === m).reduce((n, p) => n + p.amount, 0);
   const kTotal = rows.reduce((n, r) => n + r.k, 0);
-  const owedTotal = balances.reduce((n, b) => n + b.owed, 0);
   // Por medio, contando las partes de lo que se pagó con varios medios o en dólares.
   const mt = useMemo(() => methodTotals(sales?.ok ? sales.sales : [], sales?.payments), [sales]);
   const byMethod = (m: Payment | null) => (m ? mt[m] : mt.sin);
   const efectivo = mt.efectivo + debtInBy("efectivo");
   const opening = cash?.ok ? cash.cash.opening : null;
   const contado = cash?.ok ? cash.cash.amount : null;
-  const entro = cobrado + debtIn + inTotal;
+  const entro = cobrado + debtIn + inTotal + cobrosTotal;
   const salio = egTotal + paidOut;
-  const esperado = (opening ?? 0) + efectivo + inTotal - egTotal - paidOut;
+  // A la caja solo le toca el efectivo: lo transferido (o con tarjeta) va por otro lado.
+  const cashOnly = <T extends { method?: string }>(l: T[]) => l.filter((x) => (x.method ?? "efectivo") === "efectivo");
+  const inBy = (m: Payment) => ingresos.filter((e) => (e.method ?? "efectivo") === m).reduce((n, e) => n + e.amount, 0);
+  const inCash = cashOnly(ingresos).reduce((n, e) => n + e.amount, 0);
+  const egCash = cashOnly(egresos).reduce((n, e) => n + e.amount, 0);
+  const paidOutCash = cashOnly(payouts).reduce((n, p) => n + p.amount, 0);
+  const paidToday = payouts.filter((p) => !p.debtId).reduce((n, p) => n + p.amount, 0);
+  const paidDebts = paidOut - paidToday;
+  const cobrosCash = cobroBy("efectivo");
+  const esperado = (opening ?? 0) + efectivo + inCash + cobrosCash - egCash - paidOutCash;
   const pacientes = rows.filter((r) => r.patient).length;
 
   // Movimientos del día, en orden: cada paciente, los extras y los pagos a profesionales.
@@ -103,7 +127,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
       detail: string;
       inn: number;
       out: number;
-      kind: "visita" | "ingreso" | "egreso" | "pago" | "deuda";
+      kind: "visita" | "ingreso" | "egreso" | "pago" | "cobro" | "deuda";
       ref?: Expense | Payout | DebtCollectionRow;
     };
     const list: Move[] = [
@@ -125,13 +149,34 @@ export function CierreSheet({ actor }: { actor: Actor }) {
           .concat(r.sales[0].visitId && debtByVisit.get(r.sales[0].visitId) ? [`quedó debiendo ${money(debtByVisit.get(r.sales[0].visitId!)!.amount)}`] : [])
           .filter(Boolean)
           .join(" · "),
-        inn: r.total,
+        inn: r.total - outsideOf(r).profesional - outsideOf(r).giftcard,
         out: 0,
         kind: "visita" as const,
       })),
-      ...ingresos.map((e) => ({ at: e.createdAt, time: fmtTime(e.createdAt), who: e.concept, what: "Ingreso extra", detail: e.createdByName, inn: e.amount, out: 0, kind: "ingreso" as const, ref: e })),
-      ...egresos.map((e) => ({ at: e.createdAt, time: fmtTime(e.createdAt), who: e.concept, what: "Egreso", detail: e.createdByName, inn: 0, out: e.amount, kind: "egreso" as const, ref: e })),
-      ...payouts.map((p) => ({ at: p.createdAt, time: fmtTime(p.createdAt), who: short(p.providerName), what: "Pago a profesional", detail: p.createdByName, inn: 0, out: p.amount, kind: "pago" as const, ref: p })),
+      ...cobros.map((p) => ({
+        at: p.createdAt,
+        time: fmtTime(p.createdAt),
+        who: short(p.providerName),
+        what: p.debtId ? `Nos pagó lo que debía${p.debtDate ? ` (del ${p.debtDate.slice(8, 10)}/${p.debtDate.slice(5, 7)})` : ""}` : "Nos dio lo nuestro (le pagaron directo)",
+        detail: [METHOD[p.method], p.createdByName].join(" · "),
+        inn: p.amount,
+        out: 0,
+        kind: "cobro" as const,
+        ref: p,
+      })),
+      ...ingresos.map((e) => ({ at: e.createdAt, time: fmtTime(e.createdAt), who: /^(Abono|Seña) · /.test(e.concept) ? e.concept.replace(/^(Abono|Seña) · /, "") : e.concept, what: e.concept.startsWith("Abono · ") ? "Abono (paga antes las sesiones)" : e.concept.startsWith("Seña · ") ? "Seña (el resto lo paga cuando viene)" : "Ingreso extra", detail: [METHOD[e.method ?? "efectivo"], e.createdByName].join(" · "), inn: e.amount, out: 0, kind: "ingreso" as const, ref: e })),
+      ...egresos.map((e) => ({ at: e.createdAt, time: fmtTime(e.createdAt), who: e.concept, what: "Egreso", detail: [METHOD[e.method ?? "efectivo"], e.createdByName].join(" · "), inn: 0, out: e.amount, kind: "egreso" as const, ref: e })),
+      ...payouts.map((p) => ({
+        at: p.createdAt,
+        time: fmtTime(p.createdAt),
+        who: short(p.providerName),
+        what: p.debtId ? `Pago de lo que se le debía${p.debtDate ? ` (del ${p.debtDate.slice(8, 10)}/${p.debtDate.slice(5, 7)})` : ""}` : "Pago a profesional",
+        detail: [METHOD[p.method], p.createdByName].join(" · "),
+        inn: 0,
+        out: p.amount,
+        kind: "pago" as const,
+        ref: p,
+      })),
       ...collections.map((p) => ({
         at: p.createdAt,
         time: fmtTime(p.createdAt),
@@ -145,16 +190,8 @@ export function CierreSheet({ actor }: { actor: Actor }) {
       })),
     ];
     return list.sort((a, b) => a.at.localeCompare(b.at));
-  }, [rows, ingresos, egresos, payouts, collections, debtByVisit]);
+  }, [rows, ingresos, egresos, payouts, cobros, collections, debtByVisit]);
 
-  async function payAll(providerId: string, name: string) {
-    setBusy(providerId);
-    const r = await call("/api/payouts", "POST", { providerId, date });
-    setBusy(null);
-    if (!r.ok) return showToast(r.error ?? "No se pudo anotar el pago.");
-    showToast(`Pagado a ${short(name)}: ${money((r.payout as Payout).amount)}.`);
-    refreshPay();
-  }
   async function voidCollection(p: DebtCollectionRow) {
     const r = await call(`/api/debts/payments/${p.id}`, "DELETE");
     if (!r.ok) return showToast(r.error ?? "No se pudo deshacer.");
@@ -165,10 +202,11 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   async function voidPay(p: Payout) {
     const r = await call(`/api/payouts/${p.id}`, "DELETE");
     if (!r.ok) return showToast(r.error ?? "No se pudo anular.");
-    showToast("Pago anulado.");
+    showToast(p.direction === "cobro" ? "Cobro anulado." : "Pago anulado.");
     refreshPay();
   }
 
+  const [provDebtsKey, setProvDebtsKey] = useState(0);
   const loading = !sales || !pay;
 
   return (
@@ -217,7 +255,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
         <>
           <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-neutral-800 sm:grid-cols-3">
             <Big label="Entró" value={money(entro)} sub={`${pacientes} ${pacientes === 1 ? "paciente" : "pacientes"}${debtIn ? ` + ${money(debtIn)} de deudas` : ""}${inTotal ? ` + ${money(inTotal)} extras` : ""}`} />
-            <Big label="Salió" value={money(salio)} sub={`egresos ${money(egTotal)} · profesionales ${money(paidOut)}`} border />
+            <Big label="Salió" value={money(salio)} sub={`egresos ${money(egTotal)} · profesionales ${money(paidOut)}${paidOut !== paidOutCash || egTotal !== egCash ? ` · en efectivo ${money(egCash + paidOutCash)}` : ""}`} border />
             <Big
               label="Efectivo que debería haber"
               value={fmtSigned(esperado)}
@@ -226,77 +264,19 @@ export function CierreSheet({ actor }: { actor: Actor }) {
             />
           </div>
 
-          {/* Profesionales: su parte, lo pagado y lo que se les debe */}
-          <Card title="Profesionales" action={owedTotal > 0 ? <span className="text-[13px] text-neutral-400">Se les debe {money(owedTotal)}</span> : null}>
-            {!balances.length ? (
-              <p className="px-4 pb-3 text-neutral-500">No hay nada anotado con profesionales este día.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px] border-collapse tabular-nums">
-                  <thead>
-                    <tr className="text-left text-[12px] text-neutral-500">
-                      <th className="px-4 pb-2 font-normal" />
-                      <th className="px-3 pb-2 text-right font-normal">Pacientes</th>
-                      <th className="px-3 pb-2 text-right font-normal">Cobrado</th>
-                      <th className="px-3 pb-2 text-right font-normal">Se lleva</th>
-                      <th className="px-3 pb-2 text-right font-normal">Pagado</th>
-                      <th className="px-3 pb-2 text-right font-normal">Debe</th>
-                      <th className="cl-no-print w-[1%] px-4 pb-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {balances.map((b) => {
-                      const mine = rows.filter((r) => r.providerId === b.providerId);
-                      return (
-                        <tr key={b.providerId} className="border-t border-neutral-900">
-                          <td className="px-4 py-2">
-                            {short(b.name)}
-                            {b.owner && <span className="ml-2 text-[12px] text-neutral-500">admin · sin comisión</span>}
-                          </td>
-                          <td className="px-3 py-2 text-right text-neutral-300">{mine.filter((r) => r.patient).length}</td>
-                          <td className="px-3 py-2 text-right">
-                            {money(mine.reduce((n, r) => n + r.total, 0) + collections.filter((p) => p.providerId === b.providerId).reduce((n, p) => n + p.amount, 0))}
-                          </td>
-                          <td className="px-3 py-2 text-right">{b.owner ? <span className="text-neutral-500">—</span> : money(b.share)}</td>
-                          <td className="px-3 py-2 text-right text-neutral-300">{b.paid ? money(b.paid) : "—"}</td>
-                          <td className={`px-3 py-2 text-right ${b.owed ? "font-medium" : "text-neutral-500"}`}>{b.owed ? money(b.owed) : "—"}</td>
-                          <td className="cl-no-print whitespace-nowrap px-4 py-1.5 text-right">
-                            {b.owed > 0 && canEdit ? (
-                              <button
-                                onClick={() => payAll(b.providerId, b.name)}
-                                disabled={busy === b.providerId}
-                                className="rounded-md border border-neutral-800 px-2.5 py-1 text-[12.5px] text-neutral-200 hover:bg-accent-900 disabled:opacity-40"
-                              >
-                                {busy === b.providerId ? "…" : "Pagar todo"}
-                              </button>
-                            ) : b.share > 0 && b.owed === 0 ? (
-                              <span className="inline-flex items-center gap-1 text-[12.5px] text-neutral-400">
-                                <CheckIcon size={12} weight="bold" /> pagado
-                              </span>
-                            ) : null}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t border-neutral-800 font-medium">
-                      <td className="px-4 py-2.5">Total</td>
-                      <td className="px-3 py-2.5 text-right">{pacientes}</td>
-                      <td className="px-3 py-2.5 text-right">{money(cobrado + collections.filter((p) => p.providerId).reduce((n, p) => n + p.amount, 0))}</td>
-                      <td className="px-3 py-2.5 text-right">{money(kTotal + debtShares)}</td>
-                      <td className="px-3 py-2.5 text-right">{money(paidOut)}</td>
-                      <td className="px-3 py-2.5 text-right">{money(owedTotal)}</td>
-                      <td className="cl-no-print" />
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            )}
-            <p className="px-4 pb-3 pt-1 text-[12.5px] text-neutral-500">
-              «Pagar todo» anota que se le dio su parte en efectivo (sale de la caja). También se puede escribir en Anotar: «le pagué todo a Carmen» o «le pagué 18000 a Carmen».
-            </p>
-          </Card>
+          {/* Cuentas con profesionales: sus atenciones y quién le debe a quién */}
+          <CuentasProfesionales
+            balances={balances}
+            error={pay && !pay.ok ? (pay.error ?? "No se pudieron cargar las cuentas con profesionales.") : null}
+            date={date}
+            canEdit={canEdit}
+            showToast={showToast}
+            onChange={() => {
+              refreshPay();
+              setProvDebtsKey((k) => k + 1);
+            }}
+          />
+          {paidDebts > 0 && <p className="-mt-6 px-1 text-[12.5px] text-neutral-500">Además hoy se pagaron {money(paidDebts)} de deudas con profesionales de otros días.</p>}
 
           {/* Movimientos: todo lo que entró y salió */}
           <Card
@@ -347,7 +327,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                                 deshacer
                               </button>
                             )}
-                            {m.kind === "pago" && canEdit && (
+                            {(m.kind === "pago" || m.kind === "cobro") && canEdit && (
                               <button onClick={() => voidPay(m.ref as Payout)} className="cl-no-print ml-2 underline-offset-2 hover:text-fg hover:underline">
                                 anular
                               </button>
@@ -398,6 +378,36 @@ export function CierreSheet({ actor }: { actor: Actor }) {
             }}
           />
 
+          {/* Lo que debe el consultorio (de todos los días) */}
+          <PayablesCard canAnul={!!actor.activeOrg?.canAdmin} showToast={showToast} onChange={() => refreshEgr()} />
+
+          {/* Señas sin usar (de todos los días) */}
+          <SenasCard showToast={showToast} onChange={() => refreshIng()} />
+
+          {/* Abonos abiertos (de todos los días) */}
+          <AbonosCard
+            showToast={showToast}
+            onChange={() => {
+              refreshIng();
+            }}
+          />
+
+          {/* Lo que el consultorio les debe a sus profesionales (de todos los días) */}
+          <ProviderDebtsCard
+            key={provDebtsKey}
+            canAnul={!!actor.activeOrg?.canAdmin}
+            showToast={showToast}
+            onChange={() => refreshPay()}
+          />
+          {/* Lo que las profesionales nos deben (de todos los días) */}
+          <ProviderDebtsCard
+            key={`her:${provDebtsKey}`}
+            direction="profesional"
+            canAnul={!!actor.activeOrg?.canAdmin}
+            showToast={showToast}
+            onChange={() => refreshPay()}
+          />
+
           {/* Caja y medios de pago */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Card title="Caja (efectivo)">
@@ -415,9 +425,10 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                 />
                 <Line label="+ Efectivo cobrado" value={money(mt.efectivo)} />
                 {debtInBy("efectivo") > 0 && <Line label="+ Deudas cobradas en efectivo" value={money(debtInBy("efectivo"))} />}
-                <Line label="+ Ingresos extras" value={money(inTotal)} />
-                <Line label="− Egresos" value={money(egTotal)} />
-                <Line label="− Pagado a profesionales" value={money(paidOut)} />
+                <Line label="+ Ingresos extras en efectivo" value={money(inCash)} />
+                {cobrosCash > 0 && <Line label="+ Cobrado a profesionales en efectivo" value={money(cobrosCash)} />}
+                <Line label="− Egresos en efectivo" value={money(egCash)} />
+                <Line label="− Pagado a profesionales en efectivo" value={money(paidOutCash)} />
                 <Line label="Debería haber" value={fmtSigned(esperado)} strong />
                 <CashInput
                   key={`c:${date}:${contado ?? ""}`}
@@ -436,14 +447,21 @@ export function CierreSheet({ actor }: { actor: Actor }) {
             </Card>
             <Card title="Cómo pagaron">
               <div className="flex flex-col px-4 pb-3">
-                <Line label="Efectivo" value={money(efectivo)} />
-                <Line label="Transferencias" value={money(byMethod("transferencia") + debtInBy("transferencia"))} />
-                <Line label="Tarjetas" value={money(byMethod("tarjeta") + debtInBy("tarjeta"))} />
+                <Line label="Efectivo" value={money(efectivo + inBy("efectivo") + cobrosCash)} />
+                <Line label="Transferencias" value={money(byMethod("transferencia") + debtInBy("transferencia") + inBy("transferencia") + cobroBy("transferencia"))} />
+                <Line label="Tarjetas" value={money(byMethod("tarjeta") + debtInBy("tarjeta") + inBy("tarjeta"))} />
                 {mt.usd > 0 && <Line label={`Dólares · ${usdFmt(mt.usd)}`} value={money(mt.dolares)} />}
                 {byMethod(null) > 0 && <Line label="Sin medio cargado" value={money(byMethod(null))} muted />}
                 {debtIn > 0 && <Line label="De eso, deudas cobradas" value={money(debtIn)} muted />}
-                <Line label="Total cobrado" value={money(cobrado + debtIn)} strong />
-                <Line label="Para Decles (cobrado − profesionales)" value={fmtSigned(cobrado + debtIn - kTotal - debtShares)} />
+                {inTotal > 0 && <Line label="De eso, ingresos extras (señas, abonos…)" value={money(inTotal)} muted />}
+                {cobrosTotal > 0 && <Line label="De eso, lo que nos dieron profesionales" value={money(cobrosTotal)} muted />}
+                <Line label="Total que entró" value={money(entro)} strong />
+                {outside.profesional > 0 && <Line label="Le pagaron directo a profesionales (no entró)" value={money(outside.profesional)} muted />}
+                {outside.giftcard > 0 && <Line label="Pagado con gift card (no entró hoy)" value={money(outside.giftcard)} muted />}
+                <Line
+                  label="Para Decles (lo de hoy − parte de profesionales)"
+                  value={fmtSigned(cobrado + outside.profesional + debtIn + inTotal - kTotal - debtShares)}
+                />
               </div>
             </Card>
           </div>

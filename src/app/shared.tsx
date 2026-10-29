@@ -111,6 +111,8 @@ export function Toast({ msg }: { msg: string | null }) {
 export interface CatalogProduct {
   stockItemId: string;
   priceItemId: string | null;
+  infiniteStock: boolean;
+  giftCard: boolean;
   /** Médicas que lo venden (vacío = cualquiera). */
   providerIds: string[];
   /** % de comisión propio (null = el de cada médica). */
@@ -182,13 +184,16 @@ export interface SaleRow {
   cardTotal: number;
 }
 
-export type Payment = "efectivo" | "transferencia" | "tarjeta" | "dolares";
+/** `profesional` = la paciente le pagó directo a la profesional: no entra a la caja; lo nuestro nos lo debe ella. */
+export type Payment = "efectivo" | "transferencia" | "tarjeta" | "dolares" | "giftcard" | "profesional";
 export type SaleMethod = Payment | "mixto";
 export const PAYMENT_LABEL: Record<SaleMethod, string> = {
   efectivo: "Efectivo",
   transferencia: "Transferencia",
   tarjeta: "Tarjeta",
   dolares: "Dólares",
+  giftcard: "Gift card",
+  profesional: "A la profesional",
   mixto: "Varios medios",
 };
 export const PAYMENTS: [Payment, string][] = [
@@ -196,6 +201,7 @@ export const PAYMENTS: [Payment, string][] = [
   ["transferencia", "Transf."],
   ["tarjeta", "Tarjeta"],
   ["dolares", "Dólares"],
+  ["profesional", "A la profesional"],
 ];
 
 /** Una parte del pago (varios medios o dólares). `amount` en pesos. */
@@ -208,8 +214,18 @@ export interface PayPart {
 export type PaymentsMap = Record<string, PayPart[]>;
 
 /** Lo cobrado por medio (las anotaciones con varios medios se cuentan por sus partes). `usd` = dólares físicos. */
+/** Lo de una anotación que no entró al consultorio hoy: lo que se le pagó directo a la profesional y lo pagado con gift card. */
+export function outsideOf(r: { method: SaleMethod | null; total: number; parts: PayPart[] }): { profesional: number; giftcard: number } {
+  if (r.parts.length)
+    return {
+      profesional: r.parts.filter((p) => p.method === "profesional").reduce((n, p) => n + p.amount, 0),
+      giftcard: r.parts.filter((p) => p.method === "giftcard").reduce((n, p) => n + p.amount, 0),
+    };
+  return { profesional: r.method === "profesional" ? r.total : 0, giftcard: r.method === "giftcard" ? r.total : 0 };
+}
+
 export function methodTotals(sales: SaleRow[], payments?: PaymentsMap) {
-  const t = { efectivo: 0, transferencia: 0, tarjeta: 0, dolares: 0, usd: 0, sin: 0 };
+  const t = { efectivo: 0, transferencia: 0, tarjeta: 0, dolares: 0, giftcard: 0, profesional: 0, usd: 0, sin: 0 };
   const seen = new Set<string>();
   for (const s of sales) {
     if (s.status !== "paid") continue;

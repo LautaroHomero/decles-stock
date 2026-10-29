@@ -9,6 +9,8 @@ export interface Expense {
   direction?: "egreso" | "ingreso";
   concept: string;
   amount: number;
+  /** Solo el efectivo toca la caja. */
+  method?: "efectivo" | "transferencia" | "tarjeta";
   createdByName: string;
   createdAt: string;
   updatedByName: string | null;
@@ -33,12 +35,13 @@ export function ExpenseForm({
 }: {
   direction?: "egreso" | "ingreso";
   expense?: Expense;
-  initial?: { concept: string; amount: number };
+  initial?: { concept: string; amount: number; method?: "efectivo" | "transferencia" | "tarjeta" };
   onClose: () => void;
   onSaved: (msg: string) => void;
 }) {
   const [concept, setConcept] = useState(expense?.concept ?? initial?.concept ?? "");
   const [amount, setAmount] = useState(String(expense?.amount ?? initial?.amount ?? "") === "0" ? "" : String(expense?.amount ?? initial?.amount ?? ""));
+  const [method, setMethod] = useState<"efectivo" | "transferencia" | "tarjeta">(expense?.method ?? initial?.method ?? "efectivo");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const n = Number(amount.replace(/\D/g, "") || 0);
@@ -50,7 +53,7 @@ export function ExpenseForm({
     if (!ok || busy) return;
     setBusy(true);
     setErr("");
-    const body = { concept, amount: n, direction };
+    const body = { concept, amount: n, direction, method };
     const r = expense ? await call(`/api/expenses/${expense.id}`, "PATCH", body) : await call("/api/expenses", "POST", body);
     setBusy(false);
     if (!r.ok) return setErr(r.error ?? "No se pudo guardar.");
@@ -94,6 +97,22 @@ export function ExpenseForm({
             className={`${FIELD} tabular-nums`}
           />
         </label>
+        <div className="flex flex-col gap-1">
+          <span className="text-[12px] text-neutral-400">{ingreso ? "¿Cómo entró?" : "¿Cómo se pagó?"} · solo el efectivo cuenta en la caja</span>
+          <div className="flex flex-wrap gap-2">
+            {(["efectivo", "transferencia", "tarjeta"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={method === m}
+                onClick={() => setMethod(m)}
+                className={`rounded-md border px-3 py-1.5 text-[13.5px] ${method === m ? "border-accent bg-accent text-on-accent" : "border-neutral-800 text-neutral-300 hover:bg-accent-900"}`}
+              >
+                {m === "efectivo" ? "Efectivo" : m === "transferencia" ? "Transferencia" : "Tarjeta"}
+              </button>
+            ))}
+          </div>
+        </div>
         {err && <p className="text-[13px] text-neutral-200">{err}</p>}
         <div className="flex flex-wrap gap-2">
           <button

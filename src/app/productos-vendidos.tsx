@@ -47,7 +47,7 @@ function linesOf(sales: SaleRow[], payments?: PaymentsMap): Line[] {
         const vt = visitTotal.get(s.visitId!) || 1;
         const share = amount / vt;
         for (const p of parts) {
-          by[p.method] += Math.round(p.amount * share);
+          if (p.method in by) by[p.method as Key] += Math.round(p.amount * share);
           if (p.method === "dolares") usd += (p.usd ?? 0) * share;
         }
       } else if (s.paymentMethod === "efectivo" || s.paymentMethod === "transferencia" || s.paymentMethod === "tarjeta") by[s.paymentMethod] += amount;

@@ -32,6 +32,8 @@ export interface CatalogProduct {
   /** Precio con tarjeta; null = igual al de efectivo. */
   cardPrice: number | null;
   available: number;
+  infiniteStock: boolean;
+  giftCard: boolean;
   minQuantity: number;
   low: boolean;
   nextExpiry: string | null;
@@ -89,6 +91,8 @@ export async function catalog(actor: Actor): Promise<
       price: price ? price.amount : null,
       cardPrice: price ? price.cardAmount : null,
       available: i.available,
+      infiniteStock: i.infiniteStock,
+      giftCard: i.giftCard,
       minQuantity: i.minQuantity,
       low: i.low,
       nextExpiry: i.nextExpiry,
@@ -131,6 +135,8 @@ export async function createProduct(
     unit?: string;
     category?: string;
     minQuantity?: number;
+    infiniteStock?: boolean;
+    giftCard?: boolean;
     quantity?: number;
     expiresOn?: string | null;
     lotCode?: string;
@@ -148,7 +154,7 @@ export async function createProduct(
   if (!pc.ok) return pc;
   if (typeof v.price !== "number" || !Number.isInteger(v.price) || v.price < 0)
     return fail("El precio tiene que ser un número entero de pesos, 0 o más.");
-  const item = await createItem(actor, { name: v.name, unit: v.unit, category: v.category, minQuantity: v.minQuantity });
+  const item = await createItem(actor, { name: v.name, unit: v.unit, category: v.category, minQuantity: v.infiniteStock || v.giftCard ? 0 : v.minQuantity, infiniteStock: v.infiniteStock || v.giftCard, giftCard: v.giftCard });
   if (!item.ok) return item;
   const price = await createPrice(actor, { kind: "producto", name: v.name, amount: v.price, cardAmount: v.cardPrice ?? null, stockItemId: item.itemId });
   if (!price.ok) {
@@ -180,6 +186,8 @@ export async function updateProduct(
     unit?: string;
     category?: string;
     minQuantity?: number;
+    infiniteStock?: boolean;
+    giftCard?: boolean;
     active?: boolean;
     providerIds?: string[];
     commissionPct?: number | null;
@@ -190,7 +198,7 @@ export async function updateProduct(
   if (!g.ok) return g;
   const pc = pctOf(v.commissionPct);
   if (!pc.ok) return pc;
-  const r = await editItem(actor, stockItemId, { name: v.name, unit: v.unit, category: v.category, minQuantity: v.minQuantity, active: v.active });
+  const r = await editItem(actor, stockItemId, { name: v.name, unit: v.unit, category: v.category, minQuantity: v.infiniteStock || v.giftCard ? 0 : v.minQuantity, active: v.active, infiniteStock: v.infiniteStock || v.giftCard, giftCard: v.giftCard });
   if (!r.ok) return r;
   const prices = await listPrices(actor, { includeInactive: true });
   if (!prices.ok) return prices;

@@ -1,4 +1,5 @@
 import { listOrgMembers, listOrganizations } from "@/lib/db/repo";
+import { duePayables } from "@/lib/domain/payables";
 import { getStockSettings, listStockItems, todayYmd } from "@/lib/db/stock-repo";
 import { listPendingSales } from "@/lib/db/billing-repo";
 import {
@@ -120,10 +121,45 @@ export async function refreshStockAlerts(orgId: string): Promise<number> {
     }),
   );
   await clearStale(orgId, "deuda", debts.map((d) => d.dedupeKey));
+  // Recordatorio de cobro: el día elegido (y después, mientras siga abierta), «Hoy: cobrarle a Carla».
+  const reminders = (await openDebtsForAlerts(orgId))
+    .filter((d) => d.remindOn && d.remindOn <= today)
+    .map(
+      (d): NewNotification => ({
+        kind: "deuda_cobrar",
+        title: `${d.remindOn === today ? "Hoy" : `Desde el ${fmt(d.remindOn!)}`}: cobrarle ${money(d.remaining)} a ${d.debtor}`,
+        body: [d.concept, d.providerName].filter(Boolean).join(" · ") + (d.paid ? ` · ya pagó ${money(d.paid)} de ${money(d.amount)}` : "") + ". Se cobra en Anotar o en Cierre → Deudas.",
+        refId: d.id,
+        dedupeKey: `deuda_cobrar:${d.id}:${d.remindOn}:${d.remaining}`,
+      }),
+    );
+  await clearStale(orgId, "deuda_cobrar", reminders.map((d) => d.dedupeKey));
+  // Lo que debe el consultorio: todos los días (una por día) o desde la fecha y hora elegidas, hasta que se paga.
+  const due = await duePayables(orgId);
+  const toPay = due.map(
+    (p): NewNotification => ({
+      kind: "pagar",
+      title: `Pagar ${money(p.remaining)} a ${p.creditor}`,
+      body:
+        [p.concept, p.paid ? `ya se pagó ${money(p.paid)} de ${money(p.amount)}` : ""].filter(Boolean).join(" · ") +
+        (p.remindMode === "daily" ? " · aviso de todos los días" : "") +
+        ". Se paga en Anotar («le pagamos a …») o en Cierre → Lo que debemos.",
+      refId: p.id,
+      dedupeKey: `pagar:${p.id}:${p.remindMode === "daily" ? today : p.remindAt}:${p.remaining}`,
+    }),
+  );
+  await clearStale(orgId, "pagar", toPay.map((p) => p.dedupeKey));
+  // Deudas (de pacientes y del consultorio): los admins reciben todas; quien la anotó, siempre la suya.
+  const toAdminsAnd = async (items: NewNotification[], creators: string[]) =>
+    (await Promise.all(items.map((n, i) => insertNotifications(orgId, [...new Set([...admins, creators[i]].filter(Boolean))], [n])))).reduce((a, b) => a + b, 0);
+  const openDebts = await openDebtsForAlerts(orgId);
+  const creatorOf = (id: string) => openDebts.find((d) => d.id === id)?.createdBy ?? "";
   return (
     (await insertNotifications(orgId, recipients, alerts)) +
     (await insertNotifications(orgId, admins, pending)) +
-    (await insertNotifications(orgId, admins, debts))
+    (await toAdminsAnd(debts, debts.map((d) => creatorOf(d.refId!)))) +
+    (await toAdminsAnd(reminders, reminders.map((d) => creatorOf(d.refId!)))) +
+    (await toAdminsAnd(toPay, due.map((p) => p.createdBy)))
   );
 }
 

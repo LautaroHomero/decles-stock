@@ -6,6 +6,23 @@ import type { Actor } from "@/lib/domain/types";
 import { normalize, parseNote, suggest } from "@/lib/domain/quick-sale";
 import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogResponse, type PayPart, type PaymentsMap, type SaleMethod, type SaleRow } from "./shared";
 import { PlanillaMovimientos } from "./planilla-movimientos";
+import type { PrepaidRow } from "./abonos";
+import type { DepositRow } from "./senas";
+import { samePatient } from "@/lib/domain/prepaid-note";
+
+/** Abonos abiertos y qué atenciones del día son sesiones de un abono. */
+interface AbonoData {
+  open: PrepaidRow[];
+  /** visit_id → abono */
+  uses: Map<string, { prepaidId: string; itemId: string; itemName: string }>;
+  /** Obras sociales / prepagas (OSMECON) y qué atenciones del día fueron por una. */
+  insurers: { id: string; name: string; fee: number; active: boolean }[];
+  byInsurer: Map<string, { insurerId: string; name: string }>;
+  /** Señas sin usar y las que se descontaron en atenciones del día (visit_id → seña). */
+  deposits: DepositRow[];
+  depositUsed: Map<string, { depositId: string; amount: number; createdAt: string }>;
+}
+const prepaidLeft = (p: PrepaidRow) => (p.sessions !== null ? `quedan ${p.sessionsLeft} de ${p.sessions}` : `le quedan ${money(p.balance)}`);
 
 /**
  * Planilla del día: la misma hoja que la secretaria llena en papel. Ingresos y egresos extras, caja al
@@ -60,7 +77,15 @@ export interface Row {
   debt: { amount: number; remaining: number } | null;
 }
 
-const METHOD_SHORT: Record<SaleMethod, string> = { efectivo: "Efvo.", transferencia: "Transf.", tarjeta: "Tarj.", dolares: "US$", mixto: "Varios" };
+const METHOD_SHORT: Record<SaleMethod, string> = {
+  efectivo: "Efvo.",
+  transferencia: "Transf.",
+  tarjeta: "Tarj.",
+  dolares: "US$",
+  giftcard: "Gift card",
+  profesional: "A la prof.",
+  mixto: "Varios",
+};
 const GENERIC = "Atención";
 const num = (s: string) => Number(s.replace(/\D/g, "") || 0);
 
@@ -156,6 +181,29 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
   const [catalog, refreshCatalog] = usePoll<CatalogResponse>("/api/catalog", 60_000);
   const [sellersData] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; area: Area }[] }>("/api/sellers", 60_000);
   const [toast, showToast] = useToast();
+  const [abonosData, refreshAbonos] = usePoll<{ ok: boolean; prepaids: PrepaidRow[]; uses?: { visitId: string; prepaidId: string; itemId: string; itemName: string }[] }>(
+    `/api/prepaids?date=${date}`,
+    60_000,
+  );
+  const [insData, refreshIns] = usePoll<{ ok: boolean; insurers: AbonoData["insurers"]; visits?: { visitId: string; insurerId: string; name: string }[] }>(
+    `/api/insurers?date=${date}`,
+    60_000,
+  );
+  const [depData, refreshDep] = usePoll<{ ok: boolean; deposits: DepositRow[]; used?: { visitId: string; depositId: string; amount: number; createdAt: string }[] }>(
+    `/api/deposits?date=${date}`,
+    60_000,
+  );
+  const abonos: AbonoData = useMemo(
+    () => ({
+      deposits: depData?.ok ? depData.deposits : [],
+      depositUsed: new Map((depData?.used ?? []).map((u) => [u.visitId, u])),
+      open: abonosData?.ok ? abonosData.prepaids : [],
+      uses: new Map((abonosData?.uses ?? []).map((u) => [u.visitId, u])),
+      insurers: insData?.ok ? insData.insurers.filter((i) => i.active) : [],
+      byInsurer: new Map((insData?.visits ?? []).map((v) => [v.visitId, v])),
+    }),
+    [abonosData, insData, depData],
+  );
 
   const sellers: Seller[] = useMemo(() => (sellersData?.sellers ?? []).map((s) => ({ id: s.providerId, name: s.name, area: s.area ?? "medicos" })), [sellersData]);
   const practices: Item[] = useMemo(
@@ -191,14 +239,29 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
             practices={practices}
             products={products}
             canEdit={canEdit}
+            abonos={abonos}
             onSaved={() => {
               refreshSales();
               refreshCatalog();
+              refreshAbonos();
+              refreshIns();
+              refreshDep();
             }}
             onError={showToast}
           />
         ))}
-        <PlanillaMovimientos date={date} canEdit={canEdit} rows={rows} sales={sales.ok ? sales.sales : []} payments={sales.payments} onError={showToast} />
+        <PlanillaMovimientos
+          date={date}
+          canEdit={canEdit}
+          rows={rows}
+          sales={sales.ok ? sales.sales : []}
+          payments={sales.payments}
+          onError={showToast}
+          onAbonosChange={() => {
+            refreshAbonos();
+            refreshDep();
+          }}
+        />
         </>
       )}
     </div>
@@ -217,6 +280,7 @@ function AreaSection({
   practices,
   products,
   canEdit,
+  abonos,
   onSaved,
   onError,
 }: {
@@ -227,6 +291,7 @@ function AreaSection({
   practices: Item[];
   products: Item[];
   canEdit: boolean;
+  abonos: AbonoData;
   onSaved: () => void;
   onError: (m: string) => void;
 }) {
@@ -258,7 +323,7 @@ function AreaSection({
               <th className="px-3 py-2 font-medium">Qué pagó</th>
               <th className="w-[18%] px-3 py-2 font-medium">{area.who}</th>
               <th className="w-[12%] px-3 py-2 text-right font-medium">Pagó $</th>
-              <th className="w-[70px] px-3 py-2 font-medium">Medio</th>
+              <th className="w-[96px] px-3 py-2 font-medium">Medio</th>
               {showK && <th className="w-[10%] px-3 py-2 text-right font-medium">$K</th>}
               <th className="w-[1%] cl-no-print" />
             </tr>
@@ -273,6 +338,7 @@ function AreaSection({
                   sellers={pickable}
                   practices={areaPractices}
                   products={products}
+                  abonos={abonos}
                   onCancel={() => setEditing(null)}
                   onSaved={() => {
                     setEditing(null);
@@ -306,13 +372,16 @@ function AreaSection({
                   <td className="px-3 py-2 text-neutral-300">{allSellers.find((s) => s.id === r.providerId)?.name ?? r.sales[0].providerName ?? "—"}</td>
                   <td className="px-3 py-2 text-right font-medium tabular-nums">
                     {r.total ? money(r.total) : <span className="font-normal text-neutral-500">—</span>}
+                    {abonos.depositUsed.has(r.key) && (
+                      <span className="block text-[12px] font-normal text-neutral-400">+ seña {money(abonos.depositUsed.get(r.key)!.amount)}</span>
+                    )}
                     {r.debt && (
                       <span className="block text-[12px] font-normal text-neutral-400">
                         {r.debt.remaining ? `debe ${money(r.debt.remaining)}` : `pagó la deuda (${money(r.debt.amount)})`}
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-neutral-400">{r.method ? METHOD_SHORT[r.method] : ""}</td>
+                  <td className="px-3 py-2 text-neutral-400">{abonos.uses.has(r.key) ? "Plan" : abonos.byInsurer.has(r.key) ? abonos.byInsurer.get(r.key)!.name : r.method ? METHOD_SHORT[r.method] : ""}</td>
                   {showK && <td className="px-3 py-2 text-right tabular-nums">{r.k ? money(r.k) : <span className="text-neutral-500">—</span>}</td>}
                   <td className="cl-no-print" />
                 </tr>
@@ -325,6 +394,7 @@ function AreaSection({
                 sellers={pickable}
                 practices={areaPractices}
                 products={products}
+                abonos={abonos}
                 onSaved={() => {
                   setNewKey((n) => n + 1);
                   onSaved();
@@ -384,6 +454,7 @@ function RowEditor({
   sellers,
   practices,
   products,
+  abonos,
   onCancel,
   onSaved,
   onError,
@@ -393,6 +464,7 @@ function RowEditor({
   sellers: Seller[];
   practices: Item[];
   products: Item[];
+  abonos: AbonoData;
   onCancel?: () => void;
   onSaved: () => void;
   onError: (m: string) => void;
@@ -402,14 +474,39 @@ function RowEditor({
   const [providerId, setProviderId] = useState<string>(row?.providerId ?? (sellers.length === 1 ? sellers[0].id : ""));
   const [paid, setPaid] = useState(row ? String(row.total) : "");
   const [paidTouched, setPaidTouched] = useState(!!row);
-  const [method, setMethod] = useState<SaleMethod | "">(row?.method ?? "");
+  // Sesión de un abono: el medio «Abono» (no entra plata; la profesional cobra sobre el precio congelado).
+  const rowUse = row ? (abonos.uses.get(row.key) ?? null) : null;
+  // Obra social (OSMECON): el medio «ins:<id>»; las prácticas no pasan por caja.
+  const rowIns = row ? (abonos.byInsurer.get(row.key) ?? null) : null;
+  const [method, setMethod] = useState<SaleMethod | "" | "abono" | `ins:${string}`>(rowUse ? "abono" : rowIns ? `ins:${rowIns.insurerId}` : (row?.method ?? ""));
   // Varios medios / dólares (anotado en Anotar): se conservan las partes y lo pagado es su suma.
   const keepParts = !!row && (method === "mixto" || method === "dolares") && row.parts.length > 0;
   const [k, setK] = useState(row?.kManual ? String(row.k) : "");
   const [busy, setBusy] = useState(false);
   const first = useRef<HTMLInputElement>(null);
 
-  const picked = useMemo(() => itemsIn(what, practices, products), [what, practices, products]);
+  // «plan» / «abonado» en Qué pagó: es una sesión del plan de la paciente (la práctica sale del plan).
+  const saysPlan = /^(?:plan|abono|abonad[oa]s?|con abono|del plan|sesion del plan)$/.test(normalize(what.trim()));
+  const picked = useMemo(() => (saysPlan ? [] : itemsIn(what, practices, products)), [what, practices, products, saysPlan]);
+  const abono = patient.trim()
+    ? (abonos.open.find((p) => samePatient(p.patient, patient) && (picked.some((x) => x.item?.id === p.itemId) || (saysPlan && !picked.length))) ?? null)
+    : null;
+  const abonoId = rowUse && picked.some((x) => x.item?.id === rowUse.itemId) ? rowUse.prepaidId : (abono?.id ?? null);
+  const abonoItem = rowUse?.itemId ?? abono?.itemId ?? null;
+  // Una fila nueva de alguien con abono arranca en «Abono» (si no se tocó el medio ni lo pagado).
+  const effMethod = method === "" && abono && ((!row && !paidTouched) || saysPlan) ? "abono" : method;
+  const usingAbono = effMethod === "abono" && !!abonoId;
+  const insurerId = effMethod.startsWith("ins:") ? effMethod.slice(4) : null;
+  // Seña: si la paciente dejó una (para esta práctica o sin definir), se descuenta de lo que paga hoy.
+  const rowDep = row ? (abonos.depositUsed.get(row.key) ?? null) : null;
+  const hasPracticeNow = !picked.length || picked.some((x) => !x.product);
+  const depMatch =
+    !rowDep && patient.trim() && hasPracticeNow
+      ? (abonos.deposits.find((d) => samePatient(d.patient, patient) && (!d.itemId || picked.some((x) => x.item?.id === d.itemId))) ?? null)
+      : null;
+  const [useDep, setUseDep] = useState<boolean | null>(null);
+  const depAmount = rowDep?.amount ?? depMatch?.amount ?? 0;
+  const depActive = !!(rowDep || depMatch) && useDep !== false && !usingAbono && !insurerId;
   // Ayuda al escribir (sin importar mayúsculas, tildes ni errores): Tab o un toque completa.
   const all = useMemo(() => [...practices, ...products], [practices, products]);
   const hints = useMemo(() => (what.trim() ? suggest(what, all).filter((h) => h.kind !== "payment").slice(0, 4) : []), [what, all]);
@@ -418,9 +515,18 @@ function RowEditor({
     setWhat(t.replace(/[\s,]+$/, ""));
     requestAnimationFrame(() => whatRef.current?.focus());
   };
-  const priceOf = (p: Picked) => p.amount ?? (p.item ? (method === "tarjeta" ? (p.item.cardPrice ?? p.item.price) : p.item.price) * p.qty : 0);
+  const priceOf = (p: Picked) =>
+    (usingAbono && p.item?.id === abonoItem) || (insurerId && !p.product)
+      ? 0
+      : (p.amount ?? (p.item ? (method === "tarjeta" ? (p.item.cardPrice ?? p.item.price) : p.item.price) * p.qty : 0));
   const listTotal = picked.reduce((n, p) => n + priceOf(p), 0);
-  const paidValue = keepParts ? row!.parts.reduce((n, p) => n + p.amount, 0) : paidTouched ? num(paid) : listTotal;
+  const paidValue = keepParts
+    ? row!.parts.reduce((n, p) => n + p.amount, 0)
+    : paidTouched && !usingAbono && !insurerId
+      ? num(paid)
+      : depActive && !rowDep
+        ? Math.max(0, listTotal - depAmount)
+        : listTotal;
   const kValue = k.trim() === "" ? null : num(k);
   const dirty = !row ? !!(patient.trim() || what.trim() || paid || k) : true;
 
@@ -430,6 +536,17 @@ function RowEditor({
     // Toda práctica (o «Atención» sin práctica) es de un paciente.
     if (!patient.trim() && (!picked.length || picked.some((p) => !p.product))) return onError("Falta el paciente.");
     // Sin nada escrito en «Qué pagó»: es una atención por el importe que se puso.
+    // Sesión del plan sin práctica escrita: la pone el servidor (la del plan).
+    if (usingAbono && !picked.length) {
+      setBusy(true);
+      const body = { patientName: patient, providerId, paymentMethod: null, lines: [], prepaidId: abonoId };
+      const r = row ? await call(`/api/visits/${row.key}`, "PUT", body) : await call("/api/visits", "POST", body);
+      setBusy(false);
+      if (!r.ok) return onError(r.error ?? "No se pudo guardar.");
+      onSaved();
+      if (!row) requestAnimationFrame(() => first.current?.focus());
+      return;
+    }
     const parts: Picked[] = picked.length ? picked : [{ item: null, product: false, name: GENERIC, qty: 1, amount: null }];
     const amounts = parts.map(priceOf);
     // La diferencia con lo que pagó va a la primera práctica (o al único renglón).
@@ -445,9 +562,22 @@ function RowEditor({
       if (p.name === GENERIC) return { generic: true, amount: amounts[i], commission };
       return { pendingName: p.name, pendingPrice: amounts[i] ? Math.round(amounts[i] / p.qty) : null, quantity: p.qty, amount: amounts[i], commission };
     });
+    if (effMethod === "abono" && !abonoId) return onError("No encontré un abono de esa paciente para eso.");
+    // Abono: con id, la sesión es de ese abono; si la fila era del abono y ya no, se suelta (null).
+    const prepaid = {
+      ...(usingAbono ? { prepaidId: abonoId } : rowUse ? { prepaidId: null } : {}),
+      ...(insurerId ? { insurerId } : rowIns ? { insurerId: null } : {}),
+      ...(depActive ? { depositId: rowDep?.depositId ?? depMatch!.id } : rowDep ? { depositId: null } : {}),
+    };
     const body = keepParts
-      ? { patientName: patient, providerId, payments: row!.parts, lines }
-      : { patientName: patient, providerId, paymentMethod: method === "mixto" || method === "dolares" ? null : method || null, lines };
+      ? { patientName: patient, providerId, payments: row!.parts, lines, ...prepaid }
+      : {
+          patientName: patient,
+          providerId,
+          paymentMethod: effMethod === "mixto" || effMethod === "dolares" || effMethod === "abono" || insurerId ? null : effMethod || null,
+          lines,
+          ...prepaid,
+        };
     setBusy(true);
     const r = row ? await call(`/api/visits/${row.key}`, "PUT", body) : await call("/api/visits", "POST", body);
     setBusy(false);
@@ -499,6 +629,27 @@ function RowEditor({
             ))}
           </span>
         )}
+        {(rowDep || depMatch) && !usingAbono && !insurerId && (
+          <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-400">
+            Seña de {money(depAmount)}
+            {depMatch ? ` (dejó el ${depMatch.createdAt.slice(8, 10)}/${depMatch.createdAt.slice(5, 7)})` : ""} ·{" "}
+            {depActive ? "se descuenta, paga el resto" : "no se descuenta"}{" "}
+            <button type="button" onClick={() => setUseDep(!depActive)} className="underline underline-offset-2 hover:text-fg">
+              {depActive ? "no descontar" : "descontar"}
+            </button>
+          </span>
+        )}
+        {insurerId && (
+          <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-400">
+            Por {abonos.insurers.find((i) => i.id === insurerId)?.name}: no entra plata · la profesional se lleva {money(abonos.insurers.find((i) => i.id === insurerId)?.fee ?? 0)}
+          </span>
+        )}
+        {(abono || rowUse) && (
+          <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-400">
+            {abono ? `Plan de ${abono.itemName}: ${prepaidLeft(abono)}` : `Sesión del plan de ${rowUse!.itemName}`}
+            {usingAbono ? " · no entra plata" : " · en Medio elegí «Plan» para descontarla"}
+          </span>
+        )}
         {picked.length > 0 && (
           <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-500">
             {picked
@@ -520,7 +671,7 @@ function RowEditor({
       <td className="px-1.5 py-1">
         <input
           value={paidValue ? paidValue.toLocaleString("es-AR") : ""}
-          disabled={keepParts}
+          disabled={keepParts || (usingAbono && picked.every((x) => x.item?.id === abonoItem)) || (!!insurerId && picked.every((x) => !x.product))}
           title={keepParts ? "Pagó en varios medios: se corrige desde Anotar" : undefined}
           onChange={(e) => {
             setPaidTouched(true);
@@ -532,11 +683,20 @@ function RowEditor({
         />
       </td>
       <td className="px-1.5 py-1">
-        <select value={method} onChange={(e) => setMethod(e.target.value as SaleMethod | "")} className={`${CELL} pr-1`}>
+        <select value={effMethod} onChange={(e) => setMethod(e.target.value as SaleMethod | "" | "abono" | `ins:${string}`)} className={`${CELL} pr-1`}>
           <option value="">—</option>
+          {(abono || rowUse) && <option value="abono">Plan</option>}
+          {abonos.insurers.map((i) => (
+            <option key={i.id} value={`ins:${i.id}`}>
+              {i.name}
+            </option>
+          ))}
           <option value="efectivo">Efvo.</option>
           <option value="transferencia">Transf.</option>
           <option value="tarjeta">Tarj.</option>
+          <option value="profesional" title="Le pagaron directo a la profesional: no entra a la caja; lo nuestro nos lo debe ella">
+            A la prof.
+          </option>
           {row && row.parts.length > 0 && row.method === "dolares" && <option value="dolares">US$</option>}
           {row && row.parts.length > 0 && row.method === "mixto" && <option value="mixto">Varios</option>}
         </select>

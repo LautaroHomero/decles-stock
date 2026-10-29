@@ -70,6 +70,14 @@ Todo se valida en el servidor (`src/lib/domain/*`), no solo en la UI.
 - **Deudas** (0019): `debts` (quién, cuánto, por qué, profesional y su parte, anotación) y `debt_payments` (cobros, en
   partes, con medio). Lo cobrado entra a la caja del día del cobro (Cierre: Entró, efectivo esperado, medios) y la
   profesional cobra su parte ese día (`payouts`). Aviso `deuda` en la campanita de los admins hasta que se salda.
+  Recordatorio (0021): `debts.remind_on`; ese día aviso `deuda_cobrar` y «Para cobrar hoy» en Anotar.
+- **Pago directo a la profesional** (0030): medio `profesional` en `sales`/`visit_payments`; `provider_payouts.direction` (pago|cobro) y `provider_debts.direction` (consultorio|profesional).
+- **Señas** (0026): `deposits` (paciente, práctica, monto, día del turno, `visit_id` donde se descontó).
+- **Obras sociales** (0025): `insurers` (nombre, `provider_fee` por atención) e `insurer_visits` (atención ↔ obra social).
+- **Lo que debemos** (0024): `payables` (a quién, cuánto, aviso diario o fecha y hora) y `payable_payments` (pago ↔ egreso).
+- **Abonos** (0023): `prepaids` (paquete: sesiones o saldo, precio congelado) y `prepaid_uses` (sesión ↔ `visit_id`).
+- **Deudas con profesionales** (0022): `provider_debts` («le quedamos debiendo»); se pagan con `provider_payouts.provider_debt_id`.
+  `provider_payouts.method` y `expenses.method`: solo el efectivo cuenta en la caja.
 - **Vencimientos**: `parseExpiry` vive en `domain/expiry.ts` (acepta también `03/27` y `15/03/27`); el calendario es
   `expiry-picker.tsx` (abre en meses: un toque = fin de mes; después el día).
 - **Catálogo de prueba**: `npm run db:catalogo` carga 14 prácticas y 12 productos (con stock y vencimientos) en el
@@ -144,7 +152,7 @@ src/lib/domain/
 
 Diferencias concretas contra Clavdia; todo lo demás es igual:
 
-1. **Migraciones nuevas**: `0004` a `0019` (solo agregan tablas/columnas). Prácticas = `price_list_items.kind = 'tratamiento'`
+1. **Migraciones nuevas**: `0004` a `0030` (solo agregan tablas/columnas). Prácticas = `price_list_items.kind = 'tratamiento'`
    (sin stock). `sales.patient_label` (paciente escrito; en Clavdia se puede mapear a `patient_id`) y `sales.visit_id`.
    `price_item_providers` (0010): qué médicas ofrecen cada ítem (distinto de `price_list_items.provider_id` de Clavdia).
    0011: `stock_items.owed` (vendido sin stock) y `sales.kind = 'pendiente'` con `item_id` NULL (se resuelve después).
