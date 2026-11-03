@@ -62,6 +62,8 @@ export interface BalanceLine {
   share: number;
   /** De eso, lo que le pagaron directo a ella. */
   direct: number;
+  /** Abono o gift card: la atención no trajo plata hoy (ya se pagó antes); su parte se le paga igual. */
+  prepaid?: "abonado" | "giftcard" | null;
 }
 
 /**
@@ -174,7 +176,17 @@ async function balances(orgId: string, date: string, payouts: Payout[]): Promise
     const key = `${s.visitId ?? s.id}:${s.providerId}`;
     let l = lines.get(key);
     if (!l) {
-      l = { key, providerId: s.providerId!, time: s.createdAt.slice(11, 16), patient: s.patientName ?? "", what: "", total: 0, share: 0, direct: 0 };
+      l = {
+        key,
+        providerId: s.providerId!,
+        time: s.createdAt.slice(11, 16),
+        patient: s.patientName ?? "",
+        what: "",
+        total: 0,
+        share: 0,
+        direct: 0,
+        prepaid: s.paymentMethod === "abonado" || s.paymentMethod === "giftcard" ? s.paymentMethod : null,
+      };
       lines.set(key, l);
       b.lines.push(l);
     }

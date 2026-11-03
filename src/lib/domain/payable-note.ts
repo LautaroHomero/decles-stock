@@ -1,3 +1,4 @@
+import { spelledToDigits } from "./spoken-numbers";
 import { parseReminder, todayAR } from "./reminder-note";
 
 /**
@@ -69,7 +70,8 @@ export interface PayableNote extends PayableReminder {
 const FILLER = /\b(?:avisame|avisarme|avisar|avisa|recordame|recordar|recordarme|recordatorio|acordarme|que|me|nos|le|les|lo|la|el|y|para|pagar|pagarle|pagarles|pesos|hoy|todo|todos|antes)\b/g;
 
 /** Una deuda nueva del consultorio, o null si el texto no dice eso. */
-export function parsePayable(text: string, now: string = `${todayAR()}T00:00`): PayableNote | null {
+export function parsePayable(input: string, now: string = `${todayAR()}T00:00`): PayableNote | null {
+  const text = spelledToDigits(input);
   const n = norm(text);
   const owe = n.match(OWE);
   if (!owe) return null;
@@ -106,9 +108,10 @@ export function parsePayable(text: string, now: string = `${todayAR()}T00:00`): 
  * un pago de algo que debe el consultorio. Busca la deuda por el nombre de a quién se le debe.
  */
 export function parsePayablePayment<P extends { id: string; creditor: string; concept: string; remaining: number }>(
-  text: string,
+  input: string,
   open: P[],
 ): { payables: P[]; amount: number | null; method: "efectivo" | "transferencia" | "tarjeta" | null } | null {
+  const text = spelledToDigits(input);
   if (!open.length) return null;
   const n = norm(text);
   if (!/\b(?:pague|pagamos|le\s+pague|le\s+pagamos|les\s+pagamos|cancele|cancelamos|salde|saldamos|transferi|transferimos|abone|abonamos)\b/.test(n)) return null;

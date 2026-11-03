@@ -1,3 +1,4 @@
+import { spelledToDigits } from "./spoken-numbers";
 /**
  * Abonos en Anotar (Decles). Dos cosas distintas:
  *  · uno nuevo: «carla dejó un abono de 5 sesiones de venus freeze, pagó 250000 en efectivo»,
@@ -32,7 +33,8 @@ export const USES_PREPAID = /\b(?:con|tiene|usa|uso|usando|del|de\s+su|por|desco
 /** «plan» / «abono» sueltos, sin plata: también es una sesión («carla, plan»). */
 export const SAYS_PREPAID = /\b(?:abono|plan|abonad[oa]s?)\b/;
 
-export function parsePrepaidNote(text: string): PrepaidNote | null {
+export function parsePrepaidNote(input: string): PrepaidNote | null {
+  const text = spelledToDigits(input);
   const n = norm(text);
   if (!/\b(?:abono|plan)\b/.test(n) || USES_PREPAID.test(n)) return null;
   // «abonó 50000 con tarjeta» es un pago común; un abono se nombra («un abono», «abono de/para») o trae sesiones.

@@ -12,12 +12,14 @@ import {
   ClockIcon,
   CreditCardIcon,
   CurrencyDollarIcon,
+  GiftIcon,
   HandCoinsIcon,
   MinusIcon,
   MoneyIcon,
   PlusIcon,
   SquaresFourIcon,
   StackIcon,
+  TicketIcon,
   WarningCircleIcon,
   XIcon,
 } from "@phosphor-icons/react";
@@ -129,6 +131,10 @@ interface Draft {
   fractions: MoneyNote["fractions"];
   /** «pagó en dólares» sin cantidad: los dólares salen de lo que salía y la cotización del día. */
   usdAll: boolean;
+  /** «deja 10000 y paga el resto el viernes»: debe lo que falta hasta el precio. */
+  debtRest?: boolean;
+  /** «20000 en efectivo y el resto con tarjeta»: el medio de lo que falta hasta el precio. */
+  restMethod?: "efectivo" | "transferencia" | "tarjeta" | null;
   /** Sesión de un abono: ese renglón no pasa por caja. */
   prepaidId?: string | null;
   /** Atención por obra social / prepaga (OSMECON): las prácticas no pasan por caja. */
@@ -194,6 +200,8 @@ function buildDraft(text: string, items: Item[], sellers: Seller[], fixedSeller:
   d.remindOn = money.remindOn;
   d.fractions = money.fractions;
   d.usdAll = money.usdAll;
+  d.restMethod = money.restMethod;
+  d.debtRest = money.debtRest;
   if (money.method) d.payment = money.method;
   d.patient = patient ?? "";
   d.patientUnsure = !!patient && !patientSure;
@@ -434,7 +442,8 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       } else abonoChoices = mine;
     }
     if (abonoChoices.length) d.patientUnsure = false;
-    const useAbono = abono ? (pickAbono ?? (saysAbono ? true : d.paid !== null && !d.direct ? false : null)) : false;
+    // Tocar «Abono» en ¿Cómo pagó? con un plan cargado = usa el plan.
+    const useAbono = abono ? (pickAbono ?? (saysAbono || pickPay === "abonado" ? true : d.paid !== null && !d.direct ? false : null)) : false;
     if (abono && useAbono) {
       d.direct = false;
       d.prepaidId = abono.id;
@@ -475,11 +484,21 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       if (pickSplit) d.split = pickSplit;
       d.payment = null;
     }
+    // «20000 en efectivo y el resto con tarjeta»: el resto hasta el precio va con el otro medio.
+    if (d.restMethod && !d.split && !pickPay && pickPaid === null && d.paid !== null) {
+      const list = d.lines.reduce((n, l) => n + lineCash(l), 0);
+      const first = d.payment && d.payment !== "dolares" && d.payment !== "giftcard" && d.payment !== "profesional" && d.payment !== "abonado" ? d.payment : "efectivo";
+      if (list > d.paid && first !== d.restMethod) {
+        d.split = { efectivo: 0, transferencia: 0, tarjeta: 0, usd: 0, [first]: d.paid, [d.restMethod]: list - d.paid };
+        d.payment = null;
+      } else if (list > d.paid) d.paid = list;
+    }
     // Con partes, lo que ingresó es su suma (los dólares a la cotización del día).
     if (d.split) d.paid = splitPesos(d.split, rate);
     // Deuda: «debe todo» = lo que salía; «debe 40000» sin decir cuánto pagó = pagó el resto.
     const listNow = d.lines.reduce((n, l) => n + lineList(l, d.payment), 0);
     if (d.debtAll) d.debt = listNow || null;
+    if (d.debtRest && d.paid !== null && d.debt === null) d.debt = Math.max(0, listNow - d.paid) || null;
     if (pickDebt !== null) d.debt = pickDebt.trim() === "" ? null : toPesos(pickDebt) || null;
     if (d.debt && d.paid === null && pickPaid === null && d.lines.length) d.paid = Math.max(0, listNow - d.debt);
     // Si debe, hay que saber quién: se pregunta como con las prácticas.
@@ -498,6 +517,18 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       const listCash = d.lines.reduce((n, l) => n + lineList(l, d.payment), 0);
       if (pickPaid === null && !d.split && (d.paid === null || USES_DEPOSIT.test(normQ(text)))) d.paid = Math.max(0, listCash - deposit.amount);
     }
+    // «con abono» / «abonada» sin plan cargado (o tocó «Abono»): medio Abono. Vale lo que salía y la profesional cobra su
+    // parte igual; a la caja no entra nada hoy.
+    if ((saysAbono || pickPay === "abonado") && !(abono && useAbono) && !insurer) {
+      if (d.direct) {
+        d.direct = false;
+        if (d.paid === 0 && pickPaid === null) d.paid = null;
+      }
+      if (!pickPay || pickPay === "abonado") {
+        d.split = null;
+        d.payment = "abonado";
+      }
+    } else if (abono && useAbono && pickPay === "abonado") d.payment = "abonado";
     // Obra social: las prácticas no pasan por caja (los productos sí).
     const byInsurer = insurer && !(abono && useAbono) ? insurer : null;
     if (byInsurer) {
@@ -1497,7 +1528,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                 tone="in"
                 icon={<ArrowDownIcon size={20} weight="bold" />}
                 title={hasPractice(preview.lines) ? "Atención" : preview.lines.length ? "Venta" : "Anotación"}
-                note={preview.insurer ? `Por ${preview.insurer.name}: no entra plata` : preview.useAbono ? "Sesión del plan: ya está pagada" : preview.direct ? "No pasó por caja" : preview.payment === "profesional" ? "Le pagaron directo a la profesional: no entra a la caja" : preview.split?.giftcard ? "Gift card + otros medios: caja solo lo que se cobra hoy" : "Entra a la caja de hoy"}
+                note={preview.insurer ? `Por ${preview.insurer.name}: no entra plata` : preview.useAbono ? "Sesión del plan: ya está pagada" : preview.direct ? "No pasó por caja" : preview.payment === "profesional" ? "Le pagaron directo a la profesional: no entra a la caja" : preview.payment === "abonado" ? "Abono: no entra plata hoy; la profesional cobra su parte" : preview.payment === "giftcard" && !preview.split ? "Gift card: no entra plata hoy; la profesional cobra su parte" : preview.split?.giftcard ? "Gift card + otros medios: caja solo lo que se cobra hoy" : "Entra a la caja de hoy"}
               >
                 {preview.askPatient ? (
                   <div className="flex flex-col gap-2">
@@ -1679,7 +1710,9 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     </div>
                   </div>
                 ) : preview.saysAbono && preview.patient ? (
-                  <p className="text-[14px] text-neutral-500">No encontré un plan de {preview.patient} para esto: se anota sin que entre plata.</p>
+                  <p className="text-[14px] text-neutral-500">
+                    No encontré un plan cargado de {preview.patient} para esto: se anota como Abono (no entra plata hoy y la profesional cobra su parte).
+                  </p>
                 ) : null}
                 {nothing && <Missing>Falta qué se hizo o se vendió</Missing>}
 
@@ -1725,6 +1758,8 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                         <span className="text-[14px] text-neutral-500">suma de los medios de abajo</span>
                       ) : preview.payment === "profesional" ? (
                         <span className="text-[14px] text-neutral-500">lo cobró ella · no entra a la caja</span>
+                      ) : preview.payment === "abonado" || (preview.payment === "giftcard" && !preview.split) ? (
+                        <span className="text-[14px] text-neutral-500">lo que vale · no entra plata hoy</span>
                       ) : preview.direct ? (
                         <span className="text-[14px] text-neutral-500">no pasó por caja</span>
                       ) : preview.paid === null && pickPaid === null ? (
@@ -1796,7 +1831,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                   <span className="text-[16px] font-semibold">
                     ¿Cómo pagó? {!payMode && <span className="text-[14px] font-normal text-neutral-500">(si no sabés, dejalo)</span>}
                   </span>
-                  <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-6">
+                  <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-4">
                     {PAY_OPTIONS.map(([m, label, Icon]) => {
                       const on = payMode === m;
                       return (
@@ -2906,6 +2941,8 @@ const PAY_OPTIONS = [
   ["tarjeta", "Tarjeta", CreditCardIcon],
   ["dolares", "Dólares", CurrencyDollarIcon],
   ["varios", "Varios medios", StackIcon],
+  ["abonado", "Abono", TicketIcon],
+  ["giftcard", "Gift card", GiftIcon],
   ["profesional", "A la profesional", HandCoinsIcon],
 ] as const;
 const PICK =

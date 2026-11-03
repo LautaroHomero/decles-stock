@@ -14,7 +14,8 @@
     "user:reset-password": "tsx scripts/reset-password.mts",
     "app:up": "docker compose --profile app up -d --build",
     "db:catalogo": "tsx scripts/catalogo.mts",
-    "db:demo-reset": "tsx scripts/demo-reset.mts"
+    "db:demo-reset": "tsx scripts/demo-reset.mts",
+    "test:anotar": "tsx scripts/anotar-check.mts"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

@@ -185,7 +185,8 @@ export interface SaleRow {
 }
 
 /** `profesional` = la paciente le pagó directo a la profesional: no entra a la caja; lo nuestro nos lo debe ella. */
-export type Payment = "efectivo" | "transferencia" | "tarjeta" | "dolares" | "giftcard" | "profesional";
+/** `abonado` = es abonada: esa atención no trae plata hoy (la profesional cobra su parte igual). */
+export type Payment = "efectivo" | "transferencia" | "tarjeta" | "dolares" | "giftcard" | "profesional" | "abonado";
 export type SaleMethod = Payment | "mixto";
 export const PAYMENT_LABEL: Record<SaleMethod, string> = {
   efectivo: "Efectivo",
@@ -194,6 +195,7 @@ export const PAYMENT_LABEL: Record<SaleMethod, string> = {
   dolares: "Dólares",
   giftcard: "Gift card",
   profesional: "A la profesional",
+  abonado: "Abono",
   mixto: "Varios medios",
 };
 export const PAYMENTS: [Payment, string][] = [
@@ -201,6 +203,8 @@ export const PAYMENTS: [Payment, string][] = [
   ["transferencia", "Transf."],
   ["tarjeta", "Tarjeta"],
   ["dolares", "Dólares"],
+  ["abonado", "Abono"],
+  ["giftcard", "Gift card"],
   ["profesional", "A la profesional"],
 ];
 
@@ -214,18 +218,18 @@ export interface PayPart {
 export type PaymentsMap = Record<string, PayPart[]>;
 
 /** Lo cobrado por medio (las anotaciones con varios medios se cuentan por sus partes). `usd` = dólares físicos. */
-/** Lo de una anotación que no entró al consultorio hoy: lo que se le pagó directo a la profesional y lo pagado con gift card. */
-export function outsideOf(r: { method: SaleMethod | null; total: number; parts: PayPart[] }): { profesional: number; giftcard: number } {
-  if (r.parts.length)
-    return {
-      profesional: r.parts.filter((p) => p.method === "profesional").reduce((n, p) => n + p.amount, 0),
-      giftcard: r.parts.filter((p) => p.method === "giftcard").reduce((n, p) => n + p.amount, 0),
-    };
-  return { profesional: r.method === "profesional" ? r.total : 0, giftcard: r.method === "giftcard" ? r.total : 0 };
+/**
+ * Lo de una anotación que no entró al consultorio hoy: lo que se le pagó directo a la profesional, lo pagado con
+ * gift card y lo de una abonada (ya pagó antes). `all` = la suma.
+ */
+export function outsideOf(r: { method: SaleMethod | null; total: number; parts: PayPart[] }): { profesional: number; giftcard: number; abonado: number; all: number } {
+  const of = (m: Payment) => (r.parts.length ? r.parts.filter((p) => p.method === m).reduce((n, p) => n + p.amount, 0) : r.method === m ? r.total : 0);
+  const o = { profesional: of("profesional"), giftcard: of("giftcard"), abonado: of("abonado") };
+  return { ...o, all: o.profesional + o.giftcard + o.abonado };
 }
 
 export function methodTotals(sales: SaleRow[], payments?: PaymentsMap) {
-  const t = { efectivo: 0, transferencia: 0, tarjeta: 0, dolares: 0, giftcard: 0, profesional: 0, usd: 0, sin: 0 };
+  const t = { efectivo: 0, transferencia: 0, tarjeta: 0, dolares: 0, giftcard: 0, profesional: 0, abonado: 0, usd: 0, sin: 0 };
   const seen = new Set<string>();
   for (const s of sales) {
     if (s.status !== "paid") continue;

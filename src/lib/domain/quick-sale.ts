@@ -48,6 +48,8 @@ const PAYMENT_WORDS: Record<string, QuickPayment> = {
   tarjeta: "tarjeta", tarjetas: "tarjeta", credito: "tarjeta", debito: "tarjeta", posnet: "tarjeta", visa: "tarjeta", master: "tarjeta",
   efectivo: "efectivo", efvo: "efectivo", efe: "efectivo", cash: "efectivo", contado: "efectivo",
   transferencia: "transferencia", transf: "transferencia", transfer: "transferencia", trans: "transferencia", mp: "transferencia", mercadopago: "transferencia",
+  // Billeteras y QR: para el consultorio es lo mismo que una transferencia.
+  mercado: "transferencia", qr: "transferencia", modo: "transferencia", uala: "transferencia", dni: "transferencia",
 };
 
 /** Medio de pago de una palabra, aunque esté mal escrita («tarjta», «efectvo», «trasferencia»). */
@@ -141,6 +143,11 @@ const FILLER = new Set([
   "pago", "pagaron", "pagado", "abono", "abonaron", "abonado", "abonada", "plan", "medio",
   "atendio", "atendi", "atendida", "atendido", "atiende", "atendieron", "vino", "vinieron", "paciente", "pacienta",
   "hizo", "hice", "hicimos", "hicieron", "se", "le", "lo", "su", "sesion", "turno", "y",
+  // Conectores y verbos de cómo se cuenta una atención («vino ana que se hizo…», «vino a hacerse…»): no son nombre ni práctica.
+  "que", "quien", "hacer", "hacerse", "hacerle", "atenderse", "atenderla", "realizo", "realizarse", "aplicarse", "aplico", "ponerse", "puso",
+  "sacarse", "tratarse", "trajo", "quiere", "queria", "pidio", "tambien", "ademas", "junto", "cuenta",
+  // Plata y deuda que quedan sueltas después de sacar el importe («35 mil pesos», «deja 10000 y paga el resto»).
+  "pesos", "peso", "plata", "deja", "dejo", "paga", "pagara", "abona", "trae", "debe", "resto", "saldo",
   // Muletillas de cómo se cuenta («Che, vino…», «Hola, buenas…»): no son paciente ni algo que se vendió.
   "che", "hola", "buenas", "buen", "buenos", "dia", "dias", "tardes", "bueno", "ok", "okey", "dale", "listo", "eh", "ah",
 ]);
@@ -290,9 +297,12 @@ function plainerThan(queryWords: string[], a: string, b: string): boolean {
   return ub.length > ua.length && ua.every((w) => ub.includes(w));
 }
 
+/** Lo que separa una cosa de otra: «,», «;», «+», «/», « - », «y», «e», «más», «junto con», «además». */
+const SPLIT = /\n|,|;|\+|\/|\s[-–—]\s|\s+y\s+|\s+e\s+|\s+m[aá]s\s+|\s+junto\s+con\s+|\s+adem[aá]s\s+/i;
+
 function splitSegments(text: string): string[] {
   return text
-    .split(/\n|,|;|\+|\s+y\s+|\s+e\s+/i)
+    .split(SPLIT)
     .map((s) => s.trim())
     .filter(Boolean);
 }
@@ -329,6 +339,22 @@ function parseSegment(seg: string, nameNumbers: Set<string>): { quantity: number
   if (/\bmedia docena\b/.test(normalize(seg))) quantity = 6;
   return { quantity: quantity && quantity > 0 ? quantity : 1, words: rest };
 }
+
+/** «de», «del», «di»…: van dentro de un nombre («María de los Ángeles», «Di María»). */
+const PARTICLES = new Set(["de", "del", "di", "da", "la", "las", "los", "van", "von"]);
+/** «Sra. Gómez», «don Pedro»: no son parte del nombre. */
+const TITLES = new Set(["sra", "sr", "senora", "senor", "señora", "señor", "srta", "senorita", "don", "dona", "doña"]);
+
+/** ¿La palabra se parece a alguna de la lista de precios (igual, con errores o abreviada)? */
+function likeVocab(x: string, vocab: Set<string>): boolean {
+  const q = stem(x);
+  if (vocab.has(q)) return true;
+  for (const v of vocab) if (wordScore(q, v) > 0) return true;
+  return false;
+}
+
+/** El nombre de pila de la profesional («Dra. Laura Decles» → «laura»). */
+const firstNameOf = (s: QuickSeller) => normalize(s.name).split(" ").find((w) => w.length >= 2 && !FILLER.has(w)) ?? "";
 
 /** Palabras propias de cada médica: nombre, apellido y apodos (sin "Dra."). */
 const sellerWords = (s: QuickSeller) =>
@@ -374,16 +400,34 @@ function findSeller<S extends QuickSeller>(seg: string, sellers: S[], productVoc
     // Una abreviatura que también empieza una palabra de producto ("cre" de crema) no es un nombre…
     // salvo que esté donde va una persona («gabi hizo…»).
     if (w.length <= 4 && !ctx && !exactName && [...productVocab].some((pv) => pv.startsWith(w))) return;
-    // «vino laura», «a laura», «paciente laura»: es la paciente, no la médica.
-    if (PATIENT_CUES.has(ws[i - 1] ?? "") || (PERSON_ARTICLE.has(ws[i - 1] ?? "") && PATIENT_CUES.has(ws[i - 2] ?? ""))) return;
-    // «Laura Gómez» con la médica «Laura Ríos»: el nombre va pegado a un apellido que no es de ninguna
-    // médica → es otra persona (la paciente). Salvo que lo anuncie una pista de médica («Dra. Laura …»).
-    const sellerCue = SELLER_CUES.has(ws[i - 1] ?? "") || ws[i - 1] === "por" || ws[i - 1] === "con";
+    // «vino laura», «a laura», «paciente laura»: es la paciente, no la médica. «atendí a ana para ornella»: ahí
+    // «para» ya no anuncia a la paciente (la paciente fue «a ana»).
+    const prev = ws[i - 1] ?? "";
+    const patientBefore = PATIENT_CUES.has(prev) && !(prev === "para" && ws.slice(0, i - 1).includes("a"));
+    if (patientBefore || (PERSON_ARTICLE.has(prev) && PATIENT_CUES.has(ws[i - 2] ?? ""))) return;
+    // Nombre de una persona que no es ninguna profesional: palabra de nombre que no se parece a nada de la lista
+    // (ni con errores ni abreviada: «glicoliko», «kinesio» son prácticas), ni a una profesional, medio o número.
+    const sellerCue = SELLER_CUES.has(prev) || prev === "por" || prev === "con";
     const otherName = (x: string | undefined) =>
-      !!x && NAME_TOKEN.test(x) && x.length >= 3 && !FILLER.has(x) && !(x in NUMBER_WORDS) && !paymentOf(x) &&
-      !productVocab.has(stem(x)) && !sellers.some((s) => sellerWords(s).some((sw) => nameMatches(x, sw)));
-    if (!sellerCue && (otherName(ws[i - 1]) || otherName(ws[i + 1]))) return;
+      !!x && NAME_TOKEN.test(x) && x.length >= 3 && !FILLER.has(x) && !PARTICLES.has(x) && !TITLES.has(x) && !(x in NUMBER_WORDS) && !paymentOf(x) &&
+      !likeVocab(x, productVocab) && !sellers.some((s) => sellerWords(s).some((sw) => nameMatches(x, sw)));
     const found = sellers.filter((s) => sellerWords(s).some((sw) => nameMatches(w, sw)));
+    // ¿Lo escrito es el nombre de pila (o apodo) de la profesional, o solo coincide con su apellido?
+    const asFirst = found.some((s) => [firstNameOf(s), ...(s.aliases ?? []).map(normalize)].some((fw) => fw && nameMatches(w, fw)));
+    if (!sellerCue) {
+      // «Laura Gómez» con la médica «Laura Ríos»: un nombre seguido de un apellido que no es de ninguna médica es otra
+      // persona (la paciente). «María de los Ángeles», «Juan Carlos Di María»: nombre pegado a «de/di/del» también.
+      // …salvo que después venga un nombre completo («gabi ana rey»: Gabi atendió a Ana Rey).
+      if (otherName(ws[i + 1]) && !(asFirst && otherName(ws[i + 2]) && found.some((s) => sellerWords(s).includes(w)))) return;
+      let j = i + 1;
+      while (PARTICLES.has(ws[j] ?? "") && ws[j] !== "la") j++;
+      if (j > i + 1 && otherName(ws[j])) return;
+      // «Juan Carlos Di María»: pegado a «di/del» después de un nombre. «… de gabi» con el nombre justo es la profesional.
+      if (PARTICLES.has(prev) && prev !== "la" && otherName(ws[i - 2]) && !(prev === "de" && found.some((s) => sellerWords(s).includes(w)))) return;
+      // «Carla Volpe» con la profesional «Ornella Volpe»: apellido después de otro nombre = la paciente.
+      // «ana rey ornella»: nombre de pila después del apellido de la paciente = la profesional.
+      if (otherName(prev) && !asFirst) return;
+    }
     if (found.length) {
       used.add(w);
       found.forEach((s) => hits.add(s));
@@ -415,6 +459,34 @@ function tokens(seg: string): { raw: string; n: string }[] {
 
 const asName = (ts: { raw: string }[]) => ts.map((t) => capitalize(t.raw)).join(" ");
 
+/**
+ * El nombre de la paciente de unas palabras: saca muletillas, títulos («Sra.») y números de las puntas, conserva
+ * «de/del/di/la/los» del medio («María de los Ángeles», «Di María») y corta en la primera muletilla del medio
+ * («ana rey que se hizo…» → «Ana Rey»). null si no queda un nombre de 1 a 4 palabras.
+ */
+function nameFrom(ts: { raw: string; n: string }[]): string | null {
+  const isName = (t: { n: string }) => NAME_TOKEN.test(t.n) && !FILLER.has(t.n) && !TITLES.has(t.n) && !(t.n in NUMBER_WORDS) && !paymentOf(t.n);
+  let a = ts.findIndex(isName);
+  if (a < 0) return null;
+  const out: { raw: string; n: string }[] = [];
+  for (let i = a; i < ts.length; i++) {
+    const t = ts[i];
+    if (isName(t)) out.push(t);
+    else if (PARTICLES.has(t.n) && ts.slice(i + 1).some(isName) && out.length) {
+      // Partículas solo si después sigue el nombre (sin otra cosa en el medio).
+      let j = i;
+      while (j < ts.length && PARTICLES.has(ts[j].n)) j++;
+      if (j < ts.length && isName(ts[j])) {
+        for (let k = i; k < j; k++) out.push(ts[k]);
+        i = j - 1;
+      } else break;
+    } else break;
+  }
+  a = out.filter(isName).length;
+  if (!a || a > 4) return null;
+  return out.map((t) => (PARTICLES.has(t.n) ? t.raw.toLowerCase() : capitalize(t.raw))).join(" ");
+}
+
 export interface QuickNote<P extends QuickProduct = QuickProduct, S extends QuickSeller = QuickSeller> {
   lines: QuickLine<P, S>[];
   /** Nombre del paciente escrito en el texto (null = no se nombró a nadie). */
@@ -443,6 +515,8 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
   let firstPay: QuickPayment | null = null;
   let patient: string | null = null;
   let patientSure = true;
+  // En qué renglón se nombró a la paciente (para «Rey, Ana»).
+  let lastPatientSeg = -1;
   for (const raw of splitSegments(text)) {
     const { seller, used } = findSeller(raw, sellers, productVocab);
     if (seller) {
@@ -479,9 +553,21 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
         return !(SELLER_CUES.has(prev) || prev === "por");
       });
       const cued = all.some((t) => PATIENT_CUES.has(t.n) && t.n !== "a" && t.n !== "para") || all.some((t, i) => (t.n === "a" || t.n === "para") && i > 0);
-      if (!patient && nameToks.length >= 1 && nameToks.length <= 4 && nameToks.every((t) => NAME_TOKEN.test(t.n))) {
-        patient = asName(nameToks);
-        patientSure = nameToks.length >= 2 || cued;
+      // Con «de/del/di» del medio: se arma de todas las palabras (sin médica ni lo que anuncia a una profesional).
+      const named: string | null =
+        !patient && nameToks.length >= 1 && nameToks.length <= 4 && nameToks.every((t) => NAME_TOKEN.test(t.n))
+          ? nameFrom(all.filter((t, i) => !used.has(t.n) && !(SELLER_CUES.has(all[i - 1]?.n ?? "") || all[i - 1]?.n === "por")))
+          : null;
+      // «Rey, Ana»: apellido y nombre separados por coma = una sola paciente.
+      if (!named && patient && lastPatientSeg === lines.length && !patient.includes(" ") && nameToks.length === 1 && NAME_TOKEN.test(nameToks[0].n)) {
+        patient = `${patient} ${asName(nameToks)}`;
+        patientSure = true;
+        continue;
+      }
+      if (named) {
+        lastPatientSeg = lines.length;
+        patient = named;
+        patientSure = named.split(" ").filter((w: string) => !PARTICLES.has(w)).length >= 2 || cued;
         continue;
       }
       // «la atendió la Dra. Fernández» con una médica que no existe: no es algo que se hizo.
@@ -490,8 +576,11 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
       // "Ana Gómez atención": lo que va antes del producto/práctica, si son palabras sueltas, es el paciente.
       // La primera palabra que apunta al producto (directo o por sinónimo: «prp» → plasma).
       const at = toks.findIndex((t) => score([stem(t.n), ...synonymsOf(t.n).map((s) => `~${s}`)], best.p.name) > 0);
-      const lead = toks.slice(0, Math.max(at, 0)).filter((t) => !FILLER.has(t.n) && !(t.n in NUMBER_WORDS) && t.n !== "par");
-      if (lead.length && lead.length <= 4 && lead.every((t) => NAME_TOKEN.test(t.n))) patient = asName(lead);
+      const leadToks = toks.slice(0, Math.max(at, 0)).filter((t) => t.n !== "par");
+      const lead = nameFrom(leadToks);
+      // Solo si lo de antes es un nombre y nada más (no «crema hidratante 2 …» ni una práctica no cargada larga).
+      const leadRest = leadToks.filter((t) => !FILLER.has(t.n) && !TITLES.has(t.n) && !(t.n in NUMBER_WORDS) && !/^x?\d{1,3}x?$/.test(t.n) && !PARTICLES.has(t.n));
+      if (lead && leadRest.length === lead.split(" ").filter((w) => !PARTICLES.has(w)).length) patient = lead;
       // «le hizo botox a Carla (Pérez)» / «… para Carla»: el nombre después de «a»/«para».
       if (!patient) {
         const k = toks.findIndex((t, i) => i > at && (t.n === "a" || t.n === "para"));
@@ -501,9 +590,18 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
           after.length <= 3 &&
           after.every((t) => NAME_TOKEN.test(t.n) && !paymentOf(t.n) && score([stem(t.n)], best.p.name) === 0)
         ) {
-          patient = asName(after);
+          patient = asName(after.filter((t) => !TITLES.has(t.n)));
           patientSure = true;
         }
+      }
+      // «consulta ana rey»: el nombre después de la práctica (palabras que no son de la práctica).
+      if (!patient && at >= 0) {
+        const tail = toks.slice(at + 1);
+        const rest2 = tail.filter((t) => score([stem(t.n), ...synonymsOf(t.n).map((x) => `~${x}`)], best.p.name) === 0);
+        const nm = nameFrom(rest2);
+        // Todo lo que sobra tiene que ser el nombre (nada de prácticas no cargadas ni números sueltos).
+        const extra = rest2.filter((t) => !FILLER.has(t.n) && !PARTICLES.has(t.n) && !TITLES.has(t.n));
+        if (nm && extra.every((t) => NAME_TOKEN.test(t.n)) && extra.length === nm.split(" ").filter((w) => !PARTICLES.has(w)).length && extra.length >= 2) patient = nm;
       }
     }
     // Match claro: hay uno solo, o el primero le saca ventaja al segundo.
@@ -552,7 +650,7 @@ export interface Suggestion {
   text: string;
 }
 
-const SEPARATORS = /\n|,|;|\+|\s+y\s+|\s+e\s+/gi;
+const SEPARATORS = new RegExp(SPLIT.source, "gi");
 const PAYMENT_TARGETS: [string, string][] = [
   ["tarjeta", "con tarjeta"],
   ["efectivo", "en efectivo"],
@@ -584,8 +682,10 @@ export function suggest<P extends QuickProduct, S extends QuickSeller = QuickSel
   const out: Suggestion[] = [];
   const replaceFrom = (at: number, value: string, sep = ", ") => `${text.slice(0, at)}${value}${sep}`;
 
-  // Pago
-  for (const [word, phrase] of PAYMENT_TARGETS) {
+  // Pago (si ya está escrito entero, «con tarjeta», «por mp», no hay nada que sugerir)
+  const prevW = toks[toks.length - 2]?.n;
+  const payDone = !!PAYMENT_WORDS[last.n] && (last.n.length >= 4 || prevW === "con" || prevW === "en" || prevW === "por");
+  for (const [word, phrase] of payDone ? [] : PAYMENT_TARGETS) {
     if (word.startsWith(last.n) || paymentOf(last.n) === word) {
       const prev = toks[toks.length - 2]?.n;
       const value = prev === "con" || prev === "en" || prev === "por" ? word : phrase;

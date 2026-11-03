@@ -29,6 +29,13 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
 - Planilla: `planilla-view.tsx` = Planilla → Día (filas por área); `cierre-sheet.tsx` = Cierre (números del día, por profesional, ingresos/egresos extras, caja, medios de pago). Áreas = `providers.area`; fila = visita con
   `amount`/`commission` manuales (`applyManualAmounts`), «Atención» sin práctica (`generic`). Fila = paciente · qué pagó (práctica/producto) · médica · pagó $ · medio (+ $K fuera de Médicos).
   Ingresos extras = `expenses.direction 'ingreso'`; caja = `day_cash` (`opening` = cambio al iniciar, se le pregunta a la secretaria al entrar — `opening-cash.tsx`; `amount` = contado al cambio). Pago: efectivo | transferencia | tarjeta.
+- Texto libre de Anotar: **`npm run test:anotar`** (`scripts/anotar-check.mts`) = banco de frases con lo que tiene que entender
+  (tipo, paciente, profesional, prácticas, plata). Correrlo antes de tocar cualquier parser y sumar ahí cada frase que falle.
+  Importes en palabras («cuarenta mil», «treinta y cinco mil», «un palo») → `spoken-numbers.ts` (`spelledToDigits`, lo aplican todos los parsers).
+  Separadores: «,» «;» «+» «/» « - » «y» «e» «más» «junto con». Profesional junto a un nombre desconocido: nombre de pila después
+  del apellido de la paciente = profesional («ana rey ornella»); nombre seguido de apellido o «de/di» = paciente («Laura Gómez», «María de los Ángeles»).
+  Paciente: `nameFrom` (corta en «que/se hizo/vino a…», saca «Sra./don», conserva «de/del/di»). «20000 efvo y el resto con tarjeta» →
+  `restMethod`; «deja 10000 y paga el resto el viernes» → `debtRest` (la pantalla calcula con el precio).
 - Plata al anotar (`money-note.ts`): la secretaria dice cuánto ingresó («45000», «pagó 40 mil»); el reparto lo hace el
   sistema (% de la profesional) salvo que lo aclare («le corresponden 9000»). «le transfirieron a carmen» / «abono» = ingresó $0.
   Se guarda con `amount`/`commission` manuales; resolver un pendiente no pisa lo escrito.
@@ -37,6 +44,12 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
   Si no hay efectivo: «le quedamos debiendo 50000 a Carmen» (`parseProviderDebt`) o «Queda debiendo» en Cierre → `provider_debts` (migración 0022).
   Se paga otro día («le pagué la deuda a Carmen», Cierre → «Le debemos a profesionales»): `provider_payouts` con `provider_debt_id`,
   cuenta en la caja del día del pago, no en la cuenta de su día. Cierre = entró / salió / movimientos.
+- Abono y gift card como medio (migración 0031): `abonado` (es abonada, sin plan cargado: «con abono» sin plan en `prepaids` o el botón
+  «Abono») y `giftcard` sin código. La atención vale lo que salía, la profesional cobra su parte, a la caja no entra nada (`outsideOf().all`).
+  Con plan cargado, «Abono» usa el plan (`prepaidId`).
+- Notas (`domain/notes.ts`, tabla `notes`, migración 0032; pasó las `sales.observations` viejas): de una paciente, pegadas a una
+  atención (`visit_id`: ícono en la fila de la Planilla, se ven debajo de lo que pagó) o sueltas. Pestaña Notas (`notas.tsx`): por día,
+  búsqueda por paciente o texto sin tildes/mayúsculas (`translate` en SQL). Las lee y escribe todo el equipo; corrige/borra quien la escribió o el admin.
 - Pago directo a la profesional (migración 0030): medio `profesional` (sale o parte en `visit_payments`). «botox a carla, le transfirieron
   a carmen, nos debe 36000» (`money-note.ts`: `toProvider`, `owesUs` → su parte = lo cobrado − lo que nos debe; si no, su %). La atención
   guarda su importe real pero no entra a la caja ni a «Entró» (`outsideOf` en `shared.tsx`). Cuenta del día por profesional (`balances`):

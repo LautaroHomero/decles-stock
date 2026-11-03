@@ -138,7 +138,7 @@ export async function recordVisit(
   const parts: PayPart[] = [];
   for (const p of Array.isArray(v.payments) ? v.payments : []) {
     const m = p?.method;
-    if (m !== "efectivo" && m !== "transferencia" && m !== "tarjeta" && m !== "dolares" && m !== "giftcard" && m !== "profesional")
+    if (m !== "efectivo" && m !== "transferencia" && m !== "tarjeta" && m !== "dolares" && m !== "giftcard" && m !== "profesional" && m !== "abonado")
       return { ok: false, error: "Medio de pago inválido.", status: 400 };
     if (m === "dolares") {
       const usd = Number(p.usd), rate = Number(p.rate);
@@ -152,9 +152,13 @@ export async function recordVisit(
   const visitMethod = parts.length === 1 ? parts[0].method : parts.length > 1 ? "mixto" : null;
   const raw = parts.length ? (parts.length === 1 && parts[0].method !== "dolares" ? parts[0].method : null) : v.paymentMethod;
   const method: PaymentMethod | null =
-    raw === "efectivo" || raw === "transferencia" || raw === "tarjeta" || raw === "giftcard" || raw === "profesional" ? raw : null;
-  // Gift card y «a la profesional» no son medios de la lista de precios: se cobra a precio efectivo y el medio se marca al final.
-  const saleMethod = method === "giftcard" || method === "profesional" ? null : method;
+    raw === "efectivo" || raw === "transferencia" || raw === "tarjeta" || raw === "giftcard" || raw === "profesional" || raw === "abonado" ? raw : null;
+  // Gift card, «a la profesional» y abono no son medios de la lista de precios: se cobra a precio efectivo y el medio se marca al final.
+  // En los tres la profesional cobra su parte igual; a la caja no entra nada hoy.
+  const saleMethod = method === "giftcard" || method === "profesional" || method === "abonado" ? null : method;
+  // Abono o gift card: «pagó $0» (no entró plata hoy) no es que la atención valga 0. Vale su precio y la profesional
+  // cobra su parte sobre eso (en la Planilla es fácil dejar el importe en 0 al elegir «Abono»).
+  if ((method === "abonado" || method === "giftcard") && !parts.length) lines = lines.map((l) => (l.amount === 0 ? { ...l, amount: null } : l));
   const debt = v.debt ?? null;
   if (v.owesUs !== undefined && v.owesUs !== null && !pesos(v.owesUs)) return { ok: false, error: "Lo que nos debe la profesional tiene que ser un número entero de pesos.", status: 400 };
   if (debt !== null && (!pesos(debt) || debt <= 0)) return { ok: false, error: "Lo que debe tiene que ser un número entero de pesos.", status: 400 };

@@ -18,7 +18,7 @@ if (!isLocalDb(url)) {
 const sql = getSql();
 
 // Si falta alguna migración, el borrado fallaría entero (y no borraría nada): avisar antes.
-const need = ["debts", "provider_debts", "prepaids", "payables", "insurer_visits", "deposits"];
+const need = ["debts", "provider_debts", "prepaids", "payables", "insurer_visits", "deposits", "notes"];
 const missing = [];
 for (const t of need) {
   const [r] = await sql`SELECT to_regclass(${"public." + t}) AS t`;
@@ -77,6 +77,7 @@ if (process.argv.includes("--hoy")) {
     await tx`DELETE FROM prepaid_uses WHERE prepaid_id IN (SELECT id FROM prepaids WHERE ${day("created_at")})`;
     await tx`DELETE FROM prepaids WHERE ${day("created_at")}`;
     await tx`DELETE FROM deposits WHERE ${day("created_at")}`;
+    await tx`DELETE FROM notes WHERE ${day("created_at")}`;
     await tx`DELETE FROM payable_payments WHERE payable_id IN (SELECT id FROM payables WHERE ${day("created_at")})`;
     await tx`DELETE FROM payables WHERE ${day("created_at")}`;
     await tx`UPDATE payables SET paid_at = NULL WHERE substr(paid_at, 1, 10) = ${today}`;
@@ -108,6 +109,7 @@ const counts = await sql.begin(async (tx) => {
   await tx`DELETE FROM payables`;
   await tx`DELETE FROM insurer_visits`;
   await tx`DELETE FROM deposits`;
+  await tx`DELETE FROM notes`;
   await tx`DELETE FROM day_cash`;
   await tx`UPDATE stock_items SET owed = 0 WHERE owed <> 0`;
   await tx`DELETE FROM notifications WHERE kind IN ('pendiente', 'sin_stock', 'deuda', 'deuda_cobrar', 'pagar')`;

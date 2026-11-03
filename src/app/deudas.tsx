@@ -41,7 +41,7 @@ export interface DebtCollectionRow {
 }
 
 const ddmm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
-const METHODS = PAYMENTS.filter(([m]) => m !== "dolares") as [DebtMethod, string][];
+const METHODS = PAYMENTS.filter(([m]) => m === "efectivo" || m === "transferencia" || m === "tarjeta") as [DebtMethod, string][];
 
 /**
  * Deudas abiertas (de todos los días): quién debe, por qué, desde cuándo y cuánto falta. «Cobrar» anota

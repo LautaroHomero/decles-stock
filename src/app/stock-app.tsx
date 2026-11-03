@@ -9,18 +9,20 @@ import { AnotarView } from "./anotar-view";
 import { CierreView } from "./cierre-view";
 import { StockSection } from "./practicas-view";
 import { VentasView } from "./ventas-view";
+import { NotasView } from "./notas";
 import { EquipoView } from "./equipo-view";
 import { ChangePasswordForm, EmailForm } from "./auth-ui";
 import { Onboarding } from "./onboarding";
 import { OpeningCashPrompt } from "./opening-cash";
 import { DolarChip } from "./dolar-chip";
 
-type Section = "vender" | "cierre" | "inventario" | "ventas" | "equipo";
+type Section = "vender" | "cierre" | "inventario" | "ventas" | "notas" | "equipo";
 
 const TABS: { id: Section; label: string }[] = [
   { id: "vender", label: "Anotar" },
   { id: "cierre", label: "Cierre" },
   { id: "ventas", label: "Planilla" },
+  { id: "notas", label: "Notas" },
   { id: "inventario", label: "Stock" },
   { id: "equipo", label: "Equipo" },
 ];
@@ -79,6 +81,7 @@ export function StockApp({ actor }: { actor: Actor }) {
         {section === "cierre" && <CierreView actor={actor} onOpenSales={() => go("ventas")} />}
         {section === "inventario" && (isAdmin || isMedico) && <StockSection canAdmin={isAdmin} />}
         {section === "ventas" && <VentasView actor={actor} />}
+        {section === "notas" && <NotasView actor={actor} />}
         {section === "equipo" && isAdmin && <EquipoView actor={actor} />}
       </main>
     </div>

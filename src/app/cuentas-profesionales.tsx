@@ -13,6 +13,7 @@ export interface BalanceLine {
   total: number;
   share: number;
   direct: number;
+  prepaid?: "abonado" | "giftcard" | null;
 }
 export interface Balance {
   providerId: string;
@@ -235,7 +236,11 @@ export function CuentasProfesionales({
                                 </td>
                                 <td className="whitespace-nowrap py-1.5 pr-3 text-neutral-400">
                                   {l.direct === 0
-                                    ? "el consultorio"
+                                    ? l.prepaid === "abonado"
+                                      ? "abono (pagado antes)"
+                                      : l.prepaid === "giftcard"
+                                        ? "gift card"
+                                        : "el consultorio"
                                     : l.direct >= l.total
                                       ? "ella, directo"
                                       : `ella ${money(l.direct)}`}

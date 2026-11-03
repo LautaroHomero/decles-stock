@@ -53,6 +53,7 @@ const METHOD: Record<SaleMethod, string> = {
   dolares: "dólares",
   giftcard: "gift card",
   profesional: "le pagaron a la profesional",
+  abonado: "abono (no entra plata hoy)",
   mixto: "varios medios",
 };
 const short = (name: string) => name.replace(/^(Dra?\.|Lic\.)\s*/i, "");
@@ -92,8 +93,14 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const inTotal = ingresos.reduce((n, e) => n + e.amount, 0);
   const paidOut = payouts.reduce((n, p) => n + p.amount, 0);
   // Lo que no entró hoy al consultorio: lo pagado directo a la profesional y con gift card.
-  const outside = rows.reduce((n, r) => { const o = outsideOf(r); return { profesional: n.profesional + o.profesional, giftcard: n.giftcard + o.giftcard }; }, { profesional: 0, giftcard: 0 });
-  const cobrado = rows.reduce((n, r) => n + r.total, 0) - outside.profesional - outside.giftcard;
+  const outside = rows.reduce(
+    (n, r) => {
+      const o = outsideOf(r);
+      return { profesional: n.profesional + o.profesional, giftcard: n.giftcard + o.giftcard, abonado: n.abonado + o.abonado };
+    },
+    { profesional: 0, giftcard: 0, abonado: 0 },
+  );
+  const cobrado = rows.reduce((n, r) => n + r.total, 0) - outside.profesional - outside.giftcard - outside.abonado;
   const cobrosTotal = cobros.reduce((n, p) => n + p.amount, 0);
   const cobroBy = (m: Payment) => cobros.filter((p) => (p.method ?? "efectivo") === m).reduce((n, p) => n + p.amount, 0);
   const kTotal = rows.reduce((n, r) => n + r.k, 0);
@@ -149,7 +156,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
           .concat(r.sales[0].visitId && debtByVisit.get(r.sales[0].visitId) ? [`quedó debiendo ${money(debtByVisit.get(r.sales[0].visitId!)!.amount)}`] : [])
           .filter(Boolean)
           .join(" · "),
-        inn: r.total - outsideOf(r).profesional - outsideOf(r).giftcard,
+        inn: r.total - outsideOf(r).all,
         out: 0,
         kind: "visita" as const,
       })),
@@ -458,6 +465,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                 <Line label="Total que entró" value={money(entro)} strong />
                 {outside.profesional > 0 && <Line label="Le pagaron directo a profesionales (no entró)" value={money(outside.profesional)} muted />}
                 {outside.giftcard > 0 && <Line label="Pagado con gift card (no entró hoy)" value={money(outside.giftcard)} muted />}
+                {outside.abonado > 0 && <Line label="Abonos (no entró plata hoy)" value={money(outside.abonado)} muted />}
                 <Line
                   label="Para Decles (lo de hoy − parte de profesionales)"
                   value={fmtSigned(cobrado + outside.profesional + debtIn + inTotal - kTotal - debtShares)}

@@ -71,7 +71,8 @@ export function PlanillaMovimientos({
 
   // Lo que le pagaron directo a la profesional (o con gift card) no entró hoy.
   const directo = rows.reduce((n, r) => n + outsideOf(r).profesional, 0);
-  const pacientes = rows.reduce((n, r) => n + r.total - outsideOf(r).profesional - outsideOf(r).giftcard, 0);
+  const pacientes = rows.reduce((n, r) => n + r.total - outsideOf(r).all, 0);
+  const abonados = rows.reduce((n, r) => n + outsideOf(r).abonado + outsideOf(r).giftcard, 0);
   const deProfesionales = cobros.reduce((n, p) => n + p.amount, 0);
   const extras = ingresos.reduce((n, e) => n + e.amount, 0);
   const cobrosDeuda = collections.reduce((n, p) => n + p.amount, 0);
@@ -293,6 +294,7 @@ export function PlanillaMovimientos({
             {mt.usd > 0 && <Sum label={`Dólares · ${usdFmt(mt.usd)}`} value={money(mt.dolares)} />}
             {mt.sin > 0 && <Sum label="Sin medio cargado" value={money(mt.sin)} muted />}
             {directo > 0 && <Sum label="Le pagaron directo a profesionales (no entró)" value={money(directo)} muted />}
+            {abonados > 0 && <Sum label="Abonos y gift cards (no entró plata hoy)" value={money(abonados)} muted />}
           </div>
         </div>
       </section>

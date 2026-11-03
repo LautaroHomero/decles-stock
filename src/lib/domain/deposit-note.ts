@@ -1,3 +1,4 @@
+import { spelledToDigits } from "./spoken-numbers";
 import { parseReminder, todayAR } from "./reminder-note";
 
 /**
@@ -27,7 +28,8 @@ export interface DepositNote {
   method: "efectivo" | "transferencia" | "tarjeta" | null;
 }
 
-export function parseDepositNote(text: string, today: string = todayAR()): DepositNote | null {
+export function parseDepositNote(input: string, today: string = todayAR()): DepositNote | null {
+  const text = spelledToDigits(input);
   const n = norm(text);
   if (!/\bsen(?:a|o|aron|amos)\b/.test(n) || USES_DEPOSIT.test(n)) return null;
   const amounts = [...n.matchAll(AMOUNT)].map((m) => pesos(m[1])).filter((v) => v >= 500);

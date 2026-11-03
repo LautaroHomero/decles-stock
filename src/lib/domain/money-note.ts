@@ -1,5 +1,6 @@
 import { sellerNamed, type QuickSeller } from "./quick-sale";
 import { parseReminder } from "./reminder-note";
+import { spelledToDigits } from "./spoken-numbers";
 
 /**
  * La plata en lo que se anota (Decles). La secretaria siempre dice cuánto ingresó; el reparto
@@ -35,10 +36,14 @@ export interface MoneyNote {
   split: Split | null;
   /** Un solo medio pegado al importe («30000 con tarjeta»). */
   method: "efectivo" | "transferencia" | "tarjeta" | null;
+  /** «20000 en efectivo y el resto con tarjeta»: el medio de lo que falta hasta el precio (lo arma la pantalla). */
+  restMethod: "efectivo" | "transferencia" | "tarjeta" | null;
   /** Lo que quedó debiendo («debe 40000», «quedó debiendo 40 mil»). */
   debt: number | null;
   /** «debe todo», «no pagó», «fiado»: no pagó nada y debe lo que salía. */
   debtAll: boolean;
+  /** «deja 10000 y paga el resto la semana que viene»: debe lo que falta hasta el precio (lo calcula la pantalla). */
+  debtRest: boolean;
   /** Día para acordarse de cobrar la deuda («paga el viernes», «recordar el 30/10»), AAAA-MM-DD. */
   remindOn: string | null;
   /**
@@ -85,12 +90,17 @@ const USD_ALL = /\b(?:(?:pago|pagaron|abono|abonaron|cobre|cobramos|cobro)\s+)?(
 const USD_AS_PESOS = 5000;
 // Medio de pago pegado a un importe (después: «20000 en efectivo»; antes: «efectivo 20000»).
 // También con «pagó» en el medio: «50000 pagó con tarjeta», «50000 pago en efectivo».
-const METHOD_AFTER = /^\s*(?:(?:pago|pagaron|abono|abonaron)\s+)?(?:en|con|por|de|x)?\s*(efectivo|efvo|cash|contado|transferencia|transf\w*|mp|mercado\s*pago|tarjeta|tarj\w*|debito|credito|posnet)\b/;
-const METHOD_BEFORE = /\b(efectivo|efvo|cash|transferencia|transf\w*|mp|tarjeta|tarj\w*|debito|credito)\s*(?:de|por|:)?\s*\$?\s*$/;
+// Medios: además de los de siempre, billeteras y QR («mercado pago», «qr», «modo», «cuenta dni», «ualá») = transferencia.
+const METHODS_RE = String.raw`efectivo|efvo|cash|contado|transferencia|transf\w*|mp|mercado\s*pago|qr|modo|cuenta\s*dni|uala|tarjeta|tarj\w*|debito|credito|posnet`;
+const METHOD_AFTER = new RegExp(String.raw`^\s*(?:(?:pago|pagaron|abono|abonaron)\s+)?(?:en|con|por|de|x)?\s*(${METHODS_RE})\b`);
+const METHOD_BEFORE = new RegExp(String.raw`\b(${METHODS_RE})\s*(?:de|por|:)?\s*\$?\s*$`);
+// «20000 en efectivo y el resto con tarjeta»: lo que falta hasta el precio, con otro medio.
+const SMALL_WITH_METHOD = new RegExp(String.raw`\b(\d{1,3})\s+(?:en|con|por|x)\s+(${METHODS_RE})\b`, "g");
+const REST_AFTER_AMOUNT = new RegExp(String.raw`(?:\by\s+)?\b(?:el\s+)?(?:resto|restante|lo\s+demas|lo\s+que\s+falta(?:ba)?|lo\s+otro|la\s+diferencia)\s+(?:lo\s+pago\s+|pago\s+)?(?:con|en|por|de|x)\s+(${METHODS_RE})\b`);
 function methodWord(w: string | undefined): keyof Omit<Split, "usd"> | null {
   if (!w) return null;
   if (/^(efectivo|efvo|cash|contado)$/.test(w)) return "efectivo";
-  if (/^(transf|mp|mercado)/.test(w)) return "transferencia";
+  if (/^(transf|mp|mercado|qr|modo|cuenta|uala)/.test(w)) return "transferencia";
   if (/^(tarj|debito|credito|posnet)/.test(w)) return "tarjeta";
   return null;
 }
@@ -98,17 +108,18 @@ function methodWord(w: string | undefined): keyof Omit<Split, "usd"> | null {
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 
 // Un importe: «$ 45.000», «45000», «45 mil», «1,5 millones», «9k», «45 lucas».
-const AMOUNT = /\$\s*\d[\d.,]*(?:\s*(?:mil|k|lucas|m|millones?))?|\b\d{1,3}(?:\.\d{3})+\b|\b\d{4,}\b|\b\d+(?:[.,]\d+)?\s*(?:mil|k|lucas|millones?)\b/gi;
+// «1,5 palos» = 1.500.000; «20 lucas» = 20.000.
+const AMOUNT = /\$\s*\d[\d.,]*(?:\s*(?:mil|k|lucas?|palos?|m|millones?))?|\b\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?\b|\b\d{4,}\b|\b\d+(?:[.,]\d+)?\s*(?:mil|k|lucas?|palos?|millones?)\b/gi;
 
 // Lo que va antes del importe y dice que es la parte de la profesional.
 const SHARE_BEFORE =
   /(?:\ba\s+(\S+)\s+)?(?:le\s+)?(?:corresponde[n]?|toca[n]?|queda[n]?|lleva[n]?|llevan?|damos|dar(?:le)?|darle|pagamos(?:le)?|comision|honorarios?|parte|para\s+(?:ella|el|la\s+profesional|la\s+medica|la\s+kine\w*))(?:\s+\S+){0,3}\s*$/;
 // Lo que dice que la paciente le pagó directo a la profesional (o tiene un abono): no entra a la caja.
 const DIRECT =
-  /\b(?:le\s+)?transfiri(?:o|eron)\s+(?:a\s+)?(?:ella|el|la\s+\w+|\w+)|\btransferencia\s+a\s+(?:ella|el|la\s+\w+|\w+)|\bpag(?:o|aron)\s+directo(?:\s+a\s+(?:ella|el|la\s+\w+|\w+))?|\bdirecto\s+a\s+(?:ella|el|la\s+\w+|\w+)|\ble\s+pag(?:o|aron)\s+a\s+(?:ella|el|la\s+\w+)|\b(?:con|de|tiene|usa|por)\s+abono\b|\babono\b(?!\s*(?:\$|\d))/;
+  /\b(?:le\s+)?transfiri(?:o|eron)\s+(?:directo\s+)?(?:a\s+)?(?:ella|el|la\s+\w+|\w+)|\btransferencia\s+a\s+(?:ella|el|la\s+\w+|\w+)|\bpag(?:o|aron)\s+directo(?:\s+a\s+(?:ella|el|la\s+\w+|\w+))?|\bdirecto\s+a\s+(?:ella|el|la\s+\w+|\w+)|\ble\s+pag(?:o|aron)\s+a\s+(?:ella|el|la\s+\w+)|\b(?:con|de|tiene|usa|por)\s+abono\b|\babono\b(?!\s*(?:\$|\d))/;
 // Solo el «pago directo» a la profesional (sin abono).
 const TO_PROVIDER =
-  /\b(?:le\s+)?transfiri(?:o|eron)\s+(?:a\s+)?(?:ella|el|la\s+\w+|\w+)|\btransferencia\s+a\s+(?:ella|el|la\s+\w+|\w+)|\bpag(?:o|aron)\s+directo(?:\s+a\s+(?:ella|el|la\s+\w+|\w+))?|\bdirecto\s+a\s+(?:ella|el|la\s+\w+|\w+)|\ble\s+pag(?:o|aron)\s+a\s+(?:ella|el|la\s+\w+)/;
+  /\b(?:le\s+)?transfiri(?:o|eron)\s+(?:directo\s+)?(?:a\s+)?(?:ella|el|la\s+\w+|\w+)|\btransferencia\s+a\s+(?:ella|el|la\s+\w+|\w+)|\bpag(?:o|aron)\s+directo(?:\s+a\s+(?:ella|el|la\s+\w+|\w+))?|\bdirecto\s+a\s+(?:ella|el|la\s+\w+|\w+)|\ble\s+pag(?:o|aron)\s+a\s+(?:ella|el|la\s+\w+)/;
 // Lo que va antes del importe y dice que es lo nuestro que tiene la profesional: «nos debe 36000», «nos tiene que dar 36000».
 const OWES_US_BEFORE =
   /\b(?:(?:ella|el|la\s+profesional|la\s+\w+)\s+)?nos\s+(?:debe(?:n)?(?:\s+(?:dar|pasar|transferir|devolver))?|tiene\s+que\s+(?:dar|pasar|transferir|devolver)|corresponde(?:n)?|toca(?:n)?|queda(?:n)?)\s*(?:de\s+)?\$?\s*$|\b(?:para\s+(?:nosotros|el\s+consultorio|decles))\s*\$?\s*$/;
@@ -117,6 +128,9 @@ const DEBT_BEFORE =
   /\b(?:(?:le\s+)?debe[n]?|adeuda[n]?|(?:quedo|queda|quedaron|quedan)\s+debiendo|(?:le\s+)?(?:falta|faltan|resta|restan)(?:\s+(?:pagar|abonar))?|saldo|fiado|deuda(?:\s+de)?)\s*(?:de\s+)?\$?\s*$/;
 // Lo que va después: «40000 de deuda», «40000 fiado», «40000 queda debiendo».
 const DEBT_AFTER = /^\s*(?:de\s+deuda|fiados?|(?:queda|quedo)\s+debiendo|(?:los\s+)?debe)\b/;
+// Pagó una parte y debe el resto: «y paga el resto el viernes», «el resto lo debe», «queda debiendo la diferencia».
+const DEBT_REST =
+  /\b(?:y\s+)?(?:(?:paga|pagara|abona|abonara|trae|traera|debe|queda\s+debiendo|quedo\s+debiendo)\s+(?:el\s+|la\s+)?(?:resto|saldo|restante|diferencia|lo\s+que\s+falta|lo\s+demas)|(?:el\s+)?(?:resto|saldo|restante)\s+(?:lo\s+)?(?:debe|queda\s+debiendo|paga\s+(?:despues|otro\s+dia|la\s+semana|el\s+\w+)))\b/;
 // No pagó nada: debe todo lo que salía.
 const DEBT_ALL = /\b(?:debe\s+todo|queda\s+debiendo\s+todo|quedo\s+debiendo\s+todo|no\s+pago(?:\s+nada)?|fiado|lo\s+debe|paga\s+(?:despues|la\s+semana\s+que\s+viene|el\s+\w+\s+que\s+viene|otro\s+dia))\b/;
 // Palabras de «pagó» que acompañan al importe y no son paciente ni práctica.
@@ -124,14 +138,15 @@ const PAID_WORDS = /\b(?:pago|pagaron|abono|abonaron|cobre|cobramos|cobro|ingres
 
 function toPesos(raw: string): number {
   const t = norm(raw).replace(/\$/g, "").trim();
-  const unit = t.match(/(mil|k|lucas|millones?|m)$/)?.[1];
-  let n = t.replace(/(mil|k|lucas|millones?|m)$/, "").trim();
-  // «45.000» → 45000; «1,5» → 1.5
+  const unit = t.match(/(mil|k|lucas?|palos?|millones?|m)$/)?.[1];
+  let n = t.replace(/(mil|k|lucas?|palos?|millones?|m)$/, "").trim();
+  // «45.000» → 45000; «45.000,00» → 45000; «1,5» → 1.5
+  n = n.replace(/^(\d{1,3}(?:\.\d{3})+),\d{1,2}$/, "$1");
   n = /^\d{1,3}(\.\d{3})+$/.test(n) ? n.replace(/\./g, "") : n.replace(",", ".");
   let v = Number(n);
   if (!Number.isFinite(v)) return 0;
-  if (unit === "mil" || unit === "k" || unit === "lucas") v *= 1000;
-  else if (unit && /^(m|millon|millones)$/.test(unit)) v *= 1_000_000;
+  if (unit === "mil" || unit === "k" || unit === "lucas" || unit === "luca") v *= 1000;
+  else if (unit && /^(m|millon|millones|palo|palos)$/.test(unit)) v *= 1_000_000;
   return Math.round(v);
 }
 
@@ -238,7 +253,8 @@ export function fractionsToPesos(fr: NonNullable<MoneyNote["fractions"]>, total:
   return { split, debt };
 }
 
-export function extractMoney(text: string, today?: string): MoneyNote {
+export function extractMoney(input: string, today?: string): MoneyNote {
+  const text = spelledToDigits(input);
   let paid: number | null = null;
   let share: number | null = null;
   let debt: number | null = null;
@@ -248,6 +264,10 @@ export function extractMoney(text: string, today?: string): MoneyNote {
   const toProvider = TO_PROVIDER.test(n);
   // Recortes a sacar del texto: [desde, hasta)
   const cuts: [number, number][] = [];
+  // «20000 en efectivo y el resto con tarjeta» (con importe; «la mitad … y el resto …» lo toman las fracciones).
+  const rm0 = extractFractions(n) ? null : n.match(REST_AFTER_AMOUNT);
+  const restMethod = rm0 ? (methodWord(rm0[1].split(/\s/)[0]) as MoneyNote["restMethod"]) : null;
+  if (rm0 && rm0.index !== undefined) cuts.push([rm0.index, rm0.index + rm0[0].length]);
   const split: Split = { efectivo: 0, transferencia: 0, tarjeta: 0, usd: 0 };
   const methods = new Set<string>();
 
@@ -318,6 +338,21 @@ export function extractMoney(text: string, today?: string): MoneyNote {
     } else split.efectivo += 0;
     cuts.push([at - (mb && !ma ? mb[0].length : pm ? pm[0].length : 0), at + m[0].length + (ma ? ma[0].length : 0)]);
   }
+  // «20 lucas en efectivo y 15 con tarjeta»: si un importe se dijo en miles, un número chico pegado a un medio
+  // también son miles (solo, «15 con tarjeta» podría ser una cantidad).
+  if ([...text.matchAll(AMOUNT)].some((m) => /(?:mil|k|lucas?)$/i.test(m[0].trim()))) {
+    for (const m of n.matchAll(SMALL_WITH_METHOD)) {
+      const at = m.index!;
+      if (cuts.some(([a, b]) => at < b && at + m[0].length > a)) continue;
+      const method = methodWord(m[2].split(/\s/)[0]);
+      if (!method) continue;
+      const v = Number(m[1]) * 1000;
+      paid = (paid ?? 0) + v;
+      split[method] += v;
+      methods.add(method);
+      cuts.push([at, at + m[0].length]);
+    }
+  }
   // Partes sin importe («la mitad en efectivo y la mitad con tarjeta»): el mismo largo de texto (norm no cambia índices).
   // Van antes que «pagó en dólares»: «la otra mitad en dólares» es media parte, no todo en dólares.
   const fx = extractFractions(n);
@@ -343,12 +378,15 @@ export function extractMoney(text: string, today?: string): MoneyNote {
     const keep = toProvider && !/^(?:ella|el|profesional|medica|doctora|kine\w*|abono)$/.test(last) && dm[0].length > last.length ? last.length : 0;
     cuts.push([dm.index, dm.index + dm[0].length - keep]);
   }
-  const debtAll = debt === null && !fx?.f.debt && DEBT_ALL.test(n);
+  const drm = debt === null && !fx?.f.debt ? n.match(DEBT_REST) : null;
+  const debtRest = !!drm;
+  if (drm && drm.index !== undefined) cuts.push([drm.index, drm.index + drm[0].length]);
+  const debtAll = debt === null && !fx?.f.debt && !debtRest && DEBT_ALL.test(n);
   const am = debtAll ? n.match(DEBT_ALL) : null;
   if (am && am.index !== undefined) cuts.push([am.index, am.index + am[0].length]);
   // Fecha para cobrarla: cuenta si hay una deuda en el texto o si se pidió un recordatorio («recordar el viernes»).
   const rm = parseReminder(n, today);
-  const remindOn = rm && (debt !== null || debtAll || !!fx?.f.debt || rm.explicit) ? rm.remindOn : null;
+  const remindOn = rm && (debt !== null || debtAll || debtRest || !!fx?.f.debt || rm.explicit) ? rm.remindOn : null;
   if (remindOn && rm) cuts.push(rm.span);
 
   // Los tramos a sacar pueden pisarse («paga la semana que viene» es deuda y fecha): se juntan antes de cortar.
@@ -371,9 +409,11 @@ export function extractMoney(text: string, today?: string): MoneyNote {
     owesUs,
     share,
     split: isSplit ? split : null,
-    method: single,
+    method: single ?? (restMethod && methods.size === 0 && paid !== null ? "efectivo" : null),
+    restMethod,
     debt,
     debtAll,
+    debtRest,
     remindOn,
     fractions: fx ? fx.f : null,
     usdAll,
@@ -402,11 +442,14 @@ export function splitPaid(lines: { list: number; product: boolean }[], paid: num
  * «por transferencia» → `method`. Si dice «le quedamos debiendo», es `parseProviderDebt`.
  */
 export function parsePayout<S extends QuickSeller>(
-  text: string,
+  input: string,
   sellers: S[],
 ): { seller: S; amount: number | null; debt: boolean; method: "efectivo" | "transferencia" | null } | null {
+  const text = spelledToDigits(input);
   const n = norm(text);
-  if (!/\b(?:pague|pagamos|le di|le dimos|liquide|liquidamos|se le pago|ya le pague|le pague|le pagamos|pagado a|le transferi|le transferimos)\b/.test(n)) return null;
+  if (!/\b(?:pague|pagamos|le di|le dimos|liquide|liquidamos|se le pago|ya le pague|le pague|le pagamos|pagado a|le transferi|le transferimos|transferi|transferimos|le entregue|le entregamos|se llevo|se lleva|se llevaron|retiro su parte|cobro su parte)\b/.test(n)) return null;
+  // «transferí …» sin «le»: solo si dice a quién («transferí 20000 a marisa»).
+  if (/\btransferi(?:mos)?\b/.test(n) && !/\ble\s+transferi/.test(n) && !/\btransferi(?:mos)?\s+(?:\S+\s+){0,3}a\s+\w+/.test(n) && !/\bpague|\ble di/.test(n)) return null;
   if (PROV_DEBT.test(stripOwedClause(n))) return null;
   const seller = sellerNamed(text, sellers);
   if (!seller) return null;
@@ -415,7 +458,8 @@ export function parsePayout<S extends QuickSeller>(
   return { seller, amount: amounts.length && !/\btodo\b/.test(n) ? amounts.reduce((a, b) => a + b, 0) : null, debt, method: payoutMethod(n) };
 }
 
-const PROV_DEBT = /\b(?:(?:le\s+)?(?:quedamos|quedo|queda|quedaron|quedan|dejamos)\s+(?:debiendo|a\s+deber|pendientes?)|le\s+debemos|le\s+debo|le\s+adeudamos|se\s+le\s+debe)\b/;
+// Nosotros le debemos a la profesional. «quedó debiendo» (sin «le») es la paciente que debe: no cuenta acá.
+const PROV_DEBT = /\b(?:(?:le\s+)?(?:quedamos|dejamos)\s+(?:debiendo|a\s+deber|pendientes?)|le\s+(?:quedo|queda|quedaron|quedan)\s+(?:a\s+deber|pendientes?)|le\s+debemos|le\s+debo|le\s+adeudamos|se\s+le\s+debe)\b/;
 // «lo que le debemos» es de qué se habla («le pagué lo que le debemos»), no una deuda nueva.
 const stripOwedClause = (n: string) => n.replace(/\b(?:de\s+)?lo\s+que\s+(?:le\s+|se\s+le\s+)?deb\w*/g, " ");
 function payoutMethod(n: string): "efectivo" | "transferencia" | null {
@@ -430,9 +474,10 @@ function payoutMethod(n: string): "efectivo" | "transferencia" | null {
  * «le pagué 20000 a marisa y le quedamos debiendo el resto»: `paidNow` = lo que sí se le pagó ahora.
  */
 export function parseProviderDebt<S extends QuickSeller>(
-  text: string,
+  input: string,
   sellers: S[],
 ): { seller: S; amount: number | null; paidNow: number | null; method: "efectivo" | "transferencia" | null } | null {
+  const text = spelledToDigits(input);
   const n = norm(text);
   if (!PROV_DEBT.test(stripOwedClause(n))) return null;
   const seller = sellerNamed(text, sellers);
@@ -458,9 +503,10 @@ export function parseProviderDebt<S extends QuickSeller>(
  * a todas (se elige en la pantalla).
  */
 export function parseDebtPayment<D extends { id: string; debtor: string; remaining: number }>(
-  text: string,
+  input: string,
   open: D[],
 ): { debts: D[]; amount: number | null; method: "efectivo" | "transferencia" | "tarjeta" | null } | null {
+  const text = spelledToDigits(input);
   const n = norm(text);
   if (!open.length) return null;
   // «pagó 80000, debe 40000» es una deuda nueva, no un cobro.

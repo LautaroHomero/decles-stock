@@ -1,3 +1,4 @@
+import { spelledToDigits } from "./spoken-numbers";
 /**
  * ¿Lo escrito en Anotar es un egreso de plata? «pagué 5000 de luz», «gasto 12.500 insumos»,
  * «retiro 50 mil», «egreso: alquiler 300000». Devuelve concepto e importe (0 si no se entendió).
@@ -18,6 +19,7 @@ const CUES: [RegExp, string][] = [
   [/\bgast(?:o|os|e|amos)\b/, ""],
   [/\bpagu(?:e)\b|\bpagamos\b|\bse pago\b|\bpago (?:de|del|la|el)\b/, ""],
   [/\bretir(?:o|e|amos)\b(?! \d+ (?:crema|producto))/, "Retiro"],
+  [/\b(?:saque|sacamos|saco)\b(?=.*\b(?:caja|plata|efectivo|\d))/, "Retiro"],
   [/\bcompr(?:e|amos)\b/, "Compra"],
   [/\bsalida(?: de (?:caja|plata))?\b|\bsalieron\b/, ""],
 ];
@@ -45,14 +47,15 @@ function amountOf(t: string): { amount: number; span: [number, number] } | null 
   return best;
 }
 
-export function parseExpense(text: string): ExpenseNote | null {
+export function parseExpense(input: string): ExpenseNote | null {
+  const text = spelledToDigits(input);
   const t = norm(text.trim());
   if (!t) return null;
   const cue = CUES.find(([re]) => re.test(t));
   if (!cue) return null;
   const a = amountOf(t);
   // Sin importe, solo si la palabra no deja dudas («egreso», «gasto», «pagué»…).
-  if (!a && !/\b(egresos?|gast(?:o|os|e|amos)|pague|pagamos|retir(?:o|e|amos))\b/.test(t)) return null;
+  if (!a && !/\b(egresos?|gast(?:o|os|e|amos)|pague|pagamos|retir(?:o|e|amos)|saque|sacamos)\b/.test(t)) return null;
 
   // Concepto: el texto original sin la palabra clave, el importe ni las palabras de relleno.
   const original = text.trim();
@@ -63,7 +66,7 @@ export function parseExpense(text: string): ExpenseNote | null {
   const kept = words.filter((w) => {
     const n = norm(w);
     if (FILLER.has(n)) return false;
-    return !CUES.some(([re]) => re.test(n)) && !/^(pague|pago|pagamos|salida|salieron|egreso|egresos|gasto|gastos|gaste|gastamos|retiro|retire|retiramos|compre|compramos)$/.test(n);
+    return !CUES.some(([re]) => re.test(n)) && !/^(pague|pago|pagamos|salida|salieron|egreso|egresos|gasto|gastos|gaste|gastamos|retiro|retire|retiramos|compre|compramos|saque|sacamos|saco)$/.test(n);
   });
   // Recupera «de» internos: «insumos de limpieza».
   let concept = kept.join(" ");

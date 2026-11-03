@@ -1,11 +1,12 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { PlusIcon } from "@phosphor-icons/react";
+import { NotePencilIcon, PlusIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { normalize, parseNote, suggest } from "@/lib/domain/quick-sale";
 import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogResponse, type PayPart, type PaymentsMap, type SaleMethod, type SaleRow } from "./shared";
 import { PlanillaMovimientos } from "./planilla-movimientos";
+import { NoteDialog, VisitNotes, type Note } from "./notas";
 import type { PrepaidRow } from "./abonos";
 import type { DepositRow } from "./senas";
 import { samePatient } from "@/lib/domain/prepaid-note";
@@ -84,6 +85,7 @@ const METHOD_SHORT: Record<SaleMethod, string> = {
   dolares: "US$",
   giftcard: "Gift card",
   profesional: "A la prof.",
+  abonado: "Abono",
   mixto: "Varios",
 };
 const GENERIC = "Atención";
@@ -218,12 +220,33 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
     [catalog],
   );
   const rows = useMemo(() => toRows(sales?.ok ? sales.sales : [], sales?.payments, sales?.debts), [sales]);
+  // Notas del día: las de cada atención van debajo de lo que pagó.
+  const [notesData, refreshNotes] = usePoll<{ ok: boolean; notes: Note[] }>(`/api/notes?from=${date}&to=${date}`, 60_000);
+  const notesByVisit = useMemo(() => {
+    const m = new Map<string, Note[]>();
+    for (const n of notesData?.ok ? notesData.notes : []) if (n.visitId) m.set(n.visitId, [...(m.get(n.visitId) ?? []), n].sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+    return m;
+  }, [notesData]);
+  const [noteForm, setNoteForm] = useState<{ note?: Note; visit?: { visitId: string; patient: string; what: string } } | null>(null);
   const areaOf = (providerId: string | null): Area => sellers.find((s) => s.id === providerId)?.area ?? "medicos";
   const sections = AREAS.filter((a) => a.id === "medicos" || sellers.some((s) => s.area === a.id) || rows.some((r) => areaOf(r.providerId) === a.id));
 
   return (
     <div className="cl-print-area flex w-full flex-col gap-6 text-[13.5px]">
       <Toast msg={toast} />
+      {noteForm && (
+        <NoteDialog
+          note={noteForm.note}
+          visit={noteForm.visit}
+          canDelete={!!noteForm.note && (noteForm.note.createdBy === actor.userId || admin)}
+          onClose={() => setNoteForm(null)}
+          onSaved={(msg) => {
+            setNoteForm(null);
+            showToast(msg + ".");
+            refreshNotes();
+          }}
+        />
+      )}
       {!canEdit && <p className="cl-no-print -mt-3 text-[13px] text-neutral-500">Lo de días anteriores lo corrige el admin.</p>}
       {!sales || !catalog || !sellersData ? (
         <p className="text-neutral-500">Cargando…</p>
@@ -240,6 +263,8 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
             products={products}
             canEdit={canEdit}
             abonos={abonos}
+            notes={notesByVisit}
+            onNote={(r, note) => setNoteForm(note ? { note } : { visit: { visitId: r.key, patient: r.patient, what: r.itemsText } })}
             onSaved={() => {
               refreshSales();
               refreshCatalog();
@@ -281,6 +306,8 @@ function AreaSection({
   products,
   canEdit,
   abonos,
+  notes,
+  onNote,
   onSaved,
   onError,
 }: {
@@ -292,6 +319,10 @@ function AreaSection({
   products: Item[];
   canEdit: boolean;
   abonos: AbonoData;
+  /** visit_id → sus notas. */
+  notes: Map<string, Note[]>;
+  /** Abrir una nota (o escribir una nueva para esa atención). */
+  onNote: (r: Row, note?: Note) => void;
   onSaved: () => void;
   onError: (m: string) => void;
 }) {
@@ -368,6 +399,7 @@ function AreaSection({
                         </li>
                       ))}
                     </ul>
+                    <VisitNotes notes={notes.get(r.key) ?? []} onOpen={(n) => onNote(r, n)} />
                   </td>
                   <td className="px-3 py-2 text-neutral-300">{allSellers.find((s) => s.id === r.providerId)?.name ?? r.sales[0].providerName ?? "—"}</td>
                   <td className="px-3 py-2 text-right font-medium tabular-nums">
@@ -383,7 +415,20 @@ function AreaSection({
                   </td>
                   <td className="px-3 py-2 text-neutral-400">{abonos.uses.has(r.key) ? "Plan" : abonos.byInsurer.has(r.key) ? abonos.byInsurer.get(r.key)!.name : r.method ? METHOD_SHORT[r.method] : ""}</td>
                   {showK && <td className="px-3 py-2 text-right tabular-nums">{r.k ? money(r.k) : <span className="text-neutral-500">—</span>}</td>}
-                  <td className="cl-no-print" />
+                  <td className="cl-no-print px-1.5 py-1.5">
+                    <button
+                      type="button"
+                      aria-label={`Agregar una nota${r.patient ? ` de ${r.patient}` : ""}`}
+                      title="Agregar una nota"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onNote(r);
+                      }}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-800 hover:text-fg"
+                    >
+                      <NotePencilIcon size={15} />
+                    </button>
+                  </td>
                 </tr>
               ),
             )}
@@ -694,6 +739,12 @@ function RowEditor({
           <option value="efectivo">Efvo.</option>
           <option value="transferencia">Transf.</option>
           <option value="tarjeta">Tarj.</option>
+          <option value="abonado" title="Es abonada: no entra plata hoy; la profesional cobra su parte igual">
+            Abono
+          </option>
+          <option value="giftcard" title="Pagó con gift card: no entra plata hoy; la profesional cobra su parte igual">
+            Gift card
+          </option>
           <option value="profesional" title="Le pagaron directo a la profesional: no entra a la caja; lo nuestro nos lo debe ella">
             A la prof.
           </option>
