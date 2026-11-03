@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { CaretDownIcon, CheckIcon } from "@phosphor-icons/react";
-import { call, money } from "./shared";
+import { call, money, usdFmt } from "./shared";
 
 /** Espejo de `ProviderBalance` / `BalanceLine` de src/lib/domain/payouts.ts. */
 export interface BalanceLine {
@@ -14,6 +14,8 @@ export interface BalanceLine {
   share: number;
   direct: number;
   prepaid?: "abonado" | "giftcard" | null;
+  /** Lo que se pagó en dólares (US$). */
+  usd?: number;
 }
 export interface Balance {
   providerId: string;
@@ -246,7 +248,7 @@ export function CuentasProfesionales({
                                       : `ella ${money(l.direct)}`}
                                 </td>
                                 <td className="py-1.5 text-right">
-                                  {money(l.total)}
+                                  {l.usd ? usdFmt(l.usd) : money(l.total)}
                                 </td>
                                 <td className="py-1.5 text-right">
                                   {b.owner ? "—" : money(l.share)}

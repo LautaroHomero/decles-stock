@@ -3,6 +3,7 @@ import { getSql } from "@/lib/db/connection";
 import { getPriceItem } from "@/lib/db/billing-repo";
 import { realNowIso } from "@/lib/domain/clock";
 import { createExpense, voidExpense } from "@/lib/domain/expenses";
+import { usdFrom } from "@/lib/domain/usd";
 import type { Actor } from "@/lib/domain/types";
 
 /**
@@ -16,8 +17,8 @@ import type { Actor } from "@/lib/domain/types";
 export type Result<T> = ({ ok: true } & T) | { ok: false; error: string; status: number };
 const fail = (error: string, status = 400) => ({ ok: false as const, error, status });
 type Row = Record<string, unknown>;
-type Method = "efectivo" | "transferencia" | "tarjeta";
-const methodOf = (m: unknown): Method => (m === "transferencia" || m === "tarjeta" ? m : "efectivo");
+type Method = "efectivo" | "transferencia" | "tarjeta" | "dolares";
+const methodOf = (m: unknown): Method => (m === "transferencia" || m === "tarjeta" || m === "dolares" ? m : "efectivo");
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 const clean = (s: unknown) => (typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "");
 
@@ -26,8 +27,11 @@ export interface Deposit {
   patient: string;
   itemId: string | null;
   itemName: string;
+  /** En pesos (lo que descuenta de la práctica). En dólares: a la cotización del día que se dejó. */
   amount: number;
   method: Method;
+  /** Si se dejó en dólares: cuántos US$. */
+  usd: number | null;
   /** Día del turno (AAAA-MM-DD). */
   dueOn: string | null;
   /** Ya se descontó en una atención vigente. */
@@ -60,6 +64,7 @@ async function raw(orgId: string, where: { ids?: string[]; visitId?: string } = 
     itemName: r.item_name as string,
     amount: Number(r.amount),
     method: methodOf(r.method),
+    usd: r.usd === null || r.usd === undefined ? null : Number(r.usd),
     dueOn: (r.due_on as string | null) ?? null,
     used: !!r.used,
     visitId: (r.visit_id as string | null) ?? null,
@@ -89,25 +94,29 @@ export async function depositsUsedOn(actor: Actor, date: string): Promise<{ visi
 
 export async function createDeposit(
   actor: Actor,
-  v: { patient?: unknown; itemId?: unknown; amount?: unknown; method?: unknown; dueOn?: unknown },
+  v: { patient?: unknown; itemId?: unknown; amount?: unknown; method?: unknown; dueOn?: unknown; usd?: unknown; rate?: unknown },
 ): Promise<Result<{ deposit: Deposit }>> {
   const c = ctx(actor);
   if (!c?.canWrite) return fail("Las señas las anota la secretaría o el admin.", 403);
   const patient = clean(v.patient).slice(0, 120);
   if (!patient) return fail("¿De qué paciente es la seña?");
-  const amount = Number(v.amount);
+  // En dólares: se guarda en US$; en pesos (a la cotización) es lo que descuenta de la práctica.
+  const u = v.method === "dolares" ? usdFrom(v) : null;
+  if (v.method === "dolares" && !u) return fail("¿De cuántos dólares es la seña?");
+  if (typeof u === "string") return fail(u);
+  const amount = u ? u.pesos : Number(v.amount);
   if (!Number.isInteger(amount) || amount <= 0 || amount > 1_000_000_000) return fail("¿De cuánto es la seña? Tiene que ser un número entero de pesos.");
   const item = typeof v.itemId === "string" && v.itemId ? await getPriceItem(c.orgId, v.itemId) : undefined;
   if (typeof v.itemId === "string" && v.itemId && !item) return fail("No encontré esa práctica.", 404);
   const dueOn = typeof v.dueOn === "string" && v.dueOn ? v.dueOn.slice(0, 10) : null;
   if (dueOn && !YMD.test(dueOn)) return fail("La fecha del turno no es válida.");
   const method = methodOf(v.method);
-  const inc = await createExpense(actor, { concept: `Seña · ${patient}${item ? ` · ${item.name}` : ""}`, amount, direction: "ingreso", method });
+  const inc = await createExpense(actor, { concept: `Seña · ${patient}${item ? ` · ${item.name}` : ""}`, amount, direction: "ingreso", method, usd: u?.usd, rate: u?.rate });
   if (!inc.ok) return inc;
   const id = `sen_${randomUUID().slice(0, 8)}`;
   await getSql()`
-    INSERT INTO deposits (id, organization_id, patient_label, item_id, item_name, amount, method, due_on, income_id, created_by, created_by_name, created_at)
-    VALUES (${id}, ${c.orgId}, ${patient}, ${item?.id ?? null}, ${item?.name ?? ""}, ${amount}, ${method}, ${dueOn}, ${inc.expense.id}, ${actor.userId}, ${actor.name}, ${realNowIso()})`;
+    INSERT INTO deposits (id, organization_id, patient_label, item_id, item_name, amount, method, usd, due_on, income_id, created_by, created_by_name, created_at)
+    VALUES (${id}, ${c.orgId}, ${patient}, ${item?.id ?? null}, ${item?.name ?? ""}, ${amount}, ${method}, ${u?.usd ?? null}, ${dueOn}, ${inc.expense.id}, ${actor.userId}, ${actor.name}, ${realNowIso()})`;
   return { ok: true, deposit: (await raw(c.orgId, { ids: [id] }))[0] };
 }
 

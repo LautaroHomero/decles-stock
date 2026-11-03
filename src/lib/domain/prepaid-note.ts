@@ -1,4 +1,4 @@
-import { spelledToDigits } from "./spoken-numbers";
+import { spelledToDigits, usdAmountIn } from "./spoken-numbers";
 /**
  * Abonos en Anotar (Decles). Dos cosas distintas:
  *  · uno nuevo: «carla dejó un abono de 5 sesiones de venus freeze, pagó 250000 en efectivo»,
@@ -25,7 +25,9 @@ export interface PrepaidNote {
   amount: number | null;
   /** Precio congelado por sesión, si se dijo («a 50000 c/u»). */
   unitPrice: number | null;
-  method: "efectivo" | "transferencia" | "tarjeta" | null;
+  /** «pagó US$ 300»: en dólares (los pesos los calcula la pantalla con la cotización). */
+  usd: number | null;
+  method: "efectivo" | "transferencia" | "tarjeta" | "dolares" | null;
 }
 
 /** «con abono», «tiene abono», «usa el abono»: es una sesión de un abono que ya existe. */
@@ -40,8 +42,11 @@ export function parsePrepaidNote(input: string): PrepaidNote | null {
   // «abonó 50000 con tarjeta» es un pago común; un abono se nombra («un abono», «abono de/para») o trae sesiones.
   const named = /\b(?:un|el|de|como|nuevo|otro)\s+(?:abono|plan)\b|\b(?:abono|plan)\s*(?:de|para|por|:)|\b(?:dej[oa]|pag[oa]|compr[oa]|sac[oa])\b[^.]*\b(?:abono|plan)\b/.test(n);
   if (!named && !/\bsesion(?:es)?\b/.test(n)) return null;
-  const amounts = [...n.matchAll(AMOUNT)].map((m) => ({ v: pesos(m[1]), at: m.index!, end: m.index! + m[0].length })).filter((a) => a.v >= 1000);
-  if (!amounts.length) return null;
+  const u = usdAmountIn(text);
+  const amounts = [...n.matchAll(AMOUNT)]
+    .map((m) => ({ v: pesos(m[1]), at: m.index!, end: m.index! + m[0].length }))
+    .filter((a) => a.v >= 1000 && !(u && a.at < u.end && a.end > u.at));
+  if (!amounts.length && !u) return null;
   const s = n.match(/\b(\d{1,2}|una|un|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|doce|quince|veinte)\s+(?:sesiones|sesion|ses\.?)\b/) ?? n.match(/\bx\s*(\d{1,2})\b/);
   const sessions = s ? (/^\d+$/.test(s[1]) ? Number(s[1]) : NUM[s[1]]) : null;
   // «a 50000 c/u», «50000 cada una», «50000 por sesión», «la sesión a 50000».
@@ -57,7 +62,8 @@ export function parsePrepaidNote(input: string): PrepaidNote | null {
       : /\b(?:efectivo|efvo|cash|contado)\b/.test(n)
         ? "efectivo"
         : null;
-  return { sessions, amount, unitPrice, method };
+  if (u) return { sessions, amount: null, unitPrice, usd: u.usd, method: "dolares" };
+  return { sessions, amount, unitPrice, usd: null, method };
 }
 
 /** ¿El nombre del abono es el mismo paciente? («Carla» ↔ «Carla Pérez»). */

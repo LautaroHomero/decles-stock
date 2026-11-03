@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { NotePencilIcon, PlusIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { normalize, parseNote, suggest } from "@/lib/domain/quick-sale";
-import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogResponse, type PayPart, type PaymentsMap, type SaleMethod, type SaleRow } from "./shared";
+import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogResponse, type PayPart, type PaymentsMap, type SaleMethod, type SaleRow, dollarsOf, moneyUsd } from "./shared";
 import { PlanillaMovimientos } from "./planilla-movimientos";
 import { NoteDialog, VisitNotes, type Note } from "./notas";
 import type { PrepaidRow } from "./abonos";
@@ -329,6 +329,9 @@ function AreaSection({
   const [editing, setEditing] = useState<string | null>(null);
   const [newKey, setNewKey] = useState(0);
   const total = rows.reduce((n, r) => n + r.total, 0);
+  // Lo que entró en dólares se muestra en dólares (los pesos guardados son solo para la parte de la profesional).
+  const totalUsd = rows.reduce((n, r) => n + dollarsOf(r).usd, 0);
+  const totalPesos = total - rows.reduce((n, r) => n + dollarsOf(r).pesos, 0);
   // $K (lo de la profesional) solo donde la planilla en papel lo lleva: kinesiología, auxiliares y externos.
   const showK = area.id !== "medicos";
   const byPro = sellers.map((s) => ({ s, k: rows.filter((r) => r.providerId === s.id).reduce((n, r) => n + r.k, 0) })).filter((x) => x.k > 0);
@@ -403,7 +406,7 @@ function AreaSection({
                   </td>
                   <td className="px-3 py-2 text-neutral-300">{allSellers.find((s) => s.id === r.providerId)?.name ?? r.sales[0].providerName ?? "—"}</td>
                   <td className="px-3 py-2 text-right font-medium tabular-nums">
-                    {r.total ? money(r.total) : <span className="font-normal text-neutral-500">—</span>}
+                    {r.total ? moneyUsd(r.total - dollarsOf(r).pesos, dollarsOf(r).usd) : <span className="font-normal text-neutral-500">—</span>}
                     {abonos.depositUsed.has(r.key) && (
                       <span className="block text-[12px] font-normal text-neutral-400">+ seña {money(abonos.depositUsed.get(r.key)!.amount)}</span>
                     )}
@@ -460,7 +463,7 @@ function AreaSection({
               <td colSpan={4} className="px-3 py-2 text-right text-neutral-500">
                 total
               </td>
-              <td className="px-3 py-2 text-right font-medium tabular-nums">{money(total)}</td>
+              <td className="px-3 py-2 text-right font-medium tabular-nums">{moneyUsd(totalPesos, totalUsd)}</td>
               <td />
               {showK && <td className="px-3 py-2 text-right font-medium tabular-nums">{money(rows.reduce((n, r) => n + r.k, 0))}</td>}
               <td className="cl-no-print" />
@@ -474,7 +477,8 @@ function AreaSection({
                     </span>
                   ))}
                   <span className="ml-5 whitespace-nowrap">
-                    total Decles <b className="font-medium tabular-nums text-fg">{fmtSigned(total - rows.reduce((n, r) => n + r.k, 0))}</b>
+                    total Decles <b className="font-medium tabular-nums text-fg">{fmtSigned(totalPesos - rows.reduce((n, r) => n + r.k, 0))}
+                      {totalUsd > 0 && ` + ${moneyUsd(0, totalUsd)}`}</b>
                   </span>
                 </td>
               </tr>

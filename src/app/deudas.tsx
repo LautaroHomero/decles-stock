@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { call, money, usePoll, PAYMENTS, ToneTitle } from "./shared";
+import { call, money, usePoll, PAYMENTS, ToneTitle, parseUsd, useDolar, usdFmt } from "./shared";
 import { ReminderPicker, remindLabel, todayYmd } from "./debt-reminder";
 
 /** Espejo de `Debt` / `DebtCollection` de src/lib/domain/debts.ts. */
@@ -24,13 +24,15 @@ export interface DebtRow {
   paidAt: string | null;
   payments: { id: string; date: string; amount: number; method: DebtMethod | null; createdByName: string; createdAt: string }[];
 }
-export type DebtMethod = "efectivo" | "transferencia" | "tarjeta";
+export type DebtMethod = "efectivo" | "transferencia" | "tarjeta" | "dolares";
 export interface DebtCollectionRow {
   id: string;
   debtId: string;
   date: string;
   amount: number;
   method: DebtMethod | null;
+  /** Si pagó en dólares: cuántos US$. */
+  usd?: number | null;
   share: number;
   createdByName: string;
   createdAt: string;
@@ -41,7 +43,7 @@ export interface DebtCollectionRow {
 }
 
 const ddmm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
-const METHODS = PAYMENTS.filter(([m]) => m === "efectivo" || m === "transferencia" || m === "tarjeta") as [DebtMethod, string][];
+const METHODS = PAYMENTS.filter(([m]) => m === "efectivo" || m === "transferencia" || m === "tarjeta" || m === "dolares") as [DebtMethod, string][];
 
 /**
  * Deudas abiertas (de todos los días): quién debe, por qué, desde cuándo y cuánto falta. «Cobrar» anota
@@ -67,14 +69,20 @@ export function DebtsCard({ canAnul, onChange, showToast }: { canAnul: boolean; 
     onChange();
   }
 
+  // En dólares: se escribe en US$ y así se guarda; lo que descuenta de la deuda es eso a la cotización de hoy.
+  const [dolar] = useDolar();
+  const usdMode = method === "dolares";
+  const rate = dolar?.rate ?? null;
+  const usd = usdMode ? parseUsd(amount) : 0;
   async function pay(d: DebtRow) {
-    const n = amount ? Number(amount) : d.remaining;
+    const n = usdMode ? Math.min(d.remaining, Math.round(usd * (rate ?? 0))) : amount ? Number(amount) : d.remaining;
+    if (usdMode && (!usd || !rate)) return showToast(!rate ? "Falta la cotización del dólar (arriba a la derecha)." : "¿Cuántos dólares pagó?");
     setBusy(true);
-    const r = await call(`/api/debts/${d.id}/pay`, "POST", { amount: n, method });
+    const r = await call(`/api/debts/${d.id}/pay`, "POST", usdMode ? { amount: n, method, usd, rate } : { amount: n, method });
     setBusy(false);
     if (!r.ok) return showToast(r.error ?? "No se pudo cobrar.");
     const left = (r.debt as DebtRow).remaining;
-    showToast(`Cobrado ${money(n)} a ${d.debtor}${left ? ` · todavía debe ${money(left)}` : " · deuda saldada"}.`);
+    showToast(`Cobrado ${usdMode ? usdFmt(usd) : money(n)} a ${d.debtor}${left ? ` · todavía debe ${money(left)}` : " · deuda saldada"}.`);
     setPaying(null);
     refresh();
     onChange();
@@ -160,18 +168,21 @@ export function DebtsCard({ canAnul, onChange, showToast }: { canAnul: boolean; 
                 <div className="cl-no-print flex flex-wrap items-center gap-2">
                   <input
                     autoFocus
-                    value={amount ? `$ ${Number(amount).toLocaleString("es-AR")}` : ""}
-                    onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
+                    value={usdMode ? amount : amount ? `$ ${Number(amount).toLocaleString("es-AR")}` : ""}
+                    onChange={(e) => setAmount(usdMode ? e.target.value.replace(/[^\d.,]/g, "") : e.target.value.replace(/\D/g, ""))}
                     onKeyDown={(e) => e.key === "Enter" && !busy && pay(d)}
-                    inputMode="numeric"
-                    placeholder={`$ ${d.remaining.toLocaleString("es-AR")} (todo)`}
+                    inputMode={usdMode ? "decimal" : "numeric"}
+                    placeholder={usdMode ? "US$" : `$ ${d.remaining.toLocaleString("es-AR")} (todo)`}
                     className="w-[150px] rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-right tabular-nums text-fg outline-none placeholder:text-neutral-500 focus:border-accent-700"
                   />
                   {METHODS.map(([m, label]) => (
                     <button
                       key={m}
                       aria-pressed={method === m}
-                      onClick={() => setMethod(method === m ? null : m)}
+                      onClick={() => {
+                        if ((m === "dolares") !== usdMode) setAmount("");
+                        setMethod(method === m ? null : m);
+                      }}
                       className={`rounded-md border px-2.5 py-1 text-[12.5px] ${method === m ? "border-accent bg-accent text-on-accent" : "border-neutral-800 text-neutral-300 hover:bg-accent-900"}`}
                     >
                       {label}
@@ -182,11 +193,11 @@ export function DebtsCard({ canAnul, onChange, showToast }: { canAnul: boolean; 
                     Cancelar
                   </button>
                   <button
-                    disabled={busy || Number(amount || d.remaining) <= 0 || Number(amount || 0) > d.remaining}
+                    disabled={busy || (usdMode ? !usd || !rate : Number(amount || d.remaining) <= 0 || Number(amount || 0) > d.remaining)}
                     onClick={() => pay(d)}
                     className="rounded-md border border-accent bg-accent px-3 py-1 text-[12.5px] font-medium text-on-accent disabled:opacity-40"
                   >
-                    Cobrar {money(amount ? Number(amount) : d.remaining)}
+                    Cobrar {usdMode ? (usd ? usdFmt(usd) : "US$") : money(amount ? Number(amount) : d.remaining)}
                   </button>
                 </div>
               )}

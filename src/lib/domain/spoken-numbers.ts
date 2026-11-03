@@ -92,3 +92,25 @@ export function spelledToDigits(text: string): string {
   }
   return last ? out + text.slice(last) : text;
 }
+
+/**
+ * Un importe en dólares en el texto: «US$ 50», «u$s 50», «usd 50», «50 dólares», «50 usd», «50 verdes», «50 en dólares».
+ * También «… en dólares» con un número suelto chico («pagó la deuda en dólares, 100»). null si no hay.
+ */
+export function usdAmountIn(text: string): { usd: number; at: number; end: number } | null {
+  const n = text.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const toNum = (raw: string) => Math.round(Number(raw.replace(/\.(?=\d{3}\b)/g, "").replace(",", ".")) * 100) / 100;
+  const before = n.match(/(?:\busd|\bu\$s|\bus\$)\s*(\d+(?:[.,]\d{1,3})*)/);
+  if (before && before.index !== undefined) return { usd: toNum(before[1]), at: before.index, end: before.index + before[0].length };
+  const after = n.match(/\b(\d+(?:[.,]\d{1,3})*)\s*(?:en\s+|de\s+)?(?:usd|u\$s|us\$|dolares?|verdes)\b/);
+  if (after && after.index !== undefined) return { usd: toNum(after[1]), at: after.index, end: after.index + after[0].length };
+  // «en dólares» y un número chico aparte (un importe en pesos sería de 4 cifras o más).
+  if (/\b(?:en|con)\s+(?:dolares|dolar|usd|verdes)\b/.test(n)) {
+    const m = n.match(/(?:^|[^\d.,])(\d{1,4}(?:[.,]\d{1,2})?)(?![\d.,]|\s*(?:mil|k|lucas|%|\/))/);
+    if (m && m.index !== undefined && Number(m[1].replace(",", ".")) < 10000) {
+      const at = m.index + m[0].indexOf(m[1]);
+      return { usd: toNum(m[1]), at, end: at + m[1].length };
+    }
+  }
+  return null;
+}

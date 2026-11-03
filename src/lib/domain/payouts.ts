@@ -62,6 +62,8 @@ export interface BalanceLine {
   share: number;
   /** De eso, lo que le pagaron directo a ella. */
   direct: number;
+  /** Lo que se pagó en dólares (US$): así se muestra; su parte sigue en pesos. */
+  usd?: number;
   /** Abono o gift card: la atención no trajo plata hoy (ya se pagó antes); su parte se le paga igual. */
   prepaid?: "abonado" | "giftcard" | null;
 }
@@ -159,6 +161,13 @@ async function balances(orgId: string, date: string, payouts: Payout[]): Promise
   const parts = await listVisitPayments(orgId, splitIds);
   const visitTotal = new Map<string, number>();
   for (const s of sales) if (s.visitId) visitTotal.set(s.visitId, (visitTotal.get(s.visitId) ?? 0) + s.total);
+  // Lo pagado en dólares de cada renglón (las partes en dólares de la anotación, repartidas según su importe).
+  const usdOf = (s: (typeof sales)[number]) => {
+    if (!s.visitId || !parts[s.visitId]) return 0;
+    const u = parts[s.visitId].filter((p) => p.method === "dolares").reduce((n, p) => n + (p.usd ?? 0), 0);
+    const vt = visitTotal.get(s.visitId) || 0;
+    return u && vt ? Math.round(((u * s.total) / vt) * 100) / 100 : 0;
+  };
   const directOf = (s: (typeof sales)[number]) => {
     if (s.paymentMethod === "profesional") return s.total;
     if (!s.visitId || !parts[s.visitId]) return 0;
@@ -194,6 +203,8 @@ async function balances(orgId: string, date: string, payouts: Payout[]): Promise
     l.total += s.total;
     l.share += s.commissionAmount;
     l.direct += direct;
+    const u = usdOf(s);
+    if (u) l.usd = Math.round(((l.usd ?? 0) + u) * 100) / 100;
   }
   // Lo cobrado de deudas ese día: la profesional cobra su parte de eso ese día.
   for (const [id, d] of await debtSharesOn(orgId, date)) {

@@ -5,6 +5,7 @@ import { getProvider } from "@/lib/db/repo";
 import { realNowIso } from "@/lib/domain/clock";
 import { commissionFor } from "@/lib/domain/billing";
 import { createExpense, voidExpense } from "@/lib/domain/expenses";
+import { usdFrom } from "@/lib/domain/usd";
 import type { Actor } from "@/lib/domain/types";
 
 /**
@@ -20,8 +21,8 @@ import type { Actor } from "@/lib/domain/types";
 export type Result<T> = ({ ok: true } & T) | { ok: false; error: string; status: number };
 const fail = (error: string, status = 400) => ({ ok: false as const, error, status });
 type Row = Record<string, unknown>;
-type Method = "efectivo" | "transferencia" | "tarjeta";
-const methodOf = (m: unknown): Method => (m === "transferencia" || m === "tarjeta" ? m : "efectivo");
+type Method = "efectivo" | "transferencia" | "tarjeta" | "dolares";
+const methodOf = (m: unknown): Method => (m === "transferencia" || m === "tarjeta" || m === "dolares" ? m : "efectivo");
 
 export interface Prepaid {
   id: string;
@@ -32,9 +33,11 @@ export interface Prepaid {
   unitPrice: number;
   /** Sesiones compradas; null = saldo en plata. */
   sessions: number | null;
-  /** Lo que pagó. */
+  /** Lo que pagó, en pesos (en dólares: a la cotización de ese día; con eso se lleva el saldo). */
   amount: number;
   method: Method;
+  /** Si lo pagó en dólares: cuántos US$. */
+  usd: number | null;
   /** Sesiones hechas (vigentes). */
   used: number;
   /** Plata ya usada (precio congelado × sesiones). */
@@ -89,6 +92,7 @@ async function raw(orgId: string, where: { ids?: string[]; status?: "open"; exce
       sessions,
       amount,
       method: methodOf(r.method),
+      usd: r.usd === null || r.usd === undefined ? null : Number(r.usd),
       used,
       usedAmount,
       sessionsLeft,
@@ -113,7 +117,7 @@ export async function listPrepaids(actor: Actor): Promise<Result<{ prepaids: Pre
  */
 export async function createPrepaid(
   actor: Actor,
-  v: { patient?: unknown; itemId?: unknown; sessions?: unknown; amount?: unknown; unitPrice?: unknown; method?: unknown },
+  v: { patient?: unknown; itemId?: unknown; sessions?: unknown; amount?: unknown; unitPrice?: unknown; method?: unknown; usd?: unknown; rate?: unknown },
 ): Promise<Result<{ prepaid: Prepaid }>> {
   const c = ctx(actor);
   if (!c?.canWrite) return fail("Los abonos los anota la secretaría o el admin.", 403);
@@ -125,7 +129,11 @@ export async function createPrepaid(
   const int = (x: unknown) => (x === null || x === undefined || x === "" ? null : Number(x));
   const sessions = int(v.sessions);
   if (sessions !== null && (!Number.isInteger(sessions) || sessions < 1 || sessions > 100)) return fail("La cantidad de sesiones no parece correcta.");
-  const amount = int(v.amount);
+  // En dólares: se guarda en US$; en pesos (a la cotización) es el saldo del abono.
+  const u = v.method === "dolares" ? usdFrom(v) : null;
+  if (v.method === "dolares" && !u) return fail("¿Cuántos dólares pagó?");
+  if (typeof u === "string") return fail(u);
+  const amount = u ? u.pesos : int(v.amount);
   if (amount === null || !Number.isInteger(amount) || amount <= 0 || amount > 1_000_000_000) return fail("¿Cuánto pagó? Tiene que ser un número entero de pesos.");
   let unitPrice = int(v.unitPrice);
   if (unitPrice === null) unitPrice = sessions ? Math.round(amount / sessions) : item.amount;
@@ -133,12 +141,12 @@ export async function createPrepaid(
   if (sessions === null && amount < unitPrice) return fail(`Con ${amount.toLocaleString("es-AR")} pesos no alcanza para una sesión (${unitPrice.toLocaleString("es-AR")}).`);
   const method = methodOf(v.method);
   const label = sessions ? `${sessions} × ${item.name}` : item.name;
-  const inc = await createExpense(actor, { concept: `Abono · ${patient} · ${label}`, amount, direction: "ingreso", method });
+  const inc = await createExpense(actor, { concept: `Abono · ${patient} · ${label}`, amount, direction: "ingreso", method, usd: u?.usd, rate: u?.rate });
   if (!inc.ok) return inc;
   const id = `abo_${randomUUID().slice(0, 8)}`;
   await getSql()`
-    INSERT INTO prepaids (id, organization_id, patient_label, item_id, item_name, unit_price, sessions, amount, method, income_id, created_by, created_by_name, created_at)
-    VALUES (${id}, ${c.orgId}, ${patient}, ${item.id}, ${item.name}, ${unitPrice}, ${sessions}, ${amount}, ${method}, ${inc.expense.id}, ${actor.userId}, ${actor.name}, ${realNowIso()})`;
+    INSERT INTO prepaids (id, organization_id, patient_label, item_id, item_name, unit_price, sessions, amount, method, usd, income_id, created_by, created_by_name, created_at)
+    VALUES (${id}, ${c.orgId}, ${patient}, ${item.id}, ${item.name}, ${unitPrice}, ${sessions}, ${amount}, ${method}, ${u?.usd ?? null}, ${inc.expense.id}, ${actor.userId}, ${actor.name}, ${realNowIso()})`;
   return { ok: true, prepaid: (await raw(c.orgId, { ids: [id] }))[0] };
 }
 

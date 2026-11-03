@@ -1,4 +1,4 @@
-import { spelledToDigits } from "./spoken-numbers";
+import { spelledToDigits, usdAmountIn } from "./spoken-numbers";
 /**
  * ¿Lo escrito en Anotar es un egreso de plata? «pagué 5000 de luz», «gasto 12.500 insumos»,
  * «retiro 50 mil», «egreso: alquiler 300000». Devuelve concepto e importe (0 si no se entendió).
@@ -9,8 +9,10 @@ import { spelledToDigits } from "./spoken-numbers";
 export interface ExpenseNote {
   concept: string;
   amount: number;
-  /** «por transferencia», «con tarjeta»; si no dice nada, efectivo (sale de la caja). */
-  method: "efectivo" | "transferencia" | "tarjeta";
+  /** «por transferencia», «con tarjeta»; si no dice nada, efectivo (sale de la caja). «dolares» = en dólares (`usd`). */
+  method: "efectivo" | "transferencia" | "tarjeta" | "dolares";
+  /** «pagué 100 dólares de …»: en dólares (`amount` = 0; los pesos los calcula la pantalla). */
+  usd?: number | null;
   direction: "egreso" | "ingreso";
 }
 
@@ -67,9 +69,10 @@ export function parseExpense(input: string): ExpenseNote | null {
   if (income) return income;
   const cue = CUES.find(([re]) => re.test(t));
   if (!cue) return null;
-  const a = amountOf(t);
+  const u = usdAmountIn(text);
+  const a: { amount: number; span: [number, number] } | null = u ? { amount: 0, span: [u.at, u.end] } : amountOf(t);
   // Sin importe, solo si la palabra no deja dudas («egreso», «gasto», «pagué»…).
-  if (!a && !/\b(egresos?|gast(?:o|os|e|amos)|pague|pagamos|retir(?:o|e|amos)|saque|sacamos)\b/.test(t)) return null;
+  if (!a && !u && !/\b(egresos?|gast(?:o|os|e|amos)|pague|pagamos|retir(?:o|e|amos)|saque|sacamos)\b/.test(t)) return null;
 
   // Concepto: el texto original sin la palabra clave, el importe ni las palabras de relleno.
   const original = text.trim();
@@ -88,6 +91,7 @@ export function parseExpense(input: string): ExpenseNote | null {
   const inner = kept.length > 1 ? original.match(new RegExp(`${esc(kept[0])}.*${esc(kept[kept.length - 1])}`, "i")) : null;
   if (kept.length > 1 && inner && !/\d/.test(inner[0])) concept = inner[0].replace(/[:;,.]+/g, " ").replace(/\s+/g, " ").trim();
   concept = concept || cue[1];
+  if (u) return { concept: concept ? concept.charAt(0).toUpperCase() + concept.slice(1) : "", amount: 0, method: "dolares", usd: u.usd, direction: "egreso" };
   return { concept: concept ? concept.charAt(0).toUpperCase() + concept.slice(1) : "", amount: a?.amount ?? 0, method: methodIn(t), direction: "egreso" };
 }
 
@@ -95,7 +99,8 @@ function parseIncome(text: string, t: string): ExpenseNote | null {
   if (!IN_CUES.some((re) => re.test(t))) return null;
   // «pagó», «vino», «seña»: eso es de un paciente, no un ingreso extra.
   if (/\b(?:pag(?:o|aron|ue|amos)|vino|vinieron|sena|senas|deja|dejo)\b/.test(t)) return null;
-  const a = amountOf(t);
+  const u = usdAmountIn(text);
+  const a: { amount: number; span: [number, number] } | null = u ? { amount: 0, span: [u.at, u.end] } : amountOf(t);
   // Sin importe, solo si dice «ingreso extra» explícito («ingresó Ana» no es plata).
   if (!a && !/\bingresos? extras?\b/.test(t)) return null;
   const original = text.trim();
@@ -111,5 +116,7 @@ function parseIncome(text: string, t: string): ExpenseNote | null {
   const inner = kept.length > 1 ? original.match(new RegExp(`${esc(kept[0])}.*${esc(kept[kept.length - 1])}`, "i")) : null;
   if (kept.length > 1 && inner && !/\d/.test(inner[0])) concept = inner[0].replace(/[:;,.]+/g, " ").replace(/\s+/g, " ").trim();
   concept = concept || "Varios";
-  return { concept: concept.charAt(0).toUpperCase() + concept.slice(1), amount: a?.amount ?? 0, method: methodIn(t), direction: "ingreso" };
+  concept = concept.charAt(0).toUpperCase() + concept.slice(1);
+  if (u) return { concept, amount: 0, method: "dolares", usd: u.usd, direction: "ingreso" };
+  return { concept, amount: a?.amount ?? 0, method: methodIn(t), direction: "ingreso" };
 }

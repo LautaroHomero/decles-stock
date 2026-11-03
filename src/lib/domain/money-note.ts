@@ -1,6 +1,6 @@
 import { sellerNamed, type QuickSeller } from "./quick-sale";
 import { parseReminder } from "./reminder-note";
-import { spelledToDigits } from "./spoken-numbers";
+import { spelledToDigits, usdAmountIn } from "./spoken-numbers";
 
 /**
  * La plata en lo que se anota (Decles). La secretaria siempre dice cuánto ingresó; el reparto
@@ -505,7 +505,7 @@ export function parseProviderDebt<S extends QuickSeller>(
 export function parseDebtPayment<D extends { id: string; debtor: string; remaining: number }>(
   input: string,
   open: D[],
-): { debts: D[]; amount: number | null; method: "efectivo" | "transferencia" | "tarjeta" | null } | null {
+): { debts: D[]; amount: number | null; usd: number | null; method: "efectivo" | "transferencia" | "tarjeta" | "dolares" | null } | null {
   const text = spelledToDigits(input);
   const n = norm(text);
   if (!open.length) return null;
@@ -522,10 +522,13 @@ export function parseDebtPayment<D extends { id: string; debtor: string; remaini
   if (!scored.length) return null;
   const best = Math.max(...scored.map((x) => x.hits));
   const debts = scored.filter((x) => x.hits === best).map((x) => x.d);
+  // «pagó la deuda en dólares, 100», «trajo US$ 100 de lo que debía»: en dólares (los pesos los calcula la pantalla).
+  const u = usdAmountIn(text);
+  if (u) return { debts, amount: null, usd: u.usd, method: "dolares" };
   const amounts = [...text.matchAll(AMOUNT)].map((m) => toPesos(m[0])).filter((v) => v > 0);
   const total = amounts.length && !/\btodo\b|\btoda\b/.test(n) ? amounts.reduce((a, b) => a + b, 0) : null;
   const method = methodWord(n.match(/\b(efectivo|efvo|cash|transferencia|transf\w*|mp|mercado\s*pago|tarjeta|tarj\w*|debito|credito|posnet)\b/)?.[1]?.split(/\s/)[0]) as "efectivo" | "transferencia" | "tarjeta" | null;
-  return { debts, amount: total, method };
+  return { debts, amount: total, usd: null, method };
 }
 
 /**

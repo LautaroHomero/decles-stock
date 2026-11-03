@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { call, money, usePoll, type CatalogResponse, AddButton, ToneTitle } from "./shared";
+import { call, money, usePoll, type CatalogResponse, AddButton, ToneTitle, parseUsd, useDolar, usdFmt, moneyUsd } from "./shared";
 import { remindLabel } from "./debt-reminder";
 
 /** Espejo de `Deposit` de src/lib/domain/deposits.ts. */
@@ -11,6 +11,8 @@ export interface DepositRow {
   itemId: string | null;
   itemName: string;
   amount: number;
+  /** Si se dejó en dólares: cuántos US$ (así se muestra). */
+  usd?: number | null;
   dueOn: string | null;
   used: boolean;
   createdAt: string;
@@ -30,10 +32,15 @@ export function SenaForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
   const [itemId, setItemId] = useState("");
   const [amount, setAmount] = useState("");
   const [dueOn, setDueOn] = useState("");
-  const [method, setMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | null>(null);
+  const [method, setMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | "dolares" | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const n = Number(amount || 0);
+  // En dólares: se escribe en US$ y así se guarda; en pesos (a la cotización) es lo que descuenta de la práctica.
+  const [dolar] = useDolar();
+  const usdMode = method === "dolares";
+  const rate = dolar?.rate ?? null;
+  const usd = usdMode ? parseUsd(amount) : 0;
+  const n = usdMode ? Math.round(usd * (rate ?? 0)) : Number(amount || 0);
   const item = practices.find((p) => p.id === itemId);
   const ok = patient.trim() && n > 0 && method;
 
@@ -41,10 +48,10 @@ export function SenaForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
     if (!ok || busy) return;
     setBusy(true);
     setErr("");
-    const r = await call("/api/deposits", "POST", { patient, itemId: itemId || null, amount: n, method, dueOn: dueOn || null });
+    const r = await call("/api/deposits", "POST", { patient, itemId: itemId || null, amount: n, method, dueOn: dueOn || null, ...(usdMode ? { usd, rate } : {}) });
     setBusy(false);
     if (!r.ok) return setErr(r.error ?? "No se pudo guardar.");
-    onSaved(`Seña · ${patient.trim()}${item ? ` · ${item.name}` : ""} · ${money(n)}${dueOn ? ` · viene el ${remindLabel(dueOn)}` : ""}`);
+    onSaved(`Seña · ${patient.trim()}${item ? ` · ${item.name}` : ""} · ${usdMode ? usdFmt(usd) : money(n)}${dueOn ? ` · viene el ${remindLabel(dueOn)}` : ""}`);
   }
 
   return (
@@ -77,12 +84,12 @@ export function SenaForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
         </label>
         <div className="grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1.5">
-            <span className="cl-label">Seña</span>
+            <span className="cl-label">{usdMode ? "Seña en dólares" : "Seña"}</span>
             <input
-              value={amount ? `$ ${Number(amount).toLocaleString("es-AR")}` : ""}
-              onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
-              inputMode="numeric"
-              placeholder="$"
+              value={usdMode ? amount : amount ? `$ ${Number(amount).toLocaleString("es-AR")}` : ""}
+              onChange={(e) => setAmount(usdMode ? e.target.value.replace(/[^\d.,]/g, "") : e.target.value.replace(/\D/g, ""))}
+              inputMode={usdMode ? "decimal" : "numeric"}
+              placeholder={usdMode ? "US$" : "$"}
               className={`${FIELD} tabular-nums`}
             />
           </label>
@@ -95,12 +102,22 @@ export function SenaForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
         <div className="flex flex-col gap-1">
           <span className="cl-label">¿Cómo pagó la seña? <span className="cl-hint">· solo el efectivo cuenta en la caja</span></span>
           <div className="flex flex-wrap gap-2">
-            {(["efectivo", "transferencia", "tarjeta"] as const).map((m) => (
-              <button key={m} type="button" aria-pressed={method === m} onClick={() => setMethod(m)} className={TOGGLE(method === m)}>
-                {m === "efectivo" ? "Efectivo" : m === "transferencia" ? "Transferencia" : "Tarjeta"}
+            {(["efectivo", "transferencia", "tarjeta", "dolares"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={method === m}
+                onClick={() => {
+                  if ((m === "dolares") !== usdMode) setAmount("");
+                  setMethod(m);
+                }}
+                className={TOGGLE(method === m)}
+              >
+                {m === "efectivo" ? "Efectivo" : m === "transferencia" ? "Transferencia" : m === "tarjeta" ? "Tarjeta" : "Dólares"}
               </button>
             ))}
           </div>
+          {usdMode && <span className="cl-hint">{rate ? "Se guarda en dólares y se cuenta aparte de los pesos." : "Falta la cotización del dólar (arriba a la derecha)."}</span>}
         </div>
         {err && <p className="text-[13px] text-neutral-200">{err}</p>}
         <div className="flex flex-wrap gap-2">
@@ -109,7 +126,7 @@ export function SenaForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
             disabled={!ok || busy}
             className="inline-flex h-11 flex-1 items-center justify-center rounded-lg border border-accent bg-accent px-4 text-[14px] font-medium text-on-accent transition-opacity hover:opacity-85 disabled:opacity-40"
           >
-            {busy ? "Guardando…" : `Guardar${n ? ` · ${money(n)}` : ""}`}
+            {busy ? "Guardando…" : `Guardar${usdMode ? (usd ? ` · ${usdFmt(usd)}` : "") : n ? ` · ${money(n)}` : ""}`}
           </button>
           <button type="button" onClick={onClose} className="h-11 rounded-lg border border-neutral-800 px-4 text-[14px] text-neutral-300 hover:bg-accent-900">
             Cancelar
@@ -161,7 +178,11 @@ export function SenasCard({ onChange, showToast, canAdd = true }: { onChange: ()
           Señas <span className="font-normal text-neutral-500">· dejan plata antes del turno</span>
         </ToneTitle>
         <span className="flex items-center gap-4">
-          {list.length > 0 && <span className="text-[13px] text-neutral-400">Sin usar {money(data?.total ?? 0)}</span>}
+          {list.length > 0 && (
+            <span className="text-[13px] text-neutral-400">
+              Sin usar {moneyUsd(list.filter((d) => !d.usd).reduce((n, d) => n + d.amount, 0), list.reduce((n, d) => n + (d.usd ?? 0), 0))}
+            </span>
+          )}
           {canAdd && (
             <AddButton tone="in" onClick={() => setAdding(true)}>
               Anotar seña
@@ -180,7 +201,7 @@ export function SenasCard({ onChange, showToast, canAdd = true }: { onChange: ()
               <span className="min-w-0">
                 <b className="font-medium">{d.patient}</b>
                 <span className="block text-[12.5px] text-neutral-500">
-                  {[d.itemName || "práctica sin definir", `dejó ${money(d.amount)} el ${ddmm(d.createdAt)}`].join(" · ")}
+                  {[d.itemName || "práctica sin definir", `dejó ${d.usd ? usdFmt(d.usd) : money(d.amount)} el ${ddmm(d.createdAt)}`].join(" · ")}
                 </span>
               </span>
               <span className="flex items-center gap-3">
@@ -193,7 +214,7 @@ export function SenasCard({ onChange, showToast, canAdd = true }: { onChange: ()
                     className="cl-no-print rounded-md border border-neutral-800 bg-transparent px-2 py-1 text-[12.5px] text-fg [color-scheme:light_dark]"
                   />
                 </label>
-                <span className="whitespace-nowrap font-medium tabular-nums">{money(d.amount)}</span>
+                <span className="whitespace-nowrap font-medium tabular-nums">{d.usd ? usdFmt(d.usd) : money(d.amount)}</span>
                 <button onClick={() => anul(d)} className="cl-no-print text-[12.5px] text-neutral-500 underline-offset-2 hover:text-fg hover:underline">
                   anular
                 </button>

@@ -5,7 +5,7 @@ import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import { fmtSigned, toRows } from "./planilla-view";
-import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type Payment, type PaymentsMap, type SaleMethod, type SaleRow, methodTotals, outsideOf, usdFmt, AddButton } from "./shared";
+import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type Payment, type PaymentsMap, type SaleMethod, type SaleRow, methodTotals, outsideOf, usdFmt, AddButton, dollarsOf, moneyUsd, sumUsd } from "./shared";
 import { DebtsCard, type DebtCollectionRow, type DebtRow } from "./deudas";
 import { ProviderDebtsCard } from "./deudas-profesionales";
 import { CuentasProfesionales, type Balance } from "./cuentas-profesionales";
@@ -85,12 +85,17 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   // Deudas: lo cobrado hoy entra a la caja; lo que quedó debiendo se ve en la fila de esa atención.
   const collections = useMemo(() => (dd?.ok ? dd.collections : []), [dd]);
   const debtByVisit = useMemo(() => new Map((dd?.ok ? dd.created : []).filter((d) => d.visitId).map((d) => [d.visitId!, d])), [dd]);
-  const debtIn = collections.reduce((n, p) => n + p.amount, 0);
+  // Cobros de deudas: los de dólares se cuentan en US$, aparte de los pesos.
+  const debtSum = sumUsd(collections);
+  const debtIn = debtSum.pesos;
   const debtInBy = (m: Payment) => collections.filter((p) => (p.method ?? "efectivo") === m).reduce((n, p) => n + p.amount, 0);
   const debtShares = collections.reduce((n, p) => n + p.share, 0);
 
-  const egTotal = egresos.reduce((n, e) => n + e.amount, 0);
-  const inTotal = ingresos.reduce((n, e) => n + e.amount, 0);
+  // Ingresos y egresos extras (señas y abonos incluidos): en dólares se cuentan en US$, aparte.
+  const egSum = sumUsd(egresos);
+  const inSum = sumUsd(ingresos);
+  const egTotal = egSum.pesos;
+  const inTotal = inSum.pesos;
   const paidOut = payouts.reduce((n, p) => n + p.amount, 0);
   // Lo que no entró hoy al consultorio: lo pagado directo a la profesional y con gift card.
   const outside = rows.reduce(
@@ -100,7 +105,15 @@ export function CierreSheet({ actor }: { actor: Actor }) {
     },
     { profesional: 0, giftcard: 0, abonado: 0 },
   );
-  const cobrado = rows.reduce((n, r) => n + r.total, 0) - outside.profesional - outside.giftcard - outside.abonado;
+  // Lo que entró en dólares queda en dólares: no se suma a los pesos.
+  const dollars = rows.reduce(
+    (n, r) => {
+      const d = dollarsOf(r);
+      return { usd: n.usd + d.usd, pesos: n.pesos + d.pesos };
+    },
+    { usd: 0, pesos: 0 },
+  );
+  const cobrado = rows.reduce((n, r) => n + r.total, 0) - outside.profesional - outside.giftcard - outside.abonado - dollars.pesos;
   const cobrosTotal = cobros.reduce((n, p) => n + p.amount, 0);
   const cobroBy = (m: Payment) => cobros.filter((p) => (p.method ?? "efectivo") === m).reduce((n, p) => n + p.amount, 0);
   const kTotal = rows.reduce((n, r) => n + r.k, 0);
@@ -112,6 +125,10 @@ export function CierreSheet({ actor }: { actor: Actor }) {
   const contado = cash?.ok ? cash.cash.amount : null;
   const entro = cobrado + debtIn + inTotal + cobrosTotal;
   const salio = egTotal + paidOut;
+  const entroUsd = Math.round((dollars.usd + inSum.usd + debtSum.usd) * 100) / 100;
+  const salioUsd = egSum.usd;
+  // Los dólares de la caja: lo que entró en dólares menos lo que salió en dólares.
+  const usdCaja = Math.round((entroUsd - salioUsd) * 100) / 100;
   // A la caja solo le toca el efectivo: lo transferido (o con tarjeta) va por otro lado.
   const cashOnly = <T extends { method?: string }>(l: T[]) => l.filter((x) => (x.method ?? "efectivo") === "efectivo");
   const inBy = (m: Payment) => ingresos.filter((e) => (e.method ?? "efectivo") === m).reduce((n, e) => n + e.amount, 0);
@@ -134,6 +151,9 @@ export function CierreSheet({ actor }: { actor: Actor }) {
       detail: string;
       inn: number;
       out: number;
+      /** Lo que fue en dólares (se muestra en US$, aparte de los pesos). */
+      innUsd?: number;
+      outUsd?: number;
       kind: "visita" | "ingreso" | "egreso" | "pago" | "cobro" | "deuda";
       ref?: Expense | Payout | DebtCollectionRow;
     };
@@ -146,7 +166,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
         detail: [
           short(r.sales[0].providerName ?? ""),
           r.parts.length
-            ? r.parts.map((p) => (p.method === "dolares" ? `${usdFmt(p.usd ?? 0)} (${money(p.amount)})` : `${METHOD[p.method]} ${money(p.amount)}`)).join(" + ")
+            ? r.parts.map((p) => (p.method === "dolares" ? `en dólares ${usdFmt(p.usd ?? 0)}` : `${METHOD[p.method]} ${money(p.amount)}`)).join(" + ")
             : r.method
               ? METHOD[r.method]
               : r.total
@@ -156,7 +176,8 @@ export function CierreSheet({ actor }: { actor: Actor }) {
           .concat(r.sales[0].visitId && debtByVisit.get(r.sales[0].visitId) ? [`quedó debiendo ${money(debtByVisit.get(r.sales[0].visitId!)!.amount)}`] : [])
           .filter(Boolean)
           .join(" · "),
-        inn: r.total - outsideOf(r).all,
+        inn: r.total - outsideOf(r).all - dollarsOf(r).pesos,
+        innUsd: dollarsOf(r).usd,
         out: 0,
         kind: "visita" as const,
       })),
@@ -171,8 +192,8 @@ export function CierreSheet({ actor }: { actor: Actor }) {
         kind: "cobro" as const,
         ref: p,
       })),
-      ...ingresos.map((e) => ({ at: e.createdAt, time: fmtTime(e.createdAt), who: /^(Abono|Seña) · /.test(e.concept) ? e.concept.replace(/^(Abono|Seña) · /, "") : e.concept, what: e.concept.startsWith("Abono · ") ? "Abono (paga antes las sesiones)" : e.concept.startsWith("Seña · ") ? "Seña (el resto lo paga cuando viene)" : "Ingreso extra", detail: [METHOD[e.method ?? "efectivo"], e.createdByName].join(" · "), inn: e.amount, out: 0, kind: "ingreso" as const, ref: e })),
-      ...egresos.map((e) => ({ at: e.createdAt, time: fmtTime(e.createdAt), who: e.concept, what: "Egreso", detail: [METHOD[e.method ?? "efectivo"], e.createdByName].join(" · "), inn: 0, out: e.amount, kind: "egreso" as const, ref: e })),
+      ...ingresos.map((e) => ({ at: e.createdAt, time: fmtTime(e.createdAt), who: /^(Abono|Seña) · /.test(e.concept) ? e.concept.replace(/^(Abono|Seña) · /, "") : e.concept, what: e.concept.startsWith("Abono · ") ? "Abono (paga antes las sesiones)" : e.concept.startsWith("Seña · ") ? "Seña (el resto lo paga cuando viene)" : "Ingreso extra", detail: [METHOD[e.method ?? "efectivo"], e.createdByName].join(" · "), inn: e.usd ? 0 : e.amount, innUsd: e.usd ?? 0, out: 0, kind: "ingreso" as const, ref: e })),
+      ...egresos.map((e) => ({ at: e.createdAt, time: fmtTime(e.createdAt), who: e.concept, what: "Egreso", detail: [METHOD[e.method ?? "efectivo"], e.createdByName].join(" · "), inn: 0, out: e.usd ? 0 : e.amount, outUsd: e.usd ?? 0, kind: "egreso" as const, ref: e })),
       ...payouts.map((p) => ({
         at: p.createdAt,
         time: fmtTime(p.createdAt),
@@ -190,7 +211,8 @@ export function CierreSheet({ actor }: { actor: Actor }) {
         who: p.debtor,
         what: "Cobro de deuda",
         detail: [p.concept, short(p.providerName ?? ""), METHOD[p.method ?? "efectivo"]].filter(Boolean).join(" · "),
-        inn: p.amount,
+        inn: p.usd ? 0 : p.amount,
+        innUsd: p.usd ?? 0,
         out: 0,
         kind: "deuda" as const,
         ref: p,
@@ -261,8 +283,12 @@ export function CierreSheet({ actor }: { actor: Actor }) {
       ) : (
         <>
           <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-neutral-800 sm:grid-cols-3">
-            <Big label="Entró" value={money(entro)} sub={`${pacientes} ${pacientes === 1 ? "paciente" : "pacientes"}${debtIn ? ` + ${money(debtIn)} de deudas` : ""}${inTotal ? ` + ${money(inTotal)} extras` : ""}`} />
-            <Big label="Salió" value={money(salio)} sub={`egresos ${money(egTotal)} · profesionales ${money(paidOut)}${paidOut !== paidOutCash || egTotal !== egCash ? ` · en efectivo ${money(egCash + paidOutCash)}` : ""}`} border />
+            <Big
+              label="Entró"
+              value={moneyUsd(entro, entroUsd)}
+              sub={`${pacientes} ${pacientes === 1 ? "paciente" : "pacientes"}${debtIn ? ` + ${money(debtIn)} de deudas` : ""}${inTotal ? ` + ${money(inTotal)} extras` : ""}`}
+            />
+            <Big label="Salió" value={moneyUsd(salio, salioUsd)} sub={`egresos ${moneyUsd(egTotal, salioUsd)} · profesionales ${money(paidOut)}${paidOut !== paidOutCash || egTotal !== egCash ? ` · en efectivo ${money(egCash + paidOutCash)}` : ""}`} border />
             <Big
               label="Efectivo que debería haber"
               value={fmtSigned(esperado)}
@@ -339,8 +365,8 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                             )}
                           </span>
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">{m.inn ? money(m.inn) : ""}</td>
-                        <td className="px-4 py-2 text-right tabular-nums">{m.out ? money(m.out) : ""}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{m.inn || m.innUsd ? moneyUsd(m.inn, m.innUsd ?? 0) : ""}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{m.out || m.outUsd ? moneyUsd(m.out, m.outUsd ?? 0) : ""}</td>
                       </tr>
                     );
                   })}
@@ -357,8 +383,8 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                     <td colSpan={3} className="px-4 py-2.5">
                       Total
                     </td>
-                    <td className="px-3 py-2.5 text-right">{money(entro)}</td>
-                    <td className="px-4 py-2.5 text-right">{money(salio)}</td>
+                    <td className="px-3 py-2.5 text-right">{moneyUsd(entro, entroUsd)}</td>
+                    <td className="px-4 py-2.5 text-right">{moneyUsd(salio, salioUsd)}</td>
                   </tr>
                   <tr>
                     <td colSpan={3} className="px-4 pb-3 text-neutral-400">
@@ -366,6 +392,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                     </td>
                     <td colSpan={2} className="px-4 pb-3 text-right font-medium">
                       {fmtSigned(entro - salio)}
+                      {usdCaja !== 0 && <span className="block">{usdCaja < 0 ? "− " : ""}{usdFmt(Math.abs(usdCaja))}</span>}
                     </td>
                   </tr>
                 </tfoot>
@@ -447,7 +474,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                   }}
                 />
                 {contado !== null && <Line label="Diferencia" value={diffText(contado - esperado)} />}
-                {mt.usd > 0 && <Line label="Dólares en caja (aparte)" value={usdFmt(mt.usd)} strong />}
+                {usdCaja !== 0 && <Line label="Dólares en caja (aparte)" value={`${usdCaja < 0 ? "− " : ""}${usdFmt(Math.abs(usdCaja))}`} strong />}
               </div>
             </Card>
             <Card title="Cómo pagaron">
@@ -455,18 +482,18 @@ export function CierreSheet({ actor }: { actor: Actor }) {
                 <Line label="Efectivo" value={money(efectivo + inBy("efectivo") + cobrosCash)} />
                 <Line label="Transferencias" value={money(byMethod("transferencia") + debtInBy("transferencia") + inBy("transferencia") + cobroBy("transferencia"))} />
                 <Line label="Tarjetas" value={money(byMethod("tarjeta") + debtInBy("tarjeta") + inBy("tarjeta"))} />
-                {mt.usd > 0 && <Line label={`Dólares · ${usdFmt(mt.usd)}`} value={money(mt.dolares)} />}
+                {entroUsd > 0 && <Line label="Dólares" value={usdFmt(entroUsd)} />}
                 {byMethod(null) > 0 && <Line label="Sin medio cargado" value={money(byMethod(null))} muted />}
                 {debtIn > 0 && <Line label="De eso, deudas cobradas" value={money(debtIn)} muted />}
                 {inTotal > 0 && <Line label="De eso, ingresos extras (señas, abonos…)" value={money(inTotal)} muted />}
                 {cobrosTotal > 0 && <Line label="De eso, lo que nos dieron profesionales" value={money(cobrosTotal)} muted />}
-                <Line label="Total que entró" value={money(entro)} strong />
+                <Line label="Total que entró" value={moneyUsd(entro, entroUsd)} strong />
                 {outside.profesional > 0 && <Line label="Le pagaron directo a profesionales (no entró)" value={money(outside.profesional)} muted />}
                 {outside.giftcard > 0 && <Line label="Pagado con gift card (no entró hoy)" value={money(outside.giftcard)} muted />}
                 {outside.abonado > 0 && <Line label="Abonos (no entró plata hoy)" value={money(outside.abonado)} muted />}
                 <Line
                   label="Para Decles (lo de hoy − parte de profesionales)"
-                  value={fmtSigned(cobrado + outside.profesional + debtIn + inTotal - kTotal - debtShares)}
+                  value={`${fmtSigned(cobrado + outside.profesional + debtIn + inTotal - kTotal - debtShares)}${entroUsd ? ` + ${usdFmt(entroUsd)}` : ""}`}
                 />
               </div>
             </Card>

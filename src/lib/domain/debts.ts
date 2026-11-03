@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getSql } from "@/lib/db/connection";
 import { getProvider } from "@/lib/db/repo";
+import { usdFrom } from "@/lib/domain/usd";
 import { realNowIso } from "@/lib/domain/clock";
 import type { Actor } from "@/lib/domain/types";
 import { isOwnerProvider } from "@/lib/domain/owners";
@@ -19,14 +20,17 @@ const fail = (error: string, status = 400) => ({ ok: false as const, error, stat
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 type Row = Record<string, unknown>;
 
-export type DebtMethod = "efectivo" | "transferencia" | "tarjeta";
+export type DebtMethod = "efectivo" | "transferencia" | "tarjeta" | "dolares";
 
 export interface DebtPayment {
   id: string;
   debtId: string;
   date: string;
+  /** En pesos (en dólares: a la cotización de ese día; es lo que descuenta de la deuda). */
   amount: number;
   method: DebtMethod | null;
+  /** Si pagó en dólares: cuántos US$. */
+  usd: number | null;
   share: number;
   createdByName: string;
   createdAt: string;
@@ -76,6 +80,7 @@ const toPayment = (r: Row): DebtPayment => ({
   date: r.date as string,
   amount: Number(r.amount),
   method: (r.method as DebtMethod | null) ?? null,
+  usd: r.usd === null || r.usd === undefined ? null : Number(r.usd),
   share: Number(r.share ?? 0),
   createdByName: r.created_by_name as string,
   createdAt: r.created_at as string,
@@ -237,14 +242,22 @@ export async function dueDebtReminders(actor: Actor): Promise<Result<{ debts: De
 }
 
 /** Cobrar una deuda (toda o una parte). `amount` vacío = todo lo que falta. Entra a la caja del día. */
-export async function payDebt(actor: Actor, id: string, v: { amount?: unknown; method?: unknown; date?: unknown }): Promise<Result<{ debt: Debt; payment: DebtPayment }>> {
+export async function payDebt(
+  actor: Actor,
+  id: string,
+  v: { amount?: unknown; method?: unknown; date?: unknown; usd?: unknown; rate?: unknown },
+): Promise<Result<{ debt: Debt; payment: DebtPayment }>> {
   const c = ctx(actor);
   if (!c) return fail("Las deudas las cobra la secretaría o el admin.", 403);
   const today = realNowIso().slice(0, 10);
   const date = typeof v.date === "string" && v.date ? v.date : today;
   if (!YMD.test(date)) return fail("Fecha inválida.");
   if (date !== today && !c.isAdmin) return fail("Lo de días anteriores lo corrige el admin.", 403);
-  const method = v.method === "efectivo" || v.method === "transferencia" || v.method === "tarjeta" ? v.method : null;
+  const method = v.method === "efectivo" || v.method === "transferencia" || v.method === "tarjeta" || v.method === "dolares" ? v.method : null;
+  // En dólares: se guarda en US$; en pesos (a la cotización) es lo que descuenta de la deuda.
+  const u = method === "dolares" ? usdFrom(v) : null;
+  if (method === "dolares" && !u) return fail("¿Cuántos dólares pagó?");
+  if (typeof u === "string") return fail(u);
   if (v.method !== undefined && v.method !== null && v.method !== "" && !method) return fail("Medio de pago inválido.");
 
   const sql = getSql();
@@ -258,15 +271,16 @@ export async function payDebt(actor: Actor, id: string, v: { amount?: unknown; m
       FROM debt_payments WHERE debt_id = ${id} AND status = 'active'`) as unknown as Row[];
     const total = Number(d.amount), share = Number(d.share);
     const remaining = total - Number(s.paid);
-    const amount = v.amount === undefined || v.amount === null || v.amount === "" || v.amount === "todo" ? remaining : Number(v.amount);
+    // En dólares que cubren todo (o más, por redondeo de la cotización): salda la deuda.
+    const amount = u ? Math.min(u.pesos, remaining) : v.amount === undefined || v.amount === null || v.amount === "" || v.amount === "todo" ? remaining : Number(v.amount);
     if (!Number.isInteger(amount) || amount <= 0) return fail("El importe tiene que ser un número entero de pesos.");
     if (amount > remaining) return fail(`${d.debtor} debe $ ${remaining.toLocaleString("es-AR")}: no puede pagar más que eso.`, 409);
     // La parte de la profesional en este cobro (al terminar de pagar, lo que falte de su parte, sin redondeos perdidos).
     const last = amount === remaining;
     const payShare = last ? share - Number(s.shared) : Math.round((share * amount) / total);
     await tx`
-      INSERT INTO debt_payments (id, organization_id, debt_id, date, amount, method, share, created_by, created_by_name, created_at)
-      VALUES (${payId}, ${c.orgId}, ${id}, ${date}, ${amount}, ${method}, ${Math.max(0, payShare)}, ${actor.userId}, ${actor.name}, ${realNowIso()})`;
+      INSERT INTO debt_payments (id, organization_id, debt_id, date, amount, method, usd, rate, share, created_by, created_by_name, created_at)
+      VALUES (${payId}, ${c.orgId}, ${id}, ${date}, ${amount}, ${method}, ${u?.usd ?? null}, ${u?.rate ?? null}, ${Math.max(0, payShare)}, ${actor.userId}, ${actor.name}, ${realNowIso()})`;
     if (last) await tx`UPDATE debts SET status = 'paid', paid_at = ${realNowIso()} WHERE id = ${id}`;
     return { ok: true as const };
   });

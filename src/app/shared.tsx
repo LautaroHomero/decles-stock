@@ -266,6 +266,29 @@ export function outsideOf(r: { method: SaleMethod | null; total: number; parts: 
   return { ...o, all: o.profesional + o.giftcard + o.abonado };
 }
 
+/** Lo de una anotación que entró en dólares: US$ (así se cuenta) y su equivalente en pesos guardado (para restarlo de los pesos). */
+export function dollarsOf(r: { method: SaleMethod | null; parts: PayPart[] }): { usd: number; pesos: number } {
+  const d = r.parts.filter((p) => p.method === "dolares");
+  return { usd: Math.round(d.reduce((n, p) => n + (p.usd ?? 0), 0) * 100) / 100, pesos: d.reduce((n, p) => n + p.amount, 0) };
+}
+
+/** Pesos y dólares por separado: «$ 30.000 + US$ 100», «US$ 100», «$ 30.000». */
+export function moneyUsd(pesos: number, usd: number): string {
+  const u = Math.round(usd * 100) / 100;
+  if (!u) return money(pesos);
+  if (!pesos) return usdFmt(u);
+  return `${money(pesos)} + ${usdFmt(u)}`;
+}
+/** De una lista con `amount` en pesos y `usd` (si fue en dólares): la suma de cada uno por separado. */
+export function sumUsd<T extends { amount: number; usd?: number | null }>(l: T[]): { pesos: number; usd: number } {
+  let pesos = 0, usd = 0;
+  for (const x of l) {
+    if (x.usd) usd += x.usd;
+    else pesos += x.amount;
+  }
+  return { pesos, usd: Math.round(usd * 100) / 100 };
+}
+
 export function methodTotals(sales: SaleRow[], payments?: PaymentsMap) {
   const t = { efectivo: 0, transferencia: 0, tarjeta: 0, dolares: 0, giftcard: 0, profesional: 0, abonado: 0, usd: 0, sin: 0 };
   const seen = new Set<string>();
@@ -294,6 +317,12 @@ export interface DolarHoy {
   manual: boolean;
   updatedAt: string | null;
 }
+/** «100», «100,50», «100.5» → 100.5 (dólares con centavos). 0 si no es un número. */
+export const parseUsd = (s: string) => {
+  const n = Number(s.replace(/[^\d.,]/g, "").replace(",", "."));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
+};
+
 export function useDolar(): [DolarHoy | null, () => void] {
   const [d, refresh] = usePoll<{ ok: boolean; dolar: DolarHoy }>("/api/dolar", 10 * 60_000);
   return [d?.ok ? d.dolar : null, refresh];

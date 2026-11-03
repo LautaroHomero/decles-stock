@@ -50,6 +50,11 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
 - Notas (`domain/notes.ts`, tabla `notes`, migración 0032; pasó las `sales.observations` viejas): de una paciente, pegadas a una
   atención (`visit_id`: ícono en la fila de la Planilla, se ven debajo de lo que pagó) o sueltas. Pestaña Notas (`notas.tsx`): por día,
   búsqueda por paciente o texto sin tildes/mayúsculas (`translate` en SQL). Las lee y escribe todo el equipo; corrige/borra quien la escribió o el admin.
+- Dólares (migración 0033, `domain/usd.ts`): lo que entra o sale en dólares se guarda en US$ (`usd` + `rate`) y así se muestra
+  y se suma, aparte de los pesos («$ 20.000 + US$ 62,5»; `moneyUsd`, `sumUsd`, `dollarsOf` en `shared.tsx`). Atenciones: partes
+  'dolares' de `visit_payments`; ingresos/egresos extras, señas, abonos y cobros de deuda: método 'dolares' con `usd`. `amount` en
+  pesos (a la cotización) queda solo para cuentas internas: descuento de seña, saldo de abono, lo que falta de una deuda y la parte
+  de la profesional (que se calcula y paga en pesos). Texto: «dejó US$ 50 de seña», «pagué 100 dólares de luz», «pagó la deuda en dólares, 150».
 - Pago directo a la profesional (migración 0030): medio `profesional` (sale o parte en `visit_payments`). «botox a carla, le transfirieron
   a carmen, nos debe 36000» (`money-note.ts`: `toProvider`, `owesUs` → su parte = lo cobrado − lo que nos debe; si no, su %). La atención
   guarda su importe real pero no entra a la caja ni a «Entró» (`outsideOf` en `shared.tsx`). Cuenta del día por profesional (`balances`):

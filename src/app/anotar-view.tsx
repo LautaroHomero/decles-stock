@@ -36,7 +36,7 @@ import { debtorName, extractMoney, fractionsToPesos, parseDebtPayment, parsePayo
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import { ReminderPicker, remindLabel } from "./debt-reminder";
 import { firstName, greeting } from "./ui";
-import { Toast, call, fmtTime, money, usePoll, useToast, useToday, useDolar, type CatalogResponse, type Cut, type Payment, type PaymentsMap, type SaleRow, PAYMENTS } from "./shared";
+import { Toast, call, fmtTime, money, usePoll, useToast, useToday, useDolar, type CatalogResponse, type Cut, type Payment, type PaymentsMap, type SaleRow, PAYMENTS, usdFmt, moneyUsd } from "./shared";
 
 /**
  * Anotar (diseño «Vender»): lo que pasó en el consultorio en una frase —
@@ -313,7 +313,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     "/api/sellers",
     60_000,
   );
-  const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[] }>("/api/sales", 30_000);
+  const [sales, refreshSales] = usePoll<{ ok: boolean; sales: SaleRow[]; payments?: PaymentsMap }>("/api/sales", 30_000);
   const [toast, showToast] = useToast();
   const isMedico = actor.role === "medico";
   // Egresos de plata: los anota la secretaría o el admin.
@@ -587,29 +587,34 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const provDebtAmount = provDebt ? (provDebt.amount ?? provDebtOwed) : 0;
   // «carla dejó un abono de 5 sesiones de venus freeze, pagó 250000» → abono nuevo (la plata entra hoy).
   const prepaidNote = useMemo(() => (canExpense && !provDebt && !payout ? parsePrepaidNote(typed) : null), [typed, canExpense, provDebt, payout]);
-  const [pickPrepaidMethod, setPickPrepaidMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | null>(null);
+  const [pickPrepaidMethod, setPickPrepaidMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | "dolares" | null>(null);
   const newPrepaid = prepaidNote
     ? (() => {
         const item = preview?.lines.find((l) => l.item.kind === "practica")?.item ?? null;
         const sessions = prepaidNote.sessions;
-        const amount = prepaidNote.amount;
+        // En dólares: se guarda en US$; en pesos (a la cotización de hoy) es el saldo del abono.
+        const usd = pickPrepaidMethod && pickPrepaidMethod !== "dolares" ? null : prepaidNote.usd;
+        const amount = usd ? (rate ? Math.round(usd * rate) : null) : prepaidNote.amount;
         const unitPrice = prepaidNote.unitPrice ?? (sessions && amount ? Math.round(amount / sessions) : (item?.price ?? null));
         const patient = titleCase(pickPatient.trim() || prepaidPatient(typed, item?.name ?? null) || preview?.patient || "");
-        return { patient, item, sessions, amount, unitPrice, method: pickPrepaidMethod ?? prepaidNote.method };
+        return { patient, item, sessions, amount, unitPrice, usd, method: pickPrepaidMethod ?? prepaidNote.method };
       })()
     : null;
   const prepaidReady = !!newPrepaid && !!newPrepaid.patient && !!newPrepaid.item && !!newPrepaid.amount && !!newPrepaid.method;
   // Seña nueva: «carla dejó 20000 de seña para botox, viene el 28/10» (entra a la caja hoy).
   const depositNote = useMemo(() => (canExpense && !provDebt && !payout && !prepaidNote ? parseDepositNote(typed) : null), [typed, canExpense, provDebt, payout, prepaidNote]);
-  const [pickDepositMethod, setPickDepositMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | null>(null);
+  const [pickDepositMethod, setPickDepositMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | "dolares" | null>(null);
   const [pickDepositDate, setPickDepositDate] = useState<string | null>(null);
   const newDeposit = depositNote
     ? (() => {
         const item = preview?.lines.find((l) => l.item.kind === "practica")?.item ?? null;
+        // «dejó US$ 50 de seña»: se guarda en dólares; en pesos (a la cotización de hoy) es lo que descuenta.
+        const usd = pickDepositMethod && pickDepositMethod !== "dolares" ? null : depositNote.usd;
         return {
           patient: titleCase(pickPatient.trim() || depositPatient(typed, item?.name ?? null) || preview?.patient || ""),
           item,
-          amount: depositNote.amount,
+          usd,
+          amount: usd ? (rate ? Math.round(usd * rate) : 0) : depositNote.amount,
           dueOn: pickDepositDate ?? depositNote.dueOn,
           method: pickDepositMethod ?? depositNote.method,
         };
@@ -679,10 +684,18 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const debtPay = useMemo(() => (canExpense && !payout && !provDebt && !prepaidNote && !depositNote && !payablePay && !payableNote ? parseDebtPayment(typed, openDebts) : null), [typed, canExpense, openDebts, payout, provDebt, prepaidNote, depositNote, payablePay, payableNote]);
   const [pickDebtId, setPickDebtId] = useState<string | null>(null);
   const [debtPayAmount, setDebtPayAmount] = useState<string | null>(null);
-  const [debtPayMethod, setDebtPayMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | null>(null);
+  const [debtPayMethod, setDebtPayMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | "dolares" | null>(null);
   const payingDebt = debtPay ? (debtPay.debts.length === 1 ? debtPay.debts[0] : debtPay.debts.find((d) => d.id === pickDebtId) ?? null) : null;
   const debtMethod = debtPayMethod ?? debtPay?.method ?? null;
-  const payAmount = payingDebt ? (debtPayAmount !== null ? toPesos(debtPayAmount) : Math.min(debtPay?.amount ?? payingDebt.remaining, payingDebt.remaining)) : 0;
+  // «pagó la deuda en dólares, 100»: se guarda en US$; en pesos (a la cotización de hoy) es lo que descuenta.
+  const payUsd = debtPay?.usd && (!debtPayMethod || debtPayMethod === "dolares") && debtPayAmount === null ? debtPay.usd : null;
+  const payAmount = payingDebt
+    ? payUsd
+      ? Math.min(Math.round(payUsd * (rate ?? 0)), payingDebt.remaining)
+      : debtPayAmount !== null
+        ? toPesos(debtPayAmount)
+        : Math.min(debtPay?.amount ?? payingDebt.remaining, payingDebt.remaining)
+    : 0;
   const newDebt =
     canExpense && !debtPay && !payout && !provDebt && !prepaidNote && !depositNote && !payablePay && !payableNote && preview && preview.debt && !preview.lines.length && !preview.unresolved.length
       ? {
@@ -691,10 +704,11 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
           // «marisa me debe 5000»: si el nombre se tomó como profesional, es quien debe, no de quién es la atención.
           providerId: !preview.patient.trim() && !pickSeller ? null : preview.sellerId, remindOn: preview.remindOn }
       : null;
-  const expense = useMemo(
-    () => (canExpense && !payout && !debtPay && !provDebt && !prepaidNote && !depositNote && !payablePay && !payableNote ? parseExpense(typed) : null),
-    [typed, canExpense, payout, debtPay, provDebt, prepaidNote, depositNote, payablePay, payableNote],
-  );
+  const expense = useMemo(() => {
+    const e = canExpense && !payout && !debtPay && !provDebt && !prepaidNote && !depositNote && !payablePay && !payableNote ? parseExpense(typed) : null;
+    // «pagué 100 dólares de …»: se guarda en US$ (los pesos, a la cotización de hoy, solo para cuentas internas).
+    return e?.usd ? { ...e, amount: rate ? Math.round(e.usd * rate) : 0, rate } : e ? { ...e, rate: null } : null;
+  }, [typed, canExpense, payout, debtPay, provDebt, prepaidNote, depositNote, payablePay, payableNote, rate]);
   const possible = preview ? sellersFor(preview.lines, sellers) : null;
   const notHers = !!preview && preview.lines.some((l) => !allowedFor(l.item, preview.sellerId));
   const missingSeller = !!preview && !isMedico && !preview.sellerId;
@@ -796,13 +810,14 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
 
   async function saveExpense() {
     if (!expense || busy) return;
-    if (!expense.concept || !expense.amount) return setExpenseForm({ initial: expense, direction: expense.direction });
+    if (expense.usd && !expense.rate) return showToast("Falta la cotización del dólar (arriba a la derecha).");
+    if (!expense.concept || !expense.amount) return setExpenseForm({ initial: { concept: expense.concept, amount: expense.amount, method: expense.method === "dolares" ? undefined : expense.method }, direction: expense.direction });
     setBusy(true);
     const r = await call("/api/expenses", "POST", expense);
     setBusy(false);
     const ingreso = expense.direction === "ingreso";
     if (!r.ok) return showToast(r.error ?? (ingreso ? "No se pudo anotar el ingreso." : "No se pudo anotar el egreso."));
-    expenseDone(`${ingreso ? "Ingreso extra anotado" : "Gasto anotado"}: ${expense.concept}, ${money(expense.amount)}.`);
+    expenseDone(`${ingreso ? "Ingreso extra anotado" : "Gasto anotado"}: ${expense.concept}, ${expense.usd ? usdFmt(expense.usd) : money(expense.amount)}.`);
   }
 
   function expenseDone(msg: string) {
@@ -844,13 +859,14 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       amount: newPrepaid.amount,
       unitPrice: newPrepaid.unitPrice,
       method: newPrepaid.method,
+      ...(newPrepaid.usd ? { usd: newPrepaid.usd, rate } : {}),
     });
     setBusy(false);
     if (!r.ok) return showToast(r.error ?? "No se pudo anotar el abono.");
     setPickPrepaidMethod(null);
     refreshPrepaids();
     expenseDone(
-      `Abono · ${newPrepaid.patient} · ${newPrepaid.sessions ? `${newPrepaid.sessions} sesiones de ` : ""}${newPrepaid.item!.name} · ${money(newPrepaid.amount!)}`,
+      `Abono · ${newPrepaid.patient} · ${newPrepaid.sessions ? `${newPrepaid.sessions} sesiones de ` : ""}${newPrepaid.item!.name} · ${newPrepaid.usd ? usdFmt(newPrepaid.usd) : money(newPrepaid.amount!)}`,
     );
   }
 
@@ -863,13 +879,14 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       amount: newDeposit.amount,
       method: newDeposit.method,
       dueOn: newDeposit.dueOn,
+      ...(newDeposit.usd ? { usd: newDeposit.usd, rate } : {}),
     });
     setBusy(false);
     if (!r.ok) return showToast(r.error ?? "No se pudo anotar la seña.");
     setPickDepositMethod(null);
     setPickDepositDate(null);
     refreshDeposits();
-    expenseDone(`Seña · ${newDeposit.patient}${newDeposit.item ? ` · ${newDeposit.item.name}` : ""} · ${money(newDeposit.amount)}${newDeposit.dueOn ? ` · viene el ${remindLabel(newDeposit.dueOn)}` : ""}`);
+    expenseDone(`Seña · ${newDeposit.patient}${newDeposit.item ? ` · ${newDeposit.item.name}` : ""} · ${newDeposit.usd ? usdFmt(newDeposit.usd) : money(newDeposit.amount)}${newDeposit.dueOn ? ` · viene el ${remindLabel(newDeposit.dueOn)}` : ""}`);
   }
 
   async function saveNewPayable() {
@@ -934,15 +951,16 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     if (payAmount <= 0) return showToast("¿Cuánto pagó?");
     if (!debtMethod) return showToast("¿Cómo pagó? Tocá efectivo, transferencia o tarjeta.");
     setBusy(true);
-    const r = await call(`/api/debts/${payingDebt.id}/pay`, "POST", { amount: payAmount, method: debtMethod });
+    if (payUsd && !rate) return showToast("Falta la cotización del dólar (arriba a la derecha).");
+    const r = await call(`/api/debts/${payingDebt.id}/pay`, "POST", payUsd ? { amount: payAmount, method: "dolares", usd: payUsd, rate } : { amount: payAmount, method: debtMethod });
     setBusy(false);
     if (!r.ok) return showToast(r.error ?? "No se pudo cobrar.");
     const left = (r.debt as { remaining: number }).remaining;
     resetDebtPicks();
     refreshDebts();
     refreshPayouts();
-    const how = debtMethod === "efectivo" ? "en efectivo" : debtMethod === "tarjeta" ? "con tarjeta" : "por transferencia";
-    expenseDone(`${payingDebt.debtor} pagó ${money(payAmount)} ${how}. ${left ? `Queda debiendo ${money(left)}.` : "Ya no debe nada."}`);
+    const how = payUsd ? "en dólares" : debtMethod === "efectivo" ? "en efectivo" : debtMethod === "tarjeta" ? "con tarjeta" : "por transferencia";
+    expenseDone(`${payingDebt.debtor} pagó ${payUsd ? usdFmt(payUsd) : money(payAmount)} ${how}. ${left ? `Queda debiendo ${money(left)}.` : "Ya no debe nada."}`);
   }
 
   async function saveNewDebt() {
@@ -1223,15 +1241,15 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                 )}
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="text-[16px] font-semibold">Pagó</span>
-                  <b className="text-[22px] font-semibold tabular-nums text-in">{newPrepaid.amount ? `+ ${money(newPrepaid.amount)}` : "—"}</b>
+                  <b className="text-[22px] font-semibold tabular-nums text-in">{newPrepaid.usd ? `+ ${usdFmt(newPrepaid.usd)}` : newPrepaid.amount ? `+ ${money(newPrepaid.amount)}` : "—"}</b>
                 </div>
                 <div className="flex flex-col gap-2">
                   <span className="text-[16px] font-semibold">¿Cómo pagó?</span>
                   {!newPrepaid.method && <Missing>Falta cómo pagó</Missing>}
                   <div className="flex flex-wrap gap-2.5">
-                    {(["efectivo", "transferencia", "tarjeta"] as const).map((m) => (
+                    {(prepaidNote?.usd ? (["efectivo", "transferencia", "tarjeta", "dolares"] as const) : (["efectivo", "transferencia", "tarjeta"] as const)).map((m) => (
                       <button key={m} aria-pressed={newPrepaid.method === m} onClick={() => setPickPrepaidMethod(m)} className={newPrepaid.method === m ? CHIP_ON : CHIP}>
-                        {m === "efectivo" ? "Efectivo" : m === "transferencia" ? "Transferencia" : "Tarjeta"}
+                        {m === "efectivo" ? "Efectivo" : m === "transferencia" ? "Transferencia" : m === "tarjeta" ? "Tarjeta" : "Dólares"}
                       </button>
                     ))}
                   </div>
@@ -1259,7 +1277,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     <b className="font-semibold">{newDeposit.item?.name ?? "Práctica sin definir"}</b>
                     {newDeposit.item && <span className="text-neutral-400"> · ese día paga {money(Math.max(0, newDeposit.item.price - newDeposit.amount))}</span>}
                   </span>
-                  <b className="whitespace-nowrap text-[22px] font-semibold tabular-nums text-in">+ {money(newDeposit.amount)}</b>
+                  <b className="whitespace-nowrap text-[22px] font-semibold tabular-nums text-in">+ {newDeposit.usd ? usdFmt(newDeposit.usd) : money(newDeposit.amount)}</b>
                 </div>
                 <div className="flex flex-col gap-2">
                   <span className="text-[16px] font-semibold">
@@ -1282,6 +1300,11 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                         {label}
                       </button>
                     ))}
+                    {newDeposit.usd !== null && (
+                      <button aria-pressed={newDeposit.method === "dolares"} onClick={() => setPickDepositMethod("dolares")} className={newDeposit.method === "dolares" ? CHIP_ON : CHIP}>
+                        Dólares
+                      </button>
+                    )}
                   </div>
                 </div>
                 <p className="text-[14px] text-neutral-500">
@@ -1407,7 +1430,8 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                       <div className="flex flex-wrap items-center gap-4">
                         <input
                           id="cobro-monto"
-                          value={`$ ${payAmount.toLocaleString("es-AR")}`}
+                          value={payUsd ? usdFmt(payUsd) : `$ ${payAmount.toLocaleString("es-AR")}`}
+                          readOnly={!!payUsd}
                           onChange={(e) => setDebtPayAmount(e.target.value.replace(/\D/g, ""))}
                           inputMode="numeric"
                           className="h-14 w-[200px] rounded-xl border-2 border-neutral-800 bg-surface px-4 text-right text-[24px] font-semibold tabular-nums text-fg outline-none focus:border-in"
@@ -1428,10 +1452,10 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                       </span>
                       {!debtMethod && <Missing>Falta decir cómo pagó. Tocá una opción:</Missing>}
                       <div role="radiogroup" aria-labelledby="cobro-medio" className="grid grid-cols-3 gap-2.5">
-                        {PAY_OPTIONS.filter(([m]) => m === "efectivo" || m === "transferencia" || m === "tarjeta").map(([m, label, Icon]) => {
+                        {PAY_OPTIONS.filter(([m]) => m === "efectivo" || m === "transferencia" || m === "tarjeta" || (m === "dolares" && !!debtPay?.usd)).map(([m, label, Icon]) => {
                           const on = debtMethod === m;
                           return (
-                            <button key={m} role="radio" aria-checked={on} onClick={() => setDebtPayMethod(m as "efectivo" | "transferencia" | "tarjeta")} className={on ? PICK_ON : PICK}>
+                            <button key={m} role="radio" aria-checked={on} onClick={() => setDebtPayMethod(m as "efectivo" | "transferencia" | "tarjeta" | "dolares")} className={on ? PICK_ON : PICK}>
                               <Icon size={24} aria-hidden="true" />
                               {label}
                             </button>
@@ -1513,13 +1537,13 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                 )}
               </Understood>
             ) : expense?.direction === "ingreso" ? (
-              <Understood tone="in" icon={<ArrowDownIcon size={20} weight="bold" />} title="Ingreso extra" note={expense.method === "efectivo" ? "Entra a la caja" : expense.method === "tarjeta" ? "Con tarjeta: no entra a la caja" : "Por transferencia: no entra a la caja"}>
+              <Understood tone="in" icon={<ArrowDownIcon size={20} weight="bold" />} title="Ingreso extra" note={expense.method === "dolares" ? "En dólares: se guarda en US$" : expense.method === "efectivo" ? "Entra a la caja" : expense.method === "tarjeta" ? "Con tarjeta: no entra a la caja" : "Por transferencia: no entra a la caja"}>
                 <div className="flex items-baseline justify-between gap-3">
                   <b className="text-[20px] font-semibold leading-tight">{expense.concept}</b>
-                  {!!expense.amount && <span className="whitespace-nowrap text-[20px] font-semibold tabular-nums">+ {money(expense.amount)}</span>}
+                  {!!expense.amount && <span className="whitespace-nowrap text-[20px] font-semibold tabular-nums">+ {expense.usd ? usdFmt(expense.usd) : money(expense.amount)}</span>}
                 </div>
                 {!expense.amount && <Missing>Falta cuánto entró</Missing>}
-                <button onClick={() => setExpenseForm({ initial: expense, direction: "ingreso" })} className="self-start text-[15px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline">
+                <button onClick={() => setExpenseForm({ initial: { concept: expense.concept, amount: expense.usd ? 0 : expense.amount, method: expense.method === "dolares" ? undefined : expense.method }, direction: "ingreso" })} className="self-start text-[15px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline">
                   Cambiar detalles
                 </button>
               </Understood>
@@ -1527,11 +1551,13 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
               <Understood tone="out" icon={<ArrowUpIcon size={20} weight="bold" />} title="Gasto" note={expense.method === "efectivo" ? "Sale de la caja" : expense.method === "tarjeta" ? "Con tarjeta: no sale de la caja" : "Por transferencia: no sale de la caja"}>
                 <div className="flex items-baseline justify-between gap-3">
                   <b className="text-[20px] font-semibold leading-tight">{expense.concept}</b>
-                  {!!expense.amount && <span className="whitespace-nowrap text-[20px] font-semibold tabular-nums">− {money(expense.amount)}</span>}
+                  {!!expense.amount && <span className="whitespace-nowrap text-[20px] font-semibold tabular-nums">− {expense.usd ? usdFmt(expense.usd) : money(expense.amount)}</span>}
                 </div>
                 {!expense.concept && <Missing>Falta en qué se gastó</Missing>}
                 {!expense.amount && <Missing>Falta cuánto se gastó</Missing>}
-                <button onClick={() => setExpenseForm({ initial: expense })} className="self-start text-[15px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline">
+                <button
+                  onClick={() => setExpenseForm({ initial: { concept: expense.concept, amount: expense.usd ? 0 : expense.amount, method: expense.method === "dolares" ? undefined : expense.method } })}
+                  className="self-start text-[15px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline">
                   Cambiar detalles
                 </button>
               </Understood>
@@ -1907,7 +1933,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     : `Sí, anotar que le debemos ${money(provDebtAmount)}`
                 : newDeposit
                   ? depositReady
-                    ? `Sí, anotar seña de ${money(newDeposit.amount)}`
+                    ? `Sí, anotar seña de ${newDeposit.usd ? usdFmt(newDeposit.usd) : money(newDeposit.amount)}`
                     : "Completá lo que falta"
                 : payablePay
                   ? !payingPayable
@@ -1921,14 +1947,14 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     : "Completá lo que falta"
                 : newPrepaid
                   ? prepaidReady
-                    ? `Sí, anotar abono de ${money(newPrepaid.amount!)}`
+                    ? `Sí, anotar abono de ${newPrepaid.usd ? usdFmt(newPrepaid.usd) : money(newPrepaid.amount!)}`
                     : "Completá lo que falta"
                 : debtPay
                   ? !payingDebt
                     ? "Elegí cuál deuda"
                     : !debtMethod
                       ? "Primero elegí cómo pagó"
-                      : `Sí, anotar cobro de ${money(payAmount)}`
+                      : `Sí, anotar cobro de ${payUsd ? usdFmt(payUsd) : money(payAmount)}`
                   : newDebt
                     ? `Sí, anotar deuda de ${money(newDebt.amount)}`
                     : payout
@@ -1936,8 +1962,8 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                       : expense
                         ? expense.concept && expense.amount
                           ? expense.direction === "ingreso"
-                            ? `Sí, anotar · entra ${money(expense.amount)}`
-                            : `Sí, anotar gasto de ${money(expense.amount)}`
+                            ? `Sí, anotar · entra ${expense.usd ? usdFmt(expense.usd) : money(expense.amount)}`
+                            : `Sí, anotar gasto de ${expense.usd ? usdFmt(expense.usd) : money(expense.amount)}`
                           : expense.direction === "ingreso" ? "Completar el ingreso" : "Completar el gasto"
                         : !preview
                           ? "Guardar"
@@ -2016,6 +2042,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       {mode === "idle" && (
         <Today
           sales={sales?.sales ?? null}
+          payments={sales?.payments}
           expenses={canExpense ? (expensesData?.expenses ?? []) : []}
           highlight={lastVisit}
           onOpenClose={onOpenClose}
@@ -2792,12 +2819,15 @@ type TodaySale = SaleRow;
 function Today({
   sales,
   expenses,
+  payments,
   highlight,
   onOpenClose,
   onEdit,
   onEditExpense,
 }: {
   sales: TodaySale[] | null;
+  /** Partes de lo pagado con varios medios o en dólares (lo de dólares se muestra en US$). */
+  payments?: PaymentsMap;
   expenses: Expense[];
   highlight: string | null;
   onOpenClose: () => void;
@@ -2816,19 +2846,24 @@ function Today({
         .map((s) => `${s.kind === "producto" || s.quantity > 1 ? `${s.quantity} ` : ""}${s.itemName}${s.kind === "pendiente" ? " (sin cargar)" : ""}`)
         .join(", ");
       const patient = g[0].patientName;
+      // Lo pagado en dólares se muestra en dólares, aparte de los pesos.
+      const d = g[0].visitId ? (payments?.[g[0].visitId] ?? []).filter((p) => p.method === "dolares") : [];
+      const usd = Math.round(d.reduce((n, p) => n + (p.usd ?? 0), 0) * 100) / 100;
+      const usdPesos = d.reduce((n, p) => n + p.amount, 0);
       return {
         key: g[0].visitId ?? g[0].id,
         time: fmtTime(g[g.length - 1].createdAt),
         label: patient ? `${patient} — ${items}` : items,
         patient: !!patient,
         product: g.some((s) => s.kind === "producto"),
-        total: g.reduce((n, s) => n + s.total, 0),
+        total: g.reduce((n, s) => n + s.total, 0) - usdPesos,
+        usd,
         rows: g,
         createdAt: g[g.length - 1].createdAt,
         expense: null as Expense | null,
       };
     });
-  }, [sales]);
+  }, [sales, payments]);
   const all = useMemo(
     () =>
       [
@@ -2839,7 +2874,8 @@ function Today({
           label: `Egreso · ${e.concept}`,
           patient: false,
           product: false,
-          total: -e.amount,
+          total: e.usd ? 0 : -e.amount,
+          usd: e.usd ? -e.usd : 0,
           rows: [] as SaleRow[],
           createdAt: e.createdAt,
           expense: e as Expense | null,
@@ -2847,9 +2883,11 @@ function Today({
       ].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     [rows, expenses],
   );
-  const outflow = expenses.reduce((n, e) => n + e.amount, 0);
+  const outflow = expenses.reduce((n, e) => n + (e.usd ? 0 : e.amount), 0);
+  const outUsd = expenses.reduce((n, e) => n + (e.usd ?? 0), 0);
   if (!sales) return null;
   const total = rows.reduce((n, r) => n + r.total, 0);
+  const totalUsd = Math.round(rows.reduce((n, r) => n + r.usd, 0) * 100) / 100;
   const patients = rows.filter((r) => r.patient).length;
   const ventas = rows.filter((r) => r.product).length;
 
@@ -2865,12 +2903,12 @@ function Today({
             </span>
           )}
         </span>
-        <span className="whitespace-nowrap text-[15px] font-medium tabular-nums">{money(total)}</span>
+        <span className="whitespace-nowrap text-[15px] font-medium tabular-nums">{moneyUsd(total, totalUsd)}</span>
       </div>
-      {outflow > 0 && (
+      {(outflow > 0 || outUsd > 0) && (
         <div className="flex items-baseline justify-between gap-3 border-b border-neutral-800 py-2 text-[13px] text-neutral-400">
-          <span>Egresos · queda {money(total - outflow)}</span>
-          <span className="tabular-nums">− {money(outflow)}</span>
+          <span>Egresos · queda {moneyUsd(total - outflow, Math.round((totalUsd - outUsd) * 100) / 100)}</span>
+          <span className="tabular-nums">− {moneyUsd(outflow, outUsd)}</span>
         </div>
       )}
       {all.map((r) => (
@@ -2884,7 +2922,7 @@ function Today({
             <span className="mr-3.5 tabular-nums text-neutral-500">{r.time}</span>
             {r.label}
           </span>
-          <span className="whitespace-nowrap tabular-nums text-neutral-300">{r.total < 0 ? `− ${money(-r.total)}` : money(r.total)}</span>
+          <span className="whitespace-nowrap tabular-nums text-neutral-300">{r.total < 0 || r.usd < 0 ? `− ${moneyUsd(-r.total, -r.usd)}` : moneyUsd(r.total, r.usd)}</span>
         </button>
       ))}
       {!all.length && <p className="py-4 text-[14px] text-neutral-500">Todavía no se anotó nada hoy.</p>}

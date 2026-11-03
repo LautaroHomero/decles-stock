@@ -1,16 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { call, money } from "./shared";
+import { call, money, parseUsd, useDolar, usdFmt } from "./shared";
 
 /** Egresos de plata (luz, insumos, un retiro…): se anotan desde Anotar y se ven en Hoy, Cierre y Ventas. */
 export interface Expense {
   id: string;
   direction?: "egreso" | "ingreso";
   concept: string;
+  /** En pesos (en dólares: a la cotización de ese momento; no se muestra). */
   amount: number;
-  /** Solo el efectivo toca la caja. */
-  method?: "efectivo" | "transferencia" | "tarjeta";
+  /** Solo el efectivo toca la caja. `dolares` se cuenta aparte, en US$. */
+  method?: "efectivo" | "transferencia" | "tarjeta" | "dolares";
+  /** Si fue en dólares: cuántos US$ (así se muestra y se suma). */
+  usd?: number | null;
+  rate?: number | null;
   createdByName: string;
   createdAt: string;
   updatedByName: string | null;
@@ -40,12 +44,19 @@ export function ExpenseForm({
   onSaved: (msg: string) => void;
 }) {
   const [concept, setConcept] = useState(expense?.concept ?? initial?.concept ?? "");
-  const [amount, setAmount] = useState(String(expense?.amount ?? initial?.amount ?? "") === "0" ? "" : String(expense?.amount ?? initial?.amount ?? ""));
-  const [method, setMethod] = useState<"efectivo" | "transferencia" | "tarjeta">(expense?.method ?? initial?.method ?? "efectivo");
+  const [amount, setAmount] = useState(
+    expense?.usd ? String(expense.usd).replace(".", ",") : String(expense?.amount ?? initial?.amount ?? "") === "0" ? "" : String(expense?.amount ?? initial?.amount ?? ""),
+  );
+  const [method, setMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | "dolares">(expense?.method ?? initial?.method ?? "efectivo");
+  // En dólares: se escribe en US$ y así se guarda; la cotización del día queda solo para las cuentas internas.
+  const [dolar] = useDolar();
+  const usdMode = method === "dolares";
+  const rate = expense?.usd && expense.rate ? expense.rate : (dolar?.rate ?? null);
+  const usd = usdMode ? parseUsd(amount) : 0;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const n = Number(amount.replace(/\D/g, "") || 0);
-  const ok = concept.trim() && n > 0;
+  const n = usdMode ? 0 : Number(amount.replace(/\D/g, "") || 0);
+  const ok = concept.trim() && (usdMode ? usd > 0 && !!rate : n > 0);
   const ingreso = direction === "ingreso";
   const what = ingreso ? "Ingreso extra" : "Egreso";
 
@@ -53,11 +64,11 @@ export function ExpenseForm({
     if (!ok || busy) return;
     setBusy(true);
     setErr("");
-    const body = { concept, amount: n, direction, method };
+    const body = usdMode ? { concept, amount: Math.round(usd * (rate ?? 0)), direction, method, usd, rate } : { concept, amount: n, direction, method };
     const r = expense ? await call(`/api/expenses/${expense.id}`, "PATCH", body) : await call("/api/expenses", "POST", body);
     setBusy(false);
     if (!r.ok) return setErr(r.error ?? "No se pudo guardar.");
-    onSaved(expense ? `${what} corregido` : `${what} · ${concept.trim()} · ${money(n)}`);
+    onSaved(expense ? `${what} corregido` : `${what} · ${concept.trim()} · ${usdMode ? usdFmt(usd) : money(n)}`);
   }
 
   async function remove() {
@@ -87,13 +98,13 @@ export function ExpenseForm({
           <input autoFocus={!concept} value={concept} onChange={(e) => setConcept(e.target.value)} placeholder={ingreso ? "Ej. Cambio" : "Ej. Luz"} className={FIELD} />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="cl-label">Importe</span>
+          <span className="cl-label">{usdMode ? "¿Cuántos dólares?" : "Importe"}</span>
           <input
             autoFocus={!!concept && !n}
             value={amount}
-            onChange={(e) => setAmount(e.target.value.replace(/[^\d]/g, ""))}
-            inputMode="numeric"
-            placeholder="$"
+            onChange={(e) => setAmount(usdMode ? e.target.value.replace(/[^\d.,]/g, "") : e.target.value.replace(/[^\d]/g, ""))}
+            inputMode={usdMode ? "decimal" : "numeric"}
+            placeholder={usdMode ? "US$" : "$"}
             className={`${FIELD} tabular-nums`}
           />
         </label>
@@ -102,18 +113,25 @@ export function ExpenseForm({
             {ingreso ? "¿Cómo entró?" : "¿Cómo se pagó?"} <span className="cl-hint">· solo el efectivo cuenta en la caja</span>
           </span>
           <div className="flex flex-wrap gap-2">
-            {(["efectivo", "transferencia", "tarjeta"] as const).map((m) => (
+            {(["efectivo", "transferencia", "tarjeta", "dolares"] as const).map((m) => (
               <button
                 key={m}
                 type="button"
                 aria-pressed={method === m}
-                onClick={() => setMethod(m)}
+                onClick={() => {
+                  // Al pasar de pesos a dólares (o al revés) el número escrito ya no sirve.
+                  if ((m === "dolares") !== usdMode) setAmount("");
+                  setMethod(m);
+                }}
                 className={`rounded-md border px-3 py-1.5 text-[13.5px] ${method === m ? "border-accent bg-accent text-on-accent" : "border-neutral-800 text-neutral-300 hover:bg-accent-900"}`}
               >
-                {m === "efectivo" ? "Efectivo" : m === "transferencia" ? "Transferencia" : "Tarjeta"}
+                {m === "efectivo" ? "Efectivo" : m === "transferencia" ? "Transferencia" : m === "tarjeta" ? "Tarjeta" : "Dólares"}
               </button>
             ))}
           </div>
+          {usdMode && (
+            <span className="cl-hint">{rate ? "Se guarda en dólares y se cuenta aparte de los pesos." : "Falta la cotización del dólar (arriba a la derecha)."}</span>
+          )}
         </div>
         {err && <p className="text-[13px] text-neutral-200">{err}</p>}
         <div className="flex flex-wrap gap-2">
@@ -122,7 +140,7 @@ export function ExpenseForm({
             disabled={!ok || busy}
             className="inline-flex h-11 flex-1 items-center justify-center rounded-lg border border-accent bg-accent px-4 text-[14px] font-medium text-on-accent transition-opacity hover:opacity-85 disabled:opacity-40"
           >
-            {busy ? "Guardando…" : `Guardar${n ? ` · ${money(n)}` : ""}`}
+            {busy ? "Guardando…" : `Guardar${usdMode ? (usd ? ` · ${usdFmt(usd)}` : "") : n ? ` · ${money(n)}` : ""}`}
           </button>
           <button type="button" onClick={onClose} className="h-11 rounded-lg border border-neutral-800 px-4 text-[14px] text-neutral-300 hover:bg-accent-900">
             Cancelar

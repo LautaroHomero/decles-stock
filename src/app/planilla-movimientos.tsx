@@ -8,7 +8,7 @@ import { AbonoForm, AbonosCard } from "./abonos";
 import { PayablesCard } from "./deudas-consultorio";
 import { SenaForm, SenasCard } from "./senas";
 import { fmtSigned, type Row } from "./planilla-view";
-import { call, fmtTime, methodTotals, money, outsideOf, usdFmt, usePoll, type PaymentsMap, type SaleRow, AddButton, ToneTitle, type Tone } from "./shared";
+import { call, dollarsOf, fmtTime, methodTotals, money, moneyUsd, outsideOf, sumUsd, usdFmt, usePoll, type PaymentsMap, type SaleRow, AddButton, ToneTitle, type Tone } from "./shared";
 
 /**
  * Planilla → Día, debajo de los pacientes: todo lo demás que pasó con la plata ese día, como en la hoja de papel.
@@ -31,7 +31,7 @@ interface Payout {
   createdAt: string;
 }
 
-const METHOD = { efectivo: "Efectivo", transferencia: "Transf.", tarjeta: "Tarjeta" } as const;
+const METHOD = { efectivo: "Efectivo", transferencia: "Transf.", tarjeta: "Tarjeta", dolares: "Dólares" } as const;
 const short = (name: string) => name.replace(/^(Dra?\.|Lic\.)\s*/i, "");
 
 export function PlanillaMovimientos({
@@ -70,12 +70,19 @@ export function PlanillaMovimientos({
 
   // Lo que le pagaron directo a la profesional (o con gift card) no entró hoy.
   const directo = rows.reduce((n, r) => n + outsideOf(r).profesional, 0);
-  const pacientes = rows.reduce((n, r) => n + r.total - outsideOf(r).all, 0);
+  // Lo que entró en dólares queda en dólares: se cuenta aparte, sin pasarlo a pesos.
+  const pacientes = rows.reduce((n, r) => n + r.total - outsideOf(r).all - dollarsOf(r).pesos, 0);
+  const pacientesUsd = rows.reduce((n, r) => n + dollarsOf(r).usd, 0);
   const abonados = rows.reduce((n, r) => n + outsideOf(r).abonado + outsideOf(r).giftcard, 0);
   const deProfesionales = cobros.reduce((n, p) => n + p.amount, 0);
-  const extras = ingresos.reduce((n, e) => n + e.amount, 0);
-  const cobrosDeuda = collections.reduce((n, p) => n + p.amount, 0);
-  const gastos = egresos.reduce((n, e) => n + e.amount, 0);
+  const exSum = sumUsd(ingresos);
+  const cdSum = sumUsd(collections);
+  const gaSum = sumUsd(egresos);
+  const extras = exSum.pesos;
+  const cobrosDeuda = cdSum.pesos;
+  const gastos = gaSum.pesos;
+  const entroUsd = Math.round((pacientesUsd + exSum.usd + cdSum.usd) * 100) / 100;
+  const salioUsd = gaSum.usd;
   const aProfesionales = payouts.reduce((n, p) => n + p.amount, 0);
   const entro = pacientes + extras + cobrosDeuda + deProfesionales;
   const salio = gastos + aProfesionales;
@@ -99,7 +106,7 @@ export function PlanillaMovimientos({
     refreshPay();
   }
 
-  type Line = { key: string; time: string; who: string; what: string; amount: number; onClick?: () => void; undo?: () => void };
+  type Line = { key: string; time: string; who: string; what: string; amount: number; usd?: number | null; onClick?: () => void; undo?: () => void };
   const inLines: Line[] = [
     ...ingresos.map((e) => ({
       key: e.id,
@@ -107,6 +114,7 @@ export function PlanillaMovimientos({
       who: /^(Abono|Seña) · /.test(e.concept) ? e.concept.replace(/^(Abono|Seña) · /, "") : e.concept,
       what: `${e.concept.startsWith("Abono · ") ? "Abono" : e.concept.startsWith("Seña · ") ? "Seña" : "Ingreso extra"} · ${METHOD[e.method ?? "efectivo"]} · ${e.createdByName}`,
       amount: e.amount,
+      usd: e.usd ?? null,
       onClick: canEdit ? () => setForm({ direction: "ingreso", expense: e }) : undefined,
     })),
     ...collections.map((p) => ({
@@ -115,6 +123,7 @@ export function PlanillaMovimientos({
       who: p.debtor,
       what: ["Cobro de deuda", p.concept, p.providerName && short(p.providerName), METHOD[p.method ?? "efectivo"]].filter(Boolean).join(" · "),
       amount: p.amount,
+      usd: p.usd ?? null,
       undo: canEdit ? () => voidCollection(p) : undefined,
     })),
     ...cobros.map((p) => ({
@@ -133,6 +142,7 @@ export function PlanillaMovimientos({
       who: e.concept,
       what: `Egreso · ${METHOD[e.method ?? "efectivo"]} · ${e.createdByName}`,
       amount: e.amount,
+      usd: e.usd ?? null,
       onClick: canEdit ? () => setForm({ direction: "egreso", expense: e }) : undefined,
     })),
     ...payouts.map((p) => ({
@@ -188,6 +198,7 @@ export function PlanillaMovimientos({
         title="Otros ingresos"
         tone="in"
         total={extras + cobrosDeuda}
+        totalUsd={exSum.usd + cdSum.usd}
         empty="No hubo ingresos extras ni cobros de deudas."
         lines={inLines}
         loading={loading}
@@ -210,6 +221,7 @@ export function PlanillaMovimientos({
       <Block
         title="Egresos"
         total={salio}
+        totalUsd={salioUsd}
         sign="−"
         empty="No salió plata este día."
         lines={outLines}
@@ -275,22 +287,22 @@ export function PlanillaMovimientos({
         <h2 className="text-[14px] font-medium uppercase tracking-[.06em]">Resumen del día</h2>
         <div className="grid grid-cols-1 gap-4 rounded-xl border border-neutral-800 p-4 sm:grid-cols-2">
           <div className="flex flex-col">
-            <Sum label="Pacientes" value={money(pacientes)} />
-            {extras > 0 && <Sum label="+ Ingresos extras" value={money(extras)} />}
-            {cobrosDeuda > 0 && <Sum label="+ Cobros de deudas" value={money(cobrosDeuda)} />}
+            <Sum label="Pacientes" value={moneyUsd(pacientes, pacientesUsd)} />
+            {(extras > 0 || exSum.usd > 0) && <Sum label="+ Ingresos extras" value={moneyUsd(extras, exSum.usd)} />}
+            {(cobrosDeuda > 0 || cdSum.usd > 0) && <Sum label="+ Cobros de deudas" value={moneyUsd(cobrosDeuda, cdSum.usd)} />}
             {deProfesionales > 0 && <Sum label="+ Nos dieron profesionales" value={money(deProfesionales)} />}
-            <Sum label="Entró" value={money(entro)} strong />
-            {gastos > 0 && <Sum label="− Egresos" value={money(gastos)} />}
+            <Sum label="Entró" value={moneyUsd(entro, entroUsd)} strong />
+            {(gastos > 0 || salioUsd > 0) && <Sum label="− Egresos" value={moneyUsd(gastos, salioUsd)} />}
             {aProfesionales > 0 && <Sum label="− Pagado a profesionales" value={money(aProfesionales)} />}
-            <Sum label="Salió" value={money(salio)} strong />
-            <Sum label="Queda (entró − salió)" value={fmtSigned(entro - salio)} strong />
+            <Sum label="Salió" value={moneyUsd(salio, salioUsd)} strong />
+            <Sum label="Queda (entró − salió)" value={`${fmtSigned(entro - salio)}${entroUsd - salioUsd ? ` · ${entroUsd - salioUsd < 0 ? "− " : ""}${usdFmt(Math.abs(Math.round((entroUsd - salioUsd) * 100) / 100))}` : ""}`} strong />
           </div>
           <div className="flex flex-col">
             <span className="pb-1 text-[12px] text-neutral-500">Cómo entró la plata</span>
             <Sum label="Efectivo" value={money(porMedio("efectivo"))} />
             <Sum label="Transferencias" value={money(porMedio("transferencia"))} />
             <Sum label="Tarjetas" value={money(porMedio("tarjeta"))} />
-            {mt.usd > 0 && <Sum label={`Dólares · ${usdFmt(mt.usd)}`} value={money(mt.dolares)} />}
+            {entroUsd > 0 && <Sum label="Dólares" value={usdFmt(entroUsd)} />}
             {mt.sin > 0 && <Sum label="Sin medio cargado" value={money(mt.sin)} muted />}
             {directo > 0 && <Sum label="Le pagaron directo a profesionales (no entró)" value={money(directo)} muted />}
             {abonados > 0 && <Sum label="Abonos y gift cards (no entró plata hoy)" value={money(abonados)} muted />}
@@ -312,12 +324,15 @@ function Block({
   loading,
   action,
   tone = "neutral",
+  totalUsd = 0,
 }: {
   title: string;
   tone?: Tone;
   total: number;
+  /** Lo que fue en dólares, aparte. */
+  totalUsd?: number;
   sign?: string;
-  lines: { key: string; time: string; who: string; what: string; amount: number; onClick?: () => void; undo?: () => void }[];
+  lines: { key: string; time: string; who: string; what: string; amount: number; usd?: number | null; onClick?: () => void; undo?: () => void }[];
   empty: string;
   note?: string;
   loading: boolean;
@@ -368,7 +383,7 @@ function Block({
                   </td>
                   <td className="w-[14%] px-3 py-2 text-right tabular-nums">
                     {sign ? `${sign} ` : ""}
-                    {money(l.amount)}
+                    {l.usd ? usdFmt(l.usd) : money(l.amount)}
                   </td>
                 </tr>
               ))
@@ -382,7 +397,7 @@ function Block({
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">
                   {sign ? `${sign} ` : ""}
-                  {money(total)}
+                  {moneyUsd(total, totalUsd)}
                 </td>
               </tr>
             </tfoot>

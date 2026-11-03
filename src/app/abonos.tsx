@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { call, money, usePoll, type CatalogResponse, AddButton, ToneTitle } from "./shared";
+import { call, money, usePoll, type CatalogResponse, AddButton, ToneTitle, parseUsd, useDolar, usdFmt } from "./shared";
 
 /** Espejo de `Prepaid` de src/lib/domain/prepaids.ts. */
 export interface PrepaidRow {
@@ -12,6 +12,8 @@ export interface PrepaidRow {
   unitPrice: number;
   sessions: number | null;
   amount: number;
+  /** Si lo pagó en dólares: cuántos US$ (así se muestra). */
+  usd?: number | null;
   used: number;
   sessionsLeft: number;
   balance: number;
@@ -76,7 +78,7 @@ export function AbonosCard({ onChange, showToast, canAdd = true }: { onChange: (
               <span className="min-w-0">
                 <b className="font-medium">{p.patient}</b>
                 <span className="block text-[12.5px] text-neutral-500">
-                  {p.sessions ? `${p.sessions} sesiones de ${p.itemName}` : `Saldo para ${p.itemName}`} · {money(p.unitPrice)} c/u · pagó {money(p.amount)} el {ddmm(p.createdAt)}
+                  {p.sessions ? `${p.sessions} sesiones de ${p.itemName}` : `Saldo para ${p.itemName}`} · {money(p.unitPrice)} c/u · pagó {p.usd ? usdFmt(p.usd) : money(p.amount)} el {ddmm(p.createdAt)}
                 </span>
               </span>
               <span className="flex items-center gap-3">
@@ -115,11 +117,16 @@ export function AbonoForm({ onClose, onSaved }: { onClose: () => void; onSaved: 
   const [bySessions, setBySessions] = useState(true);
   const [sessions, setSessions] = useState("");
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | null>(null);
+  const [method, setMethod] = useState<"efectivo" | "transferencia" | "tarjeta" | "dolares" | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const item = practices.find((p) => p.id === itemId);
-  const n = Number(amount || 0);
+  // En dólares: se escribe en US$ y así se guarda; en pesos (a la cotización) es el saldo del abono.
+  const [dolar] = useDolar();
+  const usdMode = method === "dolares";
+  const rate = dolar?.rate ?? null;
+  const usd = usdMode ? parseUsd(amount) : 0;
+  const n = usdMode ? Math.round(usd * (rate ?? 0)) : Number(amount || 0);
   const ses = Number(sessions || 0);
   const unit = bySessions ? (ses > 0 && n > 0 ? Math.round(n / ses) : 0) : (item?.price ?? 0);
   const ok = patient.trim() && item && n > 0 && method && (!bySessions || ses > 0);
@@ -128,10 +135,10 @@ export function AbonoForm({ onClose, onSaved }: { onClose: () => void; onSaved: 
     if (!ok || busy) return;
     setBusy(true);
     setErr("");
-    const r = await call("/api/prepaids", "POST", { patient, itemId, sessions: bySessions ? ses : null, amount: n, method });
+    const r = await call("/api/prepaids", "POST", { patient, itemId, sessions: bySessions ? ses : null, amount: n, method, ...(usdMode ? { usd, rate } : {}) });
     setBusy(false);
     if (!r.ok) return setErr(r.error ?? "No se pudo guardar.");
-    onSaved(`Abono · ${patient.trim()} · ${bySessions ? `${ses} sesiones de ` : ""}${item!.name} · ${money(n)}`);
+    onSaved(`Abono · ${patient.trim()} · ${bySessions ? `${ses} sesiones de ` : ""}${item!.name} · ${usdMode ? usdFmt(usd) : money(n)}`);
   }
 
   return (
@@ -181,12 +188,12 @@ export function AbonoForm({ onClose, onSaved }: { onClose: () => void; onSaved: 
             </label>
           )}
           <label className={`flex flex-col gap-1 ${bySessions ? "" : "col-span-2"}`}>
-            <span className="cl-label">Pagó</span>
+            <span className="cl-label">{usdMode ? "Pagó en dólares" : "Pagó"}</span>
             <input
-              value={amount ? `$ ${Number(amount).toLocaleString("es-AR")}` : ""}
-              onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
-              inputMode="numeric"
-              placeholder="$"
+              value={usdMode ? amount : amount ? `$ ${Number(amount).toLocaleString("es-AR")}` : ""}
+              onChange={(e) => setAmount(usdMode ? e.target.value.replace(/[^\d.,]/g, "") : e.target.value.replace(/\D/g, ""))}
+              inputMode={usdMode ? "decimal" : "numeric"}
+              placeholder={usdMode ? "US$" : "$"}
               className={`${FIELD} tabular-nums`}
             />
           </label>
@@ -201,12 +208,22 @@ export function AbonoForm({ onClose, onSaved }: { onClose: () => void; onSaved: 
         <div className="flex flex-col gap-1">
           <span className="cl-label">¿Cómo pagó? <span className="cl-hint">· solo el efectivo cuenta en la caja</span></span>
           <div className="flex flex-wrap gap-2">
-            {(["efectivo", "transferencia", "tarjeta"] as const).map((m) => (
-              <button key={m} type="button" aria-pressed={method === m} onClick={() => setMethod(m)} className={TOGGLE(method === m)}>
-                {m === "efectivo" ? "Efectivo" : m === "transferencia" ? "Transferencia" : "Tarjeta"}
+            {(["efectivo", "transferencia", "tarjeta", "dolares"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={method === m}
+                onClick={() => {
+                  if ((m === "dolares") !== usdMode) setAmount("");
+                  setMethod(m);
+                }}
+                className={TOGGLE(method === m)}
+              >
+                {m === "efectivo" ? "Efectivo" : m === "transferencia" ? "Transferencia" : m === "tarjeta" ? "Tarjeta" : "Dólares"}
               </button>
             ))}
           </div>
+          {usdMode && <span className="cl-hint">{rate ? "Se guarda en dólares; el precio por sesión queda en pesos a la cotización de hoy." : "Falta la cotización del dólar (arriba a la derecha)."}</span>}
         </div>
         {err && <p className="text-[13px] text-neutral-200">{err}</p>}
         <div className="flex flex-wrap gap-2">
@@ -215,7 +232,7 @@ export function AbonoForm({ onClose, onSaved }: { onClose: () => void; onSaved: 
             disabled={!ok || busy}
             className="inline-flex h-11 flex-1 items-center justify-center rounded-lg border border-accent bg-accent px-4 text-[14px] font-medium text-on-accent transition-opacity hover:opacity-85 disabled:opacity-40"
           >
-            {busy ? "Guardando…" : `Guardar${n ? ` · ${money(n)}` : ""}`}
+            {busy ? "Guardando…" : `Guardar${usdMode ? (usd ? ` · ${usdFmt(usd)}` : "") : n ? ` · ${money(n)}` : ""}`}
           </button>
           <button type="button" onClick={onClose} className="h-11 rounded-lg border border-neutral-800 px-4 text-[14px] text-neutral-300 hover:bg-accent-900">
             Cancelar

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { getSql } from "@/lib/db/connection";
 import { realNowIso } from "@/lib/domain/clock";
 import type { Actor } from "@/lib/domain/types";
+import { usdFrom } from "@/lib/domain/usd";
 
 /**
  * Egresos de plata (Decles): luz, insumos, un retiro… Los anota el equipo (no la médica) y los ve
@@ -12,17 +13,21 @@ export type Result<T> = ({ ok: true } & T) | { ok: false; error: string; status:
 
 export type Direction = "egreso" | "ingreso";
 const dirOf = (d: unknown): Direction => (d === "ingreso" ? "ingreso" : "egreso");
-/** Con qué se pagó (o entró): solo el efectivo toca la caja. */
-export type ExpenseMethod = "efectivo" | "transferencia" | "tarjeta";
-const methodOf = (m: unknown): ExpenseMethod => (m === "transferencia" || m === "tarjeta" ? m : "efectivo");
+/** Con qué se pagó (o entró): solo el efectivo toca la caja. `dolares` = en dólares (se cuenta aparte, en US$). */
+export type ExpenseMethod = "efectivo" | "transferencia" | "tarjeta" | "dolares";
+const methodOf = (m: unknown): ExpenseMethod => (m === "transferencia" || m === "tarjeta" || m === "dolares" ? m : "efectivo");
 
 export interface Expense {
   id: string;
   /** "ingreso" = ingreso extra (cambio, varios…); "egreso" = gasto. */
   direction: Direction;
   concept: string;
+  /** En pesos (en dólares: a la cotización de ese momento, solo para cuentas internas). */
   amount: number;
   method: ExpenseMethod;
+  /** En dólares: lo que entró o salió en US$ (así se muestra y se cuenta). */
+  usd: number | null;
+  rate: number | null;
   createdByName: string;
   createdAt: string;
   updatedByName: string | null;
@@ -36,6 +41,8 @@ const toExpense = (r: Row): Expense => ({
   concept: r.concept as string,
   amount: Number(r.amount),
   method: methodOf(r.method),
+  usd: r.usd === null || r.usd === undefined ? null : Number(r.usd),
+  rate: r.rate === null || r.rate === undefined ? null : Number(r.rate),
   createdByName: r.created_by_name as string,
   createdAt: r.created_at as string,
   updatedByName: (r.updated_by_name as string | null) ?? null,
@@ -48,14 +55,23 @@ function ctx(actor: Actor) {
   return { orgId, isAdmin: !!actor.activeOrg?.canAdmin };
 }
 
-function clean(v: { concept?: unknown; amount?: unknown }): { concept: string; amount: number } | string {
+function clean(v: { concept?: unknown; amount?: unknown; method?: unknown; usd?: unknown; rate?: unknown }): { concept: string; amount: number; usd: number | null; rate: number | null } | string {
   const concept = String(v.concept ?? "").trim().replace(/\s+/g, " ");
+  // En dólares: se guarda lo que fue en US$; los pesos salen de la cotización.
+  if (v.method === "dolares") {
+    const u = usdFrom(v);
+    if (!u) return "¿Cuántos dólares?";
+    if (typeof u === "string") return u;
+    if (!concept) return "Falta el concepto.";
+    if (concept.length > 120) return "El concepto es muy largo.";
+    return { concept: concept.charAt(0).toUpperCase() + concept.slice(1), amount: u.pesos, usd: u.usd, rate: u.rate };
+  }
   const amount = Number(v.amount);
   if (!concept) return "Falta el concepto.";
   if (concept.length > 120) return "El concepto es muy largo.";
   if (!Number.isInteger(amount) || amount <= 0) return "El importe tiene que ser un número entero de pesos.";
   if (amount > 1_000_000_000) return "Ese importe no parece correcto.";
-  return { concept: concept.charAt(0).toUpperCase() + concept.slice(1), amount };
+  return { concept: concept.charAt(0).toUpperCase() + concept.slice(1), amount, usd: null, rate: null };
 }
 
 export async function listExpenses(actor: Actor, from?: string, to?: string, direction: Direction = "egreso"): Promise<Result<{ expenses: Expense[]; total: number }>> {
@@ -73,14 +89,17 @@ export async function listExpenses(actor: Actor, from?: string, to?: string, dir
   return { ok: true, expenses, total: expenses.reduce((n, e) => n + e.amount, 0) };
 }
 
-export async function createExpense(actor: Actor, v: { concept?: unknown; amount?: unknown; direction?: unknown; method?: unknown }): Promise<Result<{ expense: Expense }>> {
+export async function createExpense(
+  actor: Actor,
+  v: { concept?: unknown; amount?: unknown; direction?: unknown; method?: unknown; usd?: unknown; rate?: unknown },
+): Promise<Result<{ expense: Expense }>> {
   const c = ctx(actor);
   if (!c) return fail("Los egresos los anota la secretaría o el admin.", 403);
   const x = clean(v);
   if (typeof x === "string") return fail(x);
   const rows = (await getSql()`
-    INSERT INTO expenses (id, organization_id, direction, concept, amount, method, created_by, created_by_name, created_at)
-    VALUES (${`egr_${randomUUID().slice(0, 8)}`}, ${c.orgId}, ${dirOf(v.direction)}, ${x.concept}, ${x.amount}, ${methodOf(v.method)}, ${actor.userId}, ${actor.name}, ${realNowIso()})
+    INSERT INTO expenses (id, organization_id, direction, concept, amount, method, usd, rate, created_by, created_by_name, created_at)
+    VALUES (${`egr_${randomUUID().slice(0, 8)}`}, ${c.orgId}, ${dirOf(v.direction)}, ${x.concept}, ${x.amount}, ${methodOf(v.method)}, ${x.usd}, ${x.rate}, ${actor.userId}, ${actor.name}, ${realNowIso()})
     RETURNING *`) as unknown as Row[];
   return { ok: true, expense: toExpense(rows[0]) };
 }
@@ -102,13 +121,18 @@ async function editable(actor: Actor, id: string, fromPrepaid = false) {
   return { ok: true as const, orgId: c.orgId };
 }
 
-export async function updateExpense(actor: Actor, id: string, v: { concept?: unknown; amount?: unknown; method?: unknown }): Promise<Result<{ expense: Expense }>> {
+export async function updateExpense(
+  actor: Actor,
+  id: string,
+  v: { concept?: unknown; amount?: unknown; method?: unknown; usd?: unknown; rate?: unknown },
+): Promise<Result<{ expense: Expense }>> {
   const e = await editable(actor, id);
   if (!e.ok) return e;
   const x = clean(v);
   if (typeof x === "string") return fail(x);
   const rows = (await getSql()`
-    UPDATE expenses SET concept = ${x.concept}, amount = ${x.amount}, method = COALESCE(${v.method === undefined ? null : methodOf(v.method)}::text, method), updated_at = ${realNowIso()}, updated_by_name = ${actor.name}
+    UPDATE expenses SET concept = ${x.concept}, amount = ${x.amount}, method = COALESCE(${v.method === undefined ? null : methodOf(v.method)}::text, method),
+      usd = ${x.usd}, rate = ${x.rate}, updated_at = ${realNowIso()}, updated_by_name = ${actor.name}
     WHERE id = ${id} AND organization_id = ${e.orgId} RETURNING *`) as unknown as Row[];
   return { ok: true, expense: toExpense(rows[0]) };
 }

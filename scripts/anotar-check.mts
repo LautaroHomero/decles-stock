@@ -27,7 +27,7 @@ export function route(t: string) {
   const dp = parseDepositNote(t, "2026-11-03"); if (dp) return { intent:"deposit", ...dp };
   const pyp = parsePayablePayment(t, payables); if (pyp) return { intent:"payablePay", ...pyp, payable: (pyp as any).payable?.id };
   const py = parsePayable(t, "2026-11-03T12:00"); if (py) return { intent:"payable", ...py };
-  const dpy = parseDebtPayment(t, debts); if (dpy) return { intent:"debtPay", debt:dpy.debts[0]?.id, amount:dpy.amount };
+  const dpy = parseDebtPayment(t, debts); if (dpy) return { intent:"debtPay", debt:dpy.debts[0]?.id, amount:dpy.amount, usd:dpy.usd };
   const ex = parseExpense(t); if (ex) return { intent:"expense", ...ex };
   const m = extractMoney(t, "2026-11-03");
   const n = parseNote(m.text, items, sellers);
@@ -150,6 +150,19 @@ const C: [string, Exp][] = [
   ["carla perez, consulta, ornella, pagó cuarenta y cinco mil por mp", {paid:45000, pay:"transferencia"}],
   ["carla perez, consulta, ornella, pagó con qr 45000", {paid:45000, pay:"transferencia"}],
   ["compré insumos por doscientos mil con tarjeta", {intent:"expense", amount:200000, method:"tarjeta"}],
+  // --- dólares: se guardan en US$
+  ["rebollo vanina dejó US$ 50 de seña para botox, viene el 10/11", {intent:"deposit", usd:50, method:"dolares"}],
+  ["vanina señó 50 dólares para botox", {intent:"deposit", usd:50}],
+  ["carla dejó un abono de 5 sesiones de venus freeze, pagó 300 dólares", {intent:"prepaid", usd:300, method:"dolares"}],
+  ["pagué 100 dólares de luz", {intent:"expense", usd:100, method:"dolares"}],
+  ["compré guantes por usd 40", {intent:"expense", usd:40}],
+  ["pagué 5000 de luz", {intent:"expense", amount:5000, direction:"egreso"}],
+  ["ingreso extra 15000 de cambio", {intent:"expense", amount:15000, direction:"ingreso"}],
+  ["puse 20000 en la caja", {intent:"expense", amount:20000, direction:"ingreso"}],
+  ["ingresaron 50 dólares de una venta", {intent:"expense", usd:50, method:"dolares", direction:"ingreso"}],
+  ["castucci pagó la deuda en dólares, 150", {intent:"debtPay", debt:"d2", usd:150}],
+  ["florencia cuevas trajo US$ 100 de lo que debía", {intent:"debtPay", debt:"d1", usd:100}],
+  ["carla perez botox, laura, 100 usd", {intent:"visit", split:{usd:100}}],
   // --- formas de contarlo
   ["ana rey, botox 2 zonas, laura", {patient:"Ana Rey", seller:"lau", q:[2]}],
   ["a ana rey le hicieron limpieza facial, gabi", {patient:"Ana Rey", seller:"gab", items:["Limpieza facial"]}],

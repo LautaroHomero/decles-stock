@@ -22,6 +22,8 @@ import {
   type SaleRow,
   methodTotals,
   usdFmt,
+  moneyUsd,
+  sumUsd,
   type PaymentsMap,
 } from "./shared";
 import { PlanillaView } from "./planilla-view";
@@ -144,11 +146,14 @@ export function VentasView({ actor }: { actor: Actor }) {
   const seesExpenses = !isMedico;
   const [exData, refreshEx] = usePoll<ExpensesResponse>(seesExpenses ? `/api/expenses?from=${from}&to=${to}` : null, 30_000);
   const expenses = seesExpenses && exData?.ok ? exData.expenses : [];
-  const outflow = expenses.reduce((n, e) => n + e.amount, 0);
+  // Lo que fue en dólares se cuenta en dólares, aparte.
+  const outSum = sumUsd(expenses);
+  const outflow = outSum.pesos;
   // Ingresos extras (cambio, varios…): también van en la planilla.
   const [inData] = usePoll<ExpensesResponse>(seesExpenses ? `/api/expenses?from=${from}&to=${to}&direction=ingreso` : null, 30_000);
   const incomes = seesExpenses && inData?.ok ? inData.expenses : [];
-  const inflow = incomes.reduce((n, e) => n + e.amount, 0);
+  const inSum = sumUsd(incomes);
+  const inflow = inSum.pesos;
   const [exEdit, setExEdit] = useState<Expense | null>(null);
 
   const sales = useMemo(() => data?.sales ?? [], [data]);
@@ -158,9 +163,11 @@ export function VentasView({ actor }: { actor: Actor }) {
   const patients = paidVisits.filter((v) => v.patient).length;
   const units = paid.filter((s) => s.kind === "producto").reduce((n, s) => n + s.quantity, 0);
   const practices = paid.filter((s) => s.kind !== "producto").reduce((n, s) => n + s.quantity, 0);
-  const total = paid.reduce((n, s) => n + charged(s), 0);
   // Por medio (las anotaciones con varios medios o en dólares se cuentan por sus partes).
   const mt = methodTotals(sales, data?.payments);
+  // Lo cobrado en dólares queda en dólares: no se suma a los pesos.
+  const total = paid.reduce((n, s) => n + charged(s), 0) - mt.dolares;
+  const totalUsd = mt.usd;
   const cash = mt.efectivo;
   const transfer = mt.transferencia;
   const card = mt.tarjeta;
@@ -170,17 +177,24 @@ export function VentasView({ actor }: { actor: Actor }) {
 
   // Mes / semana: un renglón por día con ventas (más reciente primero).
   const days = useMemo(() => {
-    const m = new Map<string, { total: number; visits: Set<string> }>();
+    const m = new Map<string, { total: number; usd: number; visits: Set<string>; sales: SaleRow[] }>();
     for (const s of sales) {
       if (s.status !== "paid") continue;
       const d = s.createdAt.slice(0, 10);
-      const cur = m.get(d) ?? { total: 0, visits: new Set<string>() };
+      const cur = m.get(d) ?? { total: 0, usd: 0, visits: new Set<string>(), sales: [] };
       cur.total += charged(s);
       cur.visits.add(s.visitId ?? s.id);
+      cur.sales.push(s);
       m.set(d, cur);
     }
+    // Lo del día en dólares, aparte de los pesos.
+    for (const x of m.values()) {
+      const t = methodTotals(x.sales, data?.payments);
+      x.total -= t.dolares;
+      x.usd = t.usd;
+    }
     return [...m.entries()].sort(([a], [b]) => b.localeCompare(a));
-  }, [sales]);
+  }, [sales, data]);
 
   function pick(p: Period) {
     setPeriod(p);
@@ -354,7 +368,7 @@ export function VentasView({ actor }: { actor: Actor }) {
         <div className="flex flex-col gap-1">
           <span className="text-[14px] text-neutral-400">Cobrado</span>
           <span className="font-display text-[22px] font-medium leading-none tracking-[-.02em] tabular-nums sm:text-[24px]">
-            {data ? money(total) : "…"}
+            {data ? moneyUsd(total, totalUsd) : "…"}
           </span>
           <span className="text-[14px] text-neutral-300">{data ? (paid.length ? counts.join(" · ") : "No se anotó nada.") : " "}</span>
         </div>
@@ -363,7 +377,7 @@ export function VentasView({ actor }: { actor: Actor }) {
             <Stat label="Efectivo" value={money(cash)} />
             <Stat label="Transferencia" value={money(transfer)} />
             <Stat label={PAYMENT_LABEL.tarjeta} value={money(card)} />
-            {mt.usd > 0 && <Stat label="Dólares" value={money(mt.dolares)} sub={usdFmt(mt.usd)} />}
+            {mt.usd > 0 && <Stat label="Dólares" value={usdFmt(mt.usd)} />}
             <Stat
               label="Sin cargar cómo pagó"
               value={unknown.length ? money(unknownCash) : "—"}
@@ -371,22 +385,22 @@ export function VentasView({ actor }: { actor: Actor }) {
             />
           </div>
         )}
-        {(outflow > 0 || inflow > 0) && (
+        {(outflow > 0 || inflow > 0 || outSum.usd > 0 || inSum.usd > 0) && (
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-neutral-800 pt-4 text-[14px]">
             <span className="flex flex-wrap gap-x-4 text-neutral-400">
-              {inflow > 0 && (
+              {(inflow > 0 || inSum.usd > 0) && (
                 <span>
-                  Ingresos extras <span className="tabular-nums text-neutral-300">+ {money(inflow)}</span>
+                  Ingresos extras <span className="tabular-nums text-neutral-300">+ {moneyUsd(inflow, inSum.usd)}</span>
                 </span>
               )}
-              {outflow > 0 && (
+              {(outflow > 0 || outSum.usd > 0) && (
                 <span>
-                  Egresos <span className="tabular-nums text-neutral-300">− {money(outflow)}</span>
+                  Egresos <span className="tabular-nums text-neutral-300">− {moneyUsd(outflow, outSum.usd)}</span>
                 </span>
               )}
             </span>
             <span>
-              Queda <b className="font-medium tabular-nums">{money(total + inflow - outflow)}</b>
+              Queda <b className="font-medium tabular-nums">{moneyUsd(total + inflow - outflow, Math.round((totalUsd + inSum.usd - outSum.usd) * 100) / 100)}</b>
             </span>
           </div>
         )}
@@ -444,7 +458,7 @@ export function VentasView({ actor }: { actor: Actor }) {
                     {x.visits.size} {x.visits.size === 1 ? "anotación" : "anotaciones"}
                   </span>
                 </span>
-                <span className="text-[14px] font-medium tabular-nums">{money(x.total)}</span>
+                <span className="text-[14px] font-medium tabular-nums">{moneyUsd(x.total, x.usd)}</span>
                 <CaretRightIcon size={18} className="text-neutral-500" />
               </button>
             ))}
@@ -463,7 +477,7 @@ export function VentasView({ actor }: { actor: Actor }) {
                   {e.concept}
                   <span className="text-neutral-500"> · {e.createdByName}</span>
                 </span>
-                <span className="whitespace-nowrap tabular-nums text-neutral-300">+ {money(e.amount)}</span>
+                <span className="whitespace-nowrap tabular-nums text-neutral-300">+ {e.usd ? usdFmt(e.usd) : money(e.amount)}</span>
               </div>
             ))}
           </div>
@@ -488,7 +502,7 @@ export function VentasView({ actor }: { actor: Actor }) {
                     {e.concept}
                     <span className="text-neutral-500"> · {e.createdByName}</span>
                   </span>
-                  <span className="whitespace-nowrap tabular-nums text-neutral-300">− {money(e.amount)}</span>
+                  <span className="whitespace-nowrap tabular-nums text-neutral-300">− {e.usd ? usdFmt(e.usd) : money(e.amount)}</span>
                 </button>
               );
             })}

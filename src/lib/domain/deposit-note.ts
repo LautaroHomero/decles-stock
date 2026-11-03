@@ -1,4 +1,4 @@
-import { spelledToDigits } from "./spoken-numbers";
+import { spelledToDigits, usdAmountIn } from "./spoken-numbers";
 import { parseReminder, todayAR } from "./reminder-note";
 
 /**
@@ -22,18 +22,22 @@ function pesos(raw: string): number {
 export const USES_DEPOSIT = /\b(?:con|tenia|tiene|usa|uso|descontar|desconta|descontale|menos)\s+(?:la\s+|su\s+|una\s+)?sena\b|\b(?:pago|pagan|paga|abono)\s+(?:el\s+)?(?:resto|saldo|restante)\b/;
 
 export interface DepositNote {
+  /** En pesos (0 si fue en dólares: lo calcula la pantalla con la cotización). */
   amount: number;
+  /** «dejó US$ 50 de seña»: en dólares. */
+  usd: number | null;
   /** Día del turno (AAAA-MM-DD). */
   dueOn: string | null;
-  method: "efectivo" | "transferencia" | "tarjeta" | null;
+  method: "efectivo" | "transferencia" | "tarjeta" | "dolares" | null;
 }
 
 export function parseDepositNote(input: string, today: string = todayAR()): DepositNote | null {
   const text = spelledToDigits(input);
   const n = norm(text);
   if (!/\bsen(?:a|o|aron|amos)\b/.test(n) || USES_DEPOSIT.test(n)) return null;
-  const amounts = [...n.matchAll(AMOUNT)].map((m) => pesos(m[1])).filter((v) => v >= 500);
-  if (!amounts.length) return null;
+  const u = usdAmountIn(text);
+  const amounts = u ? [] : [...n.matchAll(AMOUNT)].map((m) => pesos(m[1])).filter((v) => v >= 500);
+  if (!amounts.length && !u) return null;
   const date = parseReminder(n, today);
   const method = /\b(?:transferencia|transf\w*|mp|mercado\s*pago)\b/.test(n)
     ? "transferencia"
@@ -43,7 +47,8 @@ export function parseDepositNote(input: string, today: string = todayAR()): Depo
         ? "efectivo"
         : null;
   const dueOn = date?.remindOn ?? (/\b(?:viene|vienen|turno|para)\s+(?:el\s+dia\s+de\s+)?hoy\b/.test(n) ? today : null);
-  return { amount: Math.max(...amounts), dueOn, method };
+  if (u) return { amount: 0, usd: u.usd, dueOn, method: "dolares" };
+  return { amount: Math.max(...amounts), usd: null, dueOn, method };
 }
 
 const STOP = new Set(
