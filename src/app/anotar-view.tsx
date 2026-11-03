@@ -319,7 +319,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   // Egresos de plata: los anota la secretaría o el admin.
   const canExpense = !isMedico;
   const [expensesData, refreshExpenses] = usePoll<ExpensesResponse>("/api/expenses", 30_000);
-  const [expenseForm, setExpenseForm] = useState<{ expense?: Expense; initial?: { concept: string; amount: number } } | null>(null);
+  const [expenseForm, setExpenseForm] = useState<{ expense?: Expense; direction?: "egreso" | "ingreso"; initial?: { concept: string; amount: number; method?: "efectivo" | "transferencia" | "tarjeta" } } | null>(null);
 
   const items: Item[] = useMemo(() => {
     const practices = (catalog?.practices ?? []).map((p): Item => ({ id: p.id, name: p.name, kind: "practica", price: p.price, cardPrice: p.cardPrice, providerIds: p.providerIds ?? [], pct: p.commissionPct, cuts: p.providerCuts }));
@@ -796,12 +796,13 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
 
   async function saveExpense() {
     if (!expense || busy) return;
-    if (!expense.concept || !expense.amount) return setExpenseForm({ initial: expense });
+    if (!expense.concept || !expense.amount) return setExpenseForm({ initial: expense, direction: expense.direction });
     setBusy(true);
     const r = await call("/api/expenses", "POST", expense);
     setBusy(false);
-    if (!r.ok) return showToast(r.error ?? "No se pudo anotar el egreso.");
-    expenseDone(`Gasto anotado: ${expense.concept}, ${money(expense.amount)}.`);
+    const ingreso = expense.direction === "ingreso";
+    if (!r.ok) return showToast(r.error ?? (ingreso ? "No se pudo anotar el ingreso." : "No se pudo anotar el egreso."));
+    expenseDone(`${ingreso ? "Ingreso extra anotado" : "Gasto anotado"}: ${expense.concept}, ${money(expense.amount)}.`);
   }
 
   function expenseDone(msg: string) {
@@ -1511,6 +1512,17 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                 </>
                 )}
               </Understood>
+            ) : expense?.direction === "ingreso" ? (
+              <Understood tone="in" icon={<ArrowDownIcon size={20} weight="bold" />} title="Ingreso extra" note={expense.method === "efectivo" ? "Entra a la caja" : expense.method === "tarjeta" ? "Con tarjeta: no entra a la caja" : "Por transferencia: no entra a la caja"}>
+                <div className="flex items-baseline justify-between gap-3">
+                  <b className="text-[20px] font-semibold leading-tight">{expense.concept}</b>
+                  {!!expense.amount && <span className="whitespace-nowrap text-[20px] font-semibold tabular-nums">+ {money(expense.amount)}</span>}
+                </div>
+                {!expense.amount && <Missing>Falta cuánto entró</Missing>}
+                <button onClick={() => setExpenseForm({ initial: expense, direction: "ingreso" })} className="self-start text-[15px] text-neutral-400 underline-offset-4 hover:text-fg hover:underline">
+                  Cambiar detalles
+                </button>
+              </Understood>
             ) : expense ? (
               <Understood tone="out" icon={<ArrowUpIcon size={20} weight="bold" />} title="Gasto" note={expense.method === "efectivo" ? "Sale de la caja" : expense.method === "tarjeta" ? "Con tarjeta: no sale de la caja" : "Por transferencia: no sale de la caja"}>
                 <div className="flex items-baseline justify-between gap-3">
@@ -1623,7 +1635,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     </div>
                     {giftCardKind === "treatment" && (
                       <label className="flex flex-col gap-1">
-                        <span className="text-[13px] text-neutral-400">Tratamiento incluido</span>
+                        <span className="cl-label">Tratamiento incluido</span>
                         <select value={giftCardTreatmentId} onChange={(e) => setGiftCardTreatmentId(e.target.value)} className="min-h-11 rounded-lg border border-neutral-700 bg-surface px-3 text-[14px] text-fg">
                           <option value="">Elegí un tratamiento…</option>
                           {(catalog?.practices ?? []).map((p) => <option key={p.id} value={p.id}>{p.name} · {money(p.price)}</option>)}
@@ -1632,7 +1644,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                       </label>
                     )}
                     <label className="flex flex-col gap-1">
-                      <span className="text-[13px] text-neutral-400">Comprador (opcional)</span>
+                      <span className="cl-label">Comprador <span className="cl-hint">(opcional)</span></span>
                       <input value={giftCardBuyer} onChange={(e) => setGiftCardBuyer(e.target.value)} placeholder="Nombre de quien compra" className="min-h-11 rounded-lg border border-neutral-700 bg-surface px-3 text-[14px] text-fg" />
                     </label>
                   </div>
@@ -1867,7 +1879,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
             ) : (
               <p className="text-[14px] text-neutral-400">
                 Sirve para pacientes y para ventas. Ej: «Gabriela vendió 2 cremas con tarjeta»
-                {canExpense && <> · y para gastos: «pagué 5000 de luz»</>}.
+                {canExpense && <> · para gastos: «pagué 5000 de luz» · para ingresos extra: «ingreso extra 5000 cambio»</>}.
               </p>
             )}
 
@@ -1885,7 +1897,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                       : newPayable
                         ? !payableReady || busy
                         : payout ? payoutAmount <= 0 || busy : debtPay ? !payingDebt || !debtMethod || busy : newDebt || expense ? busy : !canSave || busy || loading}
-              className={debtPay || newPrepaid || newDeposit ? CTA_IN : provDebt || newDebt || payablePay || newPayable || payout || expense ? CTA : CTA_IN}
+              className={debtPay || newPrepaid || newDeposit || expense?.direction === "ingreso" ? CTA_IN : provDebt || newDebt || payablePay || newPayable || payout || expense ? CTA : CTA_IN}
             >
               {busy
                 ? "Guardando…"
@@ -1923,8 +1935,10 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                       ? `Sí, anotar pago de ${money(payoutAmount)}`
                       : expense
                         ? expense.concept && expense.amount
-                          ? `Sí, anotar gasto de ${money(expense.amount)}`
-                          : "Completar el gasto"
+                          ? expense.direction === "ingreso"
+                            ? `Sí, anotar · entra ${money(expense.amount)}`
+                            : `Sí, anotar gasto de ${money(expense.amount)}`
+                          : expense.direction === "ingreso" ? "Completar el ingreso" : "Completar el gasto"
                         : !preview
                           ? "Guardar"
                           : nothing
@@ -2537,7 +2551,7 @@ function Confirm({
       )}
 
       <label className="flex flex-col gap-1">
-        <span className="text-[13px] text-neutral-400">Paciente</span>
+        <span className="cl-label">Paciente</span>
         <input
           value={draft.patient}
           onChange={(e) => setDraft({ ...draft, patient: e.target.value, patientUnsure: false })}

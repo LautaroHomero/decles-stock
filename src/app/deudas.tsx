@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { call, money, usePoll, PAYMENTS } from "./shared";
+import { call, money, usePoll, PAYMENTS, ToneTitle } from "./shared";
 import { ReminderPicker, remindLabel, todayYmd } from "./debt-reminder";
 
 /** Espejo de `Debt` / `DebtCollection` de src/lib/domain/debts.ts. */
@@ -90,8 +90,10 @@ export function DebtsCard({ canAnul, onChange, showToast }: { canAnul: boolean; 
   return (
     <section className="flex flex-col rounded-xl border border-neutral-800">
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-2 pt-3">
-        <h2 className="text-[14px] font-medium">Deudas</h2>
-        {debts.length > 0 && <span className="text-[13px] text-neutral-400">Te deben {money(data?.total ?? 0)}</span>}
+        <ToneTitle tone="owe">
+          Nos deben <span className="font-normal text-neutral-500">· pacientes que quedaron debiendo</span>
+        </ToneTitle>
+        {debts.length > 0 && <span className="text-[13px] font-medium text-owe">Te deben {money(data?.total ?? 0)}</span>}
       </div>
       {!data ? (
         <p className="px-4 pb-3 text-neutral-500">Cargando…</p>
@@ -115,7 +117,7 @@ export function DebtsCard({ canAnul, onChange, showToast }: { canAnul: boolean; 
                   )}
                 </span>
                 <span className="flex items-center gap-3">
-                  <span className="whitespace-nowrap font-medium tabular-nums">{money(d.remaining)}</span>
+                  <span className="whitespace-nowrap font-medium tabular-nums text-owe">{money(d.remaining)}</span>
                   {paying !== d.id && (
                     <button
                       onClick={() => {

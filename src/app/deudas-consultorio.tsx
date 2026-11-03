@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { PlusIcon } from "@phosphor-icons/react";
-import { call, money, usePoll } from "./shared";
+import { call, money, usePoll, AddButton, ToneTitle } from "./shared";
 import { remindLabel } from "./debt-reminder";
 
 /** Espejo de `Payable` de src/lib/domain/payables.ts. */
@@ -131,16 +130,16 @@ export function PayableForm({ onClose, onSaved }: { onClose: () => void; onSaved
           <h2 className="font-display text-[18px] font-medium tracking-[-.01em]">Anotar algo que debemos</h2>
           <p className="text-[13px] text-neutral-400">A un proveedor, el alquiler, un servicio… Te aviso hasta que se pague.</p>
         </div>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">¿A quién?</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">¿A quién?</span>
           <input autoFocus value={creditor} onChange={(e) => setCreditor(e.target.value)} placeholder="Ej. Distribuidora" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">¿Por qué? (opcional)</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">¿Por qué? <span className="cl-hint">(opcional)</span></span>
           <input value={concept} onChange={(e) => setConcept(e.target.value)} placeholder="Ej. Insumos de octubre" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">¿Cuánto?</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">¿Cuánto?</span>
           <input
             value={amount ? `$ ${Number(amount).toLocaleString("es-AR")}` : ""}
             onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
@@ -150,7 +149,7 @@ export function PayableForm({ onClose, onSaved }: { onClose: () => void; onSaved
           />
         </label>
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">¿Cuándo te aviso?</span>
+          <span className="cl-label">¿Cuándo te aviso?</span>
           <PayableReminderPicker
             mode={mode}
             at={at}
@@ -236,12 +235,14 @@ export function PayablesCard({ onChange, showToast, canAnul }: { onChange: () =>
         />
       )}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-2 pt-3">
-        <h2 className="text-[14px] font-medium">Lo que debemos</h2>
+        <ToneTitle tone="owe">
+          Lo que debemos <span className="font-normal text-neutral-500">· proveedores, alquiler, servicios</span>
+        </ToneTitle>
         <span className="flex items-center gap-4">
-          {list.length > 0 && <span className="text-[13px] text-neutral-400">Total {money(data?.total ?? 0)}</span>}
-          <button onClick={() => setAdding(true)} className="cl-no-print inline-flex items-center gap-1 text-[13px] text-neutral-400 hover:text-fg">
-            <PlusIcon size={12} weight="bold" /> Deuda
-          </button>
+          {list.length > 0 && <span className="text-[13px] font-medium text-owe">Total {money(data?.total ?? 0)}</span>}
+          <AddButton tone="owe" onClick={() => setAdding(true)}>
+            Algo que debemos
+          </AddButton>
         </span>
       </div>
       {!data ? (
@@ -265,7 +266,7 @@ export function PayablesCard({ onChange, showToast, canAnul }: { onChange: () =>
                   <span className={`block text-[12.5px] ${p.due ? "font-medium text-warn" : "text-neutral-400"}`}>Aviso: {payableRemindText(p.remindMode, p.remindAt)}</span>
                 </span>
                 <span className="flex items-center gap-3">
-                  <span className="whitespace-nowrap font-medium tabular-nums">{money(p.remaining)}</span>
+                  <span className="whitespace-nowrap font-medium tabular-nums text-owe">{money(p.remaining)}</span>
                   {paying !== p.id && (
                     <button
                       onClick={() => {

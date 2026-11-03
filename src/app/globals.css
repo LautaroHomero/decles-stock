@@ -10,7 +10,7 @@
  * 800 = bordes, 400 = texto secundario, 300/200 = texto sobre tintes).
  *
  * Excepciones al monocromo: la esfera del dictado (ver `.cl-orb`) y los colores con
- * significado, siempre sutiles: `in` = plata que entra (verde), `owe` = deuda (óxido),
+ * significado, siempre sutiles: `in` = plata que entra (verde), `owe` = deuda (rojo suave),
  * `warn` = falta un dato (ámbar). Nada más lleva color.
  */
 
@@ -57,7 +57,9 @@
   --cl-in-bg: rgba(76, 195, 138, 0.1);
   --cl-in-line: rgba(76, 195, 138, 0.38);
   --cl-in-fg: #7fd8aa;
-  --cl-owe: #ec9a72;
+  --cl-owe: #f08a80;
+  --cl-owe-bg: rgba(240, 138, 128, 0.1);
+  --cl-owe-line: rgba(240, 138, 128, 0.38);
   --cl-warn: #e6b866;
 }
 
@@ -74,16 +76,16 @@
   --cl-on-success: #fafafa;
   --cl-tag-bg: #ececec;
   --cl-tag-fg: #1f1f1f;
-  --cl-divider: rgba(10, 10, 10, 0.12);
+  --cl-divider: rgba(10, 10, 10, 0.16);
   --cl-n100: #0f0f0f;
   --cl-n200: #1f1f1f;
-  --cl-n300: #333333;
-  --cl-n400: #5c5c5c;
-  --cl-n500: #737373;
-  --cl-n600: #8f8f8f;
-  --cl-n700: #bdbdbd;
-  --cl-n800: #e3e3e3;
-  --cl-n900: #f0f0f0;
+  --cl-n300: #2b2b2b;
+  --cl-n400: #474747;
+  --cl-n500: #5e5e5e;
+  --cl-n600: #7a7a7a;
+  --cl-n700: #b0b0b0;
+  --cl-n800: #d6d6d6;
+  --cl-n900: #ededed;
   --cl-a100: #0a0a0a;
   --cl-a200: #141414;
   --cl-a300: #1f1f1f;
@@ -93,16 +95,18 @@
   --cl-a700: #bdbdbd;
   --cl-a800: #e0e0e0;
   --cl-a900: #f0f0f0;
-  --cl-shadow-sm: 0 0 0 1px #e3e3e3;
-  --cl-shadow-md: 0 0 0 1px #e3e3e3, 0 8px 24px rgba(0, 0, 0, 0.06);
+  --cl-shadow-sm: 0 0 0 1px #d6d6d6;
+  --cl-shadow-md: 0 0 0 1px #d6d6d6, 0 8px 24px rgba(0, 0, 0, 0.06);
   --cl-shadow-lg: 0 0 0 1px #dcdcdc, 0 16px 40px rgba(0, 0, 0, 0.08);
   --cl-ring: rgba(10, 10, 10, 0.35);
-  --cl-in: #1f7a4d;
+  --cl-in: #15803d;
   --cl-on-in: #ffffff;
-  --cl-in-bg: #eef7f1;
-  --cl-in-line: #cfe7d8;
-  --cl-in-fg: #145234;
-  --cl-owe: #9a3b12;
+  --cl-in-bg: #e8f6ed;
+  --cl-in-line: #9fd5b3;
+  --cl-in-fg: #11602f;
+  --cl-owe: #c4231a;
+  --cl-owe-bg: #fdeceb;
+  --cl-owe-line: #f0aaa4;
   --cl-warn: #8a4a0e;
 }
 
@@ -125,6 +129,8 @@
   --color-in-line: var(--cl-in-line);
   --color-in-fg: var(--cl-in-fg);
   --color-owe: var(--cl-owe);
+  --color-owe-bg: var(--cl-owe-bg);
+  --color-owe-line: var(--cl-owe-line);
   --color-warn: var(--cl-warn);
 
   --color-neutral-100: var(--cl-n100);
@@ -357,3 +363,35 @@
 .cl-pop { animation: cl-pop 0.45s cubic-bezier(.2,.9,.3,1.2) both; }
 .cl-fade-in { animation: cl-fade-in 0.2s ease both; }
 .cl-flash-row { animation: cl-flash-row 2.4s ease-out both; }
+
+/* Formularios: la pregunta de cada campo se lee bien («¿A quién?»); la aclaración va al lado, más tenue. */
+.cl-label {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--cl-n200);
+}
+.cl-hint {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--cl-n500);
+}
+
+/*
+ * Tema claro: sobre blanco, Inter se ve fina. Las negritas suben un punto (medium → semibold), el texto común
+ * gana cuerpo (sin el suavizado que lo adelgaza) y las preguntas de los formularios van casi negras.
+ */
+:root[data-theme="light"] body {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+:root[data-theme="light"] .font-medium {
+  font-weight: 600;
+}
+:root[data-theme="light"] .cl-label {
+  font-weight: 600;
+  color: var(--cl-n100);
+}
+:root[data-theme="light"] .cl-hint {
+  color: var(--cl-n500);
+}

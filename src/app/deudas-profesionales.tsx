@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { call, money, usePoll } from "./shared";
+import { call, money, usePoll, ToneTitle } from "./shared";
 
 /** Espejo de `ProviderDebt` de src/lib/domain/payouts.ts. */
 export interface ProviderDebtRow {
@@ -68,8 +68,8 @@ export function ProviderDebtsCard({
   return (
     <section className="flex flex-col rounded-xl border border-neutral-800">
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-2 pt-3">
-        <h2 className="text-[14px] font-medium">{theirs ? "Nos deben los profesionales" : "Le debemos a profesionales"}</h2>
-        <span className="text-[13px] text-neutral-400">Total {money(data.total)}</span>
+        <ToneTitle tone="owe">{theirs ? "Nos deben los profesionales" : "Le debemos a profesionales"}</ToneTitle>
+        <span className="text-[13px] font-medium text-owe">Total {money(data.total)}</span>
       </div>
       <ul className="flex flex-col">
         {debts.map((d) => (
@@ -83,7 +83,7 @@ export function ProviderDebtsCard({
                 </span>
               </span>
               <span className="flex items-center gap-3">
-                <span className="whitespace-nowrap font-medium tabular-nums">{money(d.remaining)}</span>
+                <span className="whitespace-nowrap font-medium tabular-nums text-owe">{money(d.remaining)}</span>
                 {paying !== d.id && (
                   <button
                     onClick={() => {

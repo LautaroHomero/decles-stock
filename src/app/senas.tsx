@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { PlusIcon } from "@phosphor-icons/react";
-import { call, money, usePoll, type CatalogResponse } from "./shared";
+import { call, money, usePoll, type CatalogResponse, AddButton, ToneTitle } from "./shared";
 import { remindLabel } from "./debt-reminder";
 
 /** Espejo de `Deposit` de src/lib/domain/deposits.ts. */
@@ -61,12 +60,12 @@ export function SenaForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
           <h2 className="font-display text-[18px] font-medium tracking-[-.01em]">Anotar una seña</h2>
           <p className="text-[13px] text-neutral-400">Entra a la caja hoy. El día que viene se descuenta: paga solo el resto y no queda deuda.</p>
         </div>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">Paciente</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">Paciente</span>
           <input autoFocus value={patient} onChange={(e) => setPatient(e.target.value)} placeholder="Nombre y apellido" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">Práctica</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">Práctica</span>
           <select value={itemId} onChange={(e) => setItemId(e.target.value)} className={FIELD}>
             <option value="">Todavía no se sabe</option>
             {practices.map((p) => (
@@ -77,8 +76,8 @@ export function SenaForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
           </select>
         </label>
         <div className="grid grid-cols-2 gap-3">
-          <label className="flex flex-col gap-1">
-            <span className="text-[12px] text-neutral-400">Seña</span>
+          <label className="flex flex-col gap-1.5">
+            <span className="cl-label">Seña</span>
             <input
               value={amount ? `$ ${Number(amount).toLocaleString("es-AR")}` : ""}
               onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
@@ -87,14 +86,14 @@ export function SenaForm({ onClose, onSaved }: { onClose: () => void; onSaved: (
               className={`${FIELD} tabular-nums`}
             />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[12px] text-neutral-400">Viene el</span>
+          <label className="flex flex-col gap-1.5">
+            <span className="cl-label">Viene el</span>
             <input type="date" value={dueOn} onChange={(e) => setDueOn(e.target.value)} className={`${FIELD} [color-scheme:light_dark]`} />
           </label>
         </div>
         {item && n > 0 && <p className="text-[13px] text-neutral-400">Ese día paga el resto: {money(Math.max(0, item.price - n))}.</p>}
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">¿Cómo pagó la seña? · solo el efectivo cuenta en la caja</span>
+          <span className="cl-label">¿Cómo pagó la seña? <span className="cl-hint">· solo el efectivo cuenta en la caja</span></span>
           <div className="flex flex-wrap gap-2">
             {(["efectivo", "transferencia", "tarjeta"] as const).map((m) => (
               <button key={m} type="button" aria-pressed={method === m} onClick={() => setMethod(m)} className={TOGGLE(method === m)}>
@@ -158,13 +157,15 @@ export function SenasCard({ onChange, showToast, canAdd = true }: { onChange: ()
         />
       )}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-2 pt-3">
-        <h2 className="text-[14px] font-medium">Señas</h2>
+        <ToneTitle tone="in">
+          Señas <span className="font-normal text-neutral-500">· dejan plata antes del turno</span>
+        </ToneTitle>
         <span className="flex items-center gap-4">
           {list.length > 0 && <span className="text-[13px] text-neutral-400">Sin usar {money(data?.total ?? 0)}</span>}
           {canAdd && (
-            <button onClick={() => setAdding(true)} className="cl-no-print inline-flex items-center gap-1 text-[13px] text-neutral-400 hover:text-fg">
-              <PlusIcon size={12} weight="bold" /> Seña
-            </button>
+            <AddButton tone="in" onClick={() => setAdding(true)}>
+              Anotar seña
+            </AddButton>
           )}
         </span>
       </div>

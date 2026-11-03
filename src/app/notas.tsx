@@ -96,13 +96,13 @@ export function NoteDialog({
           )}
         </div>
         {!visit && (
-          <label className="flex flex-col gap-1">
-            <span className="text-[12px] text-neutral-400">Paciente</span>
+          <label className="flex flex-col gap-1.5">
+            <span className="cl-label">Paciente</span>
             <input autoFocus={!patient} value={patient} onChange={(e) => setPatient(e.target.value)} placeholder="Ej. Carla Pérez" className={FIELD} />
           </label>
         )}
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">Nota</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">Nota</span>
           <textarea
             autoFocus={!!patient || !!visit}
             value={text}

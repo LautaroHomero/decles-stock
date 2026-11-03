@@ -1,11 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CaretLeftIcon, CaretRightIcon, PlusIcon } from "@phosphor-icons/react";
+import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import { fmtSigned, toRows } from "./planilla-view";
-import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type Payment, type PaymentsMap, type SaleMethod, type SaleRow, methodTotals, outsideOf, usdFmt } from "./shared";
+import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type Payment, type PaymentsMap, type SaleMethod, type SaleRow, methodTotals, outsideOf, usdFmt, AddButton } from "./shared";
 import { DebtsCard, type DebtCollectionRow, type DebtRow } from "./deudas";
 import { ProviderDebtsCard } from "./deudas-profesionales";
 import { CuentasProfesionales, type Balance } from "./cuentas-profesionales";
@@ -291,12 +291,10 @@ export function CierreSheet({ actor }: { actor: Actor }) {
             action={
               canEdit && (
                 <span className="cl-no-print flex gap-3">
-                  <button onClick={() => setForm({ direction: "ingreso" })} className="inline-flex items-center gap-1 text-[13px] text-neutral-400 hover:text-fg">
-                    <PlusIcon size={12} weight="bold" /> Ingreso extra
-                  </button>
-                  <button onClick={() => setForm({ direction: "egreso" })} className="inline-flex items-center gap-1 text-[13px] text-neutral-400 hover:text-fg">
-                    <PlusIcon size={12} weight="bold" /> Egreso
-                  </button>
+                  <AddButton tone="in" onClick={() => setForm({ direction: "ingreso" })}>
+                    Ingreso extra
+                  </AddButton>
+                  <AddButton onClick={() => setForm({ direction: "egreso" })}>Egreso</AddButton>
                 </span>
               )
             }

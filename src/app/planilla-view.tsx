@@ -408,7 +408,7 @@ function AreaSection({
                       <span className="block text-[12px] font-normal text-neutral-400">+ seña {money(abonos.depositUsed.get(r.key)!.amount)}</span>
                     )}
                     {r.debt && (
-                      <span className="block text-[12px] font-normal text-neutral-400">
+                      <span className={`block text-[12px] font-normal ${r.debt.remaining ? "text-owe" : "text-neutral-400"}`}>
                         {r.debt.remaining ? `debe ${money(r.debt.remaining)}` : `pagó la deuda (${money(r.debt.amount)})`}
                       </span>
                     )}

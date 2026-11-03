@@ -28,8 +28,8 @@ const AREA: Record<Area, string> = { medicos: "Médicos", kinesiologia: "Kinesio
 /** Sección de la planilla donde aparece la profesional. */
 function AreaField({ value, onChange }: { value: Area; onChange: (a: Area) => void }) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[12px] text-neutral-400">Área en la planilla</span>
+    <label className="flex flex-col gap-1.5">
+      <span className="cl-label">Área en la planilla</span>
       <select value={value} onChange={(e) => onChange(e.target.value as Area)} className={FIELD}>
         {(Object.keys(AREA) as Area[]).map((a) => (
           <option key={a} value={a}>
@@ -187,30 +187,30 @@ function MemberRow({
       {editing && (
         <div className="flex animate-cl-in flex-col gap-3 border-t border-neutral-800 px-4 py-3.5">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="text-[12px] text-neutral-400">Nombre</span>
+            <label className="flex flex-col gap-1.5">
+              <span className="cl-label">Nombre</span>
               <input value={name} onChange={(e) => setName(e.target.value)} className={FIELD} />
             </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-[12px] text-neutral-400">Email (para recuperar la contraseña)</span>
+            <label className="flex flex-col gap-1.5">
+              <span className="cl-label">Email <span className="cl-hint">(para recuperar la contraseña)</span></span>
               <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoCapitalize="none" placeholder="opcional" className={FIELD} />
             </label>
             {m.role === "medico" &&
               (admin ? (
                 <div className="flex flex-col gap-1">
-                  <span className="text-[12px] text-neutral-400">Comisión</span>
+                  <span className="cl-label">Comisión</span>
                   <span className="py-1.5 text-[13px] text-neutral-300">Sin comisión: es admin, lo suyo va todo al consultorio.</span>
                 </div>
               ) : (
-                <label className="flex flex-col gap-1">
-                  <span className="text-[12px] text-neutral-400">Comisión (%) · salvo que la práctica o el producto tenga la suya</span>
+                <label className="flex flex-col gap-1.5">
+                  <span className="cl-label">Comisión (%) <span className="cl-hint">· salvo que la práctica o el producto tenga la suya</span></span>
                   <input value={pct} onChange={(e) => setPct(e.target.value.replace(/[^\d.,]/g, ""))} inputMode="decimal" className={FIELD} />
                 </label>
               ))}
             {m.role === "medico" && <AreaField value={area} onChange={setArea} />}
             {m.role === "medico" && (
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span className="text-[12px] text-neutral-400">Apodos (para la hoja de ventas, separados por coma)</span>
+              <label className="flex flex-col gap-1.5 sm:col-span-2">
+                <span className="cl-label">Apodos <span className="cl-hint">(para la hoja de ventas, separados por coma)</span></span>
                 <input value={aliases} onChange={(e) => setAliases(e.target.value)} placeholder="Ej. pili, pilu" className={FIELD} />
                 <span className="text-[11.5px] text-neutral-500">Los diminutivos comunes («lau», «laurita») ya se entienden solos.</span>
               </label>
@@ -315,8 +315,8 @@ function NewMemberForm({
         ))}
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">Nombre y apellido</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">Nombre y apellido</span>
           <input
             autoFocus
             value={f.name}
@@ -325,17 +325,17 @@ function NewMemberForm({
             className={FIELD}
           />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">Usuario (para entrar)</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">Usuario <span className="cl-hint">(para entrar)</span></span>
           <input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value.toLowerCase().replace(/\s/g, "") })} autoCapitalize="none" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">Email (opcional)</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">Email <span className="cl-hint">(opcional)</span></span>
           <input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoCapitalize="none" placeholder="Para recuperar la contraseña" className={FIELD} />
         </label>
         {f.role === "medico" && (
-          <label className="flex flex-col gap-1">
-            <span className="text-[12px] text-neutral-400">Comisión (%) · salvo que la práctica o el producto tenga la suya</span>
+          <label className="flex flex-col gap-1.5">
+            <span className="cl-label">Comisión (%) <span className="cl-hint">· salvo que la práctica o el producto tenga la suya</span></span>
             <input value={f.pct} onChange={(e) => setF({ ...f, pct: e.target.value.replace(/[^\d.,]/g, "") })} inputMode="decimal" placeholder="Ej. 10" className={FIELD} />
           </label>
         )}

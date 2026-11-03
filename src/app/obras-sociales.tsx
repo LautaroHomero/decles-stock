@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { PlusIcon } from "@phosphor-icons/react";
-import { call, money, usePoll } from "./shared";
+import { call, money, usePoll, AddButton } from "./shared";
 
 interface Insurer {
   id: string;
@@ -55,9 +54,7 @@ export function ObrasSociales({ showToast }: { showToast: (m: string) => void })
           <p className="text-[13px] text-neutral-400">Por estas no entra plata: la profesional que atiende se lleva un monto fijo por atención.</p>
         </div>
         {!adding && (
-          <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1 text-[13px] text-neutral-400 hover:text-fg">
-            <PlusIcon size={12} weight="bold" /> Agregar
-          </button>
+          <AddButton onClick={() => setAdding(true)}>Obra social</AddButton>
         )}
       </div>
       <ul className="flex flex-col rounded-xl border border-neutral-800">

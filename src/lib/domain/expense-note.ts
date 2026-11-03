@@ -3,12 +3,15 @@ import { spelledToDigits } from "./spoken-numbers";
  * ¿Lo escrito en Anotar es un egreso de plata? «pagué 5000 de luz», «gasto 12.500 insumos»,
  * «retiro 50 mil», «egreso: alquiler 300000». Devuelve concepto e importe (0 si no se entendió).
  * Solo palabras en primera persona o impersonales: «la paciente pagó con tarjeta» NO es un egreso.
+ * También ingresos extras (plata que entra y no es de un paciente): «ingreso extra 5000 cambio»,
+ * «entraron 10000 de cambio», «puse 20000 en la caja».
  */
 export interface ExpenseNote {
   concept: string;
   amount: number;
   /** «por transferencia», «con tarjeta»; si no dice nada, efectivo (sale de la caja). */
   method: "efectivo" | "transferencia" | "tarjeta";
+  direction: "egreso" | "ingreso";
 }
 
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -23,6 +26,15 @@ const CUES: [RegExp, string][] = [
   [/\bcompr(?:e|amos)\b/, "Compra"],
   [/\bsalida(?: de (?:caja|plata))?\b|\bsalieron\b/, ""],
 ];
+// Ingreso extra: «ingreso extra», «ingresaron 5000», «entraron 5000 de cambio», «puse 20000 en la caja».
+const IN_CUES: RegExp[] = [
+  /\bingresos? extras?\b/,
+  /\bingres(?:o|os|aron|e|amos)\b/,
+  /\bentr(?:o|aron)\b(?=.*\b(?:extras?|cambio|a la caja|en la caja|en caja)\b)/,
+  /\b(?:puse|pusimos|puso|meti|metimos|metio)\b(?=.*\bcaja\b)/,
+];
+const IN_WORDS = /^(ingreso|ingresos|ingresaron|ingrese|ingresamos|extra|extras|entro|entraron|puse|pusimos|puso|meti|metimos|metio)$/;
+
 const FILLER = new Set(["de", "del", "la", "el", "los", "las", "en", "por", "para", "un", "una", "pesos", "peso", "hoy", "se", "y", "con", "efectivo", "caja", "plata", "a", "al", "efvo", "transferencia", "transf", "transferi", "transferimos", "mp", "tarjeta", "debito", "credito"]);
 
 function methodIn(t: string): ExpenseNote["method"] {
@@ -51,6 +63,8 @@ export function parseExpense(input: string): ExpenseNote | null {
   const text = spelledToDigits(input);
   const t = norm(text.trim());
   if (!t) return null;
+  const income = parseIncome(text, t);
+  if (income) return income;
   const cue = CUES.find(([re]) => re.test(t));
   if (!cue) return null;
   const a = amountOf(t);
@@ -74,5 +88,28 @@ export function parseExpense(input: string): ExpenseNote | null {
   const inner = kept.length > 1 ? original.match(new RegExp(`${esc(kept[0])}.*${esc(kept[kept.length - 1])}`, "i")) : null;
   if (kept.length > 1 && inner && !/\d/.test(inner[0])) concept = inner[0].replace(/[:;,.]+/g, " ").replace(/\s+/g, " ").trim();
   concept = concept || cue[1];
-  return { concept: concept ? concept.charAt(0).toUpperCase() + concept.slice(1) : "", amount: a?.amount ?? 0, method: methodIn(t) };
+  return { concept: concept ? concept.charAt(0).toUpperCase() + concept.slice(1) : "", amount: a?.amount ?? 0, method: methodIn(t), direction: "egreso" };
+}
+
+function parseIncome(text: string, t: string): ExpenseNote | null {
+  if (!IN_CUES.some((re) => re.test(t))) return null;
+  // «pagó», «vino», «seña»: eso es de un paciente, no un ingreso extra.
+  if (/\b(?:pag(?:o|aron|ue|amos)|vino|vinieron|sena|senas|deja|dejo)\b/.test(t)) return null;
+  const a = amountOf(t);
+  // Sin importe, solo si dice «ingreso extra» explícito («ingresó Ana» no es plata).
+  if (!a && !/\bingresos? extras?\b/.test(t)) return null;
+  const original = text.trim();
+  let rest = a ? original.slice(0, a.span[0]) + " " + original.slice(a.span[1]) : original;
+  rest = rest.replace(/(?:\b(?:por|con|via)\s+)?\b(?:mercado\s*pago|transferencia|transf\w*|tarjeta(?:\s+de\s+(?:debito|d[eé]bito|credito|cr[eé]dito))?|efectivo|efvo)\b/gi, " ");
+  rest = rest.replace(/[:;,.\-–]+/g, " ");
+  const kept = rest.split(/\s+/).filter(Boolean).filter((w) => {
+    const n = norm(w);
+    return !FILLER.has(n) && !IN_WORDS.test(n);
+  });
+  let concept = kept.join(" ");
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const inner = kept.length > 1 ? original.match(new RegExp(`${esc(kept[0])}.*${esc(kept[kept.length - 1])}`, "i")) : null;
+  if (kept.length > 1 && inner && !/\d/.test(inner[0])) concept = inner[0].replace(/[:;,.]+/g, " ").replace(/\s+/g, " ").trim();
+  concept = concept || "Varios";
+  return { concept: concept.charAt(0).toUpperCase() + concept.slice(1), amount: a?.amount ?? 0, method: methodIn(t), direction: "ingreso" };
 }

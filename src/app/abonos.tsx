@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { PlusIcon } from "@phosphor-icons/react";
-import { call, money, usePoll, type CatalogResponse } from "./shared";
+import { call, money, usePoll, type CatalogResponse, AddButton, ToneTitle } from "./shared";
 
 /** Espejo de `Prepaid` de src/lib/domain/prepaids.ts. */
 export interface PrepaidRow {
@@ -52,13 +51,15 @@ export function AbonosCard({ onChange, showToast, canAdd = true }: { onChange: (
         />
       )}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-2 pt-3">
-        <h2 className="text-[14px] font-medium">Abonos</h2>
+        <ToneTitle tone="in">
+          Abonos <span className="font-normal text-neutral-500">· pagan antes varias sesiones</span>
+        </ToneTitle>
         <span className="flex items-center gap-4">
           {list.length > 0 && <span className="text-[13px] text-neutral-400">Sin usar {money(list.reduce((n, p) => n + p.balance, 0))}</span>}
           {canAdd && (
-            <button onClick={() => setAdding(true)} className="cl-no-print inline-flex items-center gap-1 text-[13px] text-neutral-400 hover:text-fg">
-              <PlusIcon size={12} weight="bold" /> Abono
-            </button>
+            <AddButton tone="in" onClick={() => setAdding(true)}>
+              Anotar abono
+            </AddButton>
           )}
         </span>
       </div>
@@ -146,12 +147,12 @@ export function AbonoForm({ onClose, onSaved }: { onClose: () => void; onSaved: 
           <h2 className="font-display text-[18px] font-medium tracking-[-.01em]">Anotar un abono</h2>
           <p className="text-[13px] text-neutral-400">La paciente paga antes para congelar el precio. La plata entra hoy; las sesiones se descuentan cuando viene.</p>
         </div>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">Paciente</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">Paciente</span>
           <input autoFocus value={patient} onChange={(e) => setPatient(e.target.value)} placeholder="Nombre y apellido" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">Tratamiento</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">Tratamiento</span>
           <select value={itemId} onChange={(e) => setItemId(e.target.value)} className={FIELD}>
             <option value="">Elegí…</option>
             {practices.map((p) => (
@@ -162,7 +163,7 @@ export function AbonoForm({ onClose, onSaved }: { onClose: () => void; onSaved: 
           </select>
         </label>
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">¿Cómo es?</span>
+          <span className="cl-label">¿Cómo es?</span>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setBySessions(true)} className={TOGGLE(bySessions)}>
               Cantidad de sesiones
@@ -174,13 +175,13 @@ export function AbonoForm({ onClose, onSaved }: { onClose: () => void; onSaved: 
         </div>
         <div className="grid grid-cols-2 gap-3">
           {bySessions && (
-            <label className="flex flex-col gap-1">
-              <span className="text-[12px] text-neutral-400">Sesiones</span>
+            <label className="flex flex-col gap-1.5">
+              <span className="cl-label">Sesiones</span>
               <input value={sessions} onChange={(e) => setSessions(e.target.value.replace(/\D/g, "").slice(0, 3))} inputMode="numeric" placeholder="Ej. 5" className={`${FIELD} tabular-nums`} />
             </label>
           )}
           <label className={`flex flex-col gap-1 ${bySessions ? "" : "col-span-2"}`}>
-            <span className="text-[12px] text-neutral-400">Pagó</span>
+            <span className="cl-label">Pagó</span>
             <input
               value={amount ? `$ ${Number(amount).toLocaleString("es-AR")}` : ""}
               onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
@@ -198,7 +199,7 @@ export function AbonoForm({ onClose, onSaved }: { onClose: () => void; onSaved: 
           </p>
         )}
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">¿Cómo pagó? · solo el efectivo cuenta en la caja</span>
+          <span className="cl-label">¿Cómo pagó? <span className="cl-hint">· solo el efectivo cuenta en la caja</span></span>
           <div className="flex flex-wrap gap-2">
             {(["efectivo", "transferencia", "tarjeta"] as const).map((m) => (
               <button key={m} type="button" aria-pressed={method === m} onClick={() => setMethod(m)} className={TOGGLE(method === m)}>

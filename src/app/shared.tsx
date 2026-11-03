@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { PlusIcon } from "@phosphor-icons/react";
 
 // Clases de la vista Sistema de Clavdia (src/app/system-shared.tsx), mismas medidas.
 export const CARD = "flex w-full flex-col gap-3 rounded-xl bg-surface p-5 shadow-sm";
@@ -53,10 +54,12 @@ export async function call(url: string, method: "POST" | "PATCH" | "PUT" | "DELE
 }
 
 /** GET con refresco periódico (y al volver a la pestaña). Devuelve `[data, refresh]`. */
-export function usePoll<T>(url: string, everyMs: number): [T | null, () => void] {
+/** Pide `url` al entrar y cada `everyMs`. `url` null = no pide nada (p. ej. algo que este usuario no puede ver). */
+export function usePoll<T>(url: string | null, everyMs: number): [T | null, () => void] {
   const [data, setData] = useState<T | null>(null);
   const alive = useRef(true);
   const load = useCallback(async () => {
+    if (!url) return;
     try {
       const r = await fetch(url, { cache: "no-store" });
       if (r.status === 401) {
@@ -96,6 +99,41 @@ export function useToast(): [string | null, (m: string) => void] {
     timer.current = setTimeout(() => setMsg(null), 4500);
   }, []);
   return [msg, show];
+}
+
+/**
+ * Qué es cada cosa, con un color suave y siempre el mismo: `in` = plata que entra (señas, abonos, ingresos),
+ * `owe` = deudas (nos deben / debemos). El resto, sin color.
+ */
+export type Tone = "in" | "owe" | "neutral";
+const ADD_TONE: Record<Tone, string> = {
+  in: "border-in-line bg-in-bg text-in-fg hover:brightness-110",
+  owe: "border-owe-line bg-owe-bg text-owe hover:brightness-110",
+  neutral: "border-neutral-700 text-neutral-200 hover:bg-neutral-900",
+};
+
+/** Botón para agregar algo, que dice qué agrega: «+ Anotar seña», «+ Algo que debemos». */
+export function AddButton({ onClick, tone = "neutral", children }: { onClick: () => void; tone?: Tone; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`cl-no-print inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] font-medium transition ${ADD_TONE[tone]}`}
+    >
+      <PlusIcon size={12} weight="bold" />
+      {children}
+    </button>
+  );
+}
+
+/** Título de una tarjeta con el punto de color de lo que es. */
+export function ToneTitle({ tone = "neutral", children, className = "" }: { tone?: Tone; children: ReactNode; className?: string }) {
+  return (
+    <h2 className={`inline-flex items-center gap-2 text-[14px] font-medium ${className}`}>
+      {tone !== "neutral" && <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${tone === "in" ? "bg-in" : "bg-owe"}`} />}
+      {children}
+    </h2>
+  );
 }
 
 export function Toast({ msg }: { msg: string | null }) {
@@ -337,7 +375,7 @@ export function ProviderPicker({
   const setCut = (id: string, c: { mode: "pct" | "fixed"; value: string }) => onCuts?.({ ...cuts, [id]: c });
   return (
     <div className="flex flex-col gap-1.5">
-      <span className="text-[12px] text-neutral-400">¿Quién lo hace o lo vende?</span>
+      <span className="cl-label">¿Quién lo hace o lo vende?</span>
       <div className="flex flex-wrap gap-2">
         {sellers.map((s) => {
           const on = value.includes(s.id);
@@ -362,7 +400,7 @@ export function ProviderPicker({
       </span>
       {onCuts && marked.length > 0 && (
         <div className="mt-1.5 flex flex-col gap-1.5 rounded-lg border border-neutral-800 p-3">
-          <span className="text-[12px] text-neutral-400">Cuánto se lleva cada una en esto</span>
+          <span className="cl-label">Cuánto se lleva cada una en esto</span>
           {marked.map((s) => {
             const c = cuts?.[s.id] ?? { mode: "pct" as const, value: "" };
             if (s.owner)
@@ -432,8 +470,8 @@ export const parsePct = (s: string): number | null => (s.trim() === "" ? null : 
 /** Campo "% comisión de la médica" de un ítem. Vacío = el % de cada médica (Equipo). */
 export function CommissionField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[12px] text-neutral-400">Comisión de la médica (%)</span>
+    <label className="flex flex-col gap-1.5">
+      <span className="cl-label">Comisión de la médica <span className="cl-hint">(%)</span></span>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value.replace(/[^\d.,]/g, ""))}

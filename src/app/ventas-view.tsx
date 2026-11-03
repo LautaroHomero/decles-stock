@@ -134,18 +134,19 @@ export function VentasView({ actor }: { actor: Actor }) {
 
   const [data, refresh] = usePoll<{ ok: boolean; sales: SaleRow[]; payments?: PaymentsMap }>(`/api/sales?from=${from}&to=${to}&limit=${period === "dia" ? 500 : 5000}`, 30_000);
   const [comm, refreshComm] = usePoll<{ ok: boolean; rows: CommissionRow[] }>(
-    seesCommission ? `/api/commissions?from=${from}&to=${to}` : "/api/commissions?none=1",
+    // La secretaría no ve comisiones: no se pide nada (antes daba 403 cada minuto).
+    seesCommission ? `/api/commissions?from=${from}&to=${to}` : null,
     60_000,
   );
   const [toast, showToast] = useToast();
   const [editing, setEditing] = useState<SaleRow[] | null>(null);
   // Egresos: los ven la secretaría y el admin (la médica no).
   const seesExpenses = !isMedico;
-  const [exData, refreshEx] = usePoll<ExpensesResponse>(seesExpenses ? `/api/expenses?from=${from}&to=${to}` : "/api/expenses?from=1900-01-01", 30_000);
+  const [exData, refreshEx] = usePoll<ExpensesResponse>(seesExpenses ? `/api/expenses?from=${from}&to=${to}` : null, 30_000);
   const expenses = seesExpenses && exData?.ok ? exData.expenses : [];
   const outflow = expenses.reduce((n, e) => n + e.amount, 0);
   // Ingresos extras (cambio, varios…): también van en la planilla.
-  const [inData] = usePoll<ExpensesResponse>(seesExpenses ? `/api/expenses?from=${from}&to=${to}&direction=ingreso` : "/api/expenses?from=1900-01-01&direction=ingreso", 30_000);
+  const [inData] = usePoll<ExpensesResponse>(seesExpenses ? `/api/expenses?from=${from}&to=${to}&direction=ingreso` : null, 30_000);
   const incomes = seesExpenses && inData?.ok ? inData.expenses : [];
   const inflow = incomes.reduce((n, e) => n + e.amount, 0);
   const [exEdit, setExEdit] = useState<Expense | null>(null);

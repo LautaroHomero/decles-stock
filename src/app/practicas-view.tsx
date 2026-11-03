@@ -161,15 +161,15 @@ function PracticeForm({
     <div className={`${CARD} animate-cl-in`}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <label className="flex flex-col gap-1 sm:col-span-3">
-          <span className="text-[13px] text-neutral-400">Nombre</span>
+          <span className="cl-label">Nombre</span>
           <input autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Ej. Peeling" className={FIELD} />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-[13px] text-neutral-400">Precio efectivo / transferencia</span>
+          <span className="cl-label">Precio efectivo / transferencia</span>
           <input value={f.price} onChange={(e) => setF({ ...f, price: e.target.value.replace(/[^\d]/g, "") })} inputMode="numeric" placeholder="$" className={FIELD} />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-[13px] text-neutral-400">Precio con tarjeta</span>
+          <span className="cl-label">Precio con tarjeta</span>
           <input value={f.cardPrice} onChange={(e) => setF({ ...f, cardPrice: e.target.value.replace(/[^\d]/g, "") })} inputMode="numeric" placeholder="Vacío = el mismo" className={FIELD} />
         </label>
       </div>

@@ -345,7 +345,7 @@ function ProductRow({
 }
 
 const toInt = (s: string) => (s.trim() === "" ? undefined : Number(s.replace(/\D/g, "")));
-const Label = ({ children }: { children: React.ReactNode }) => <span className="text-[12px] text-neutral-400">{children}</span>;
+const Label = ({ children }: { children: React.ReactNode }) => <span className="cl-label">{children}</span>;
 
 function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: (v: object) => Promise<boolean> }) {
   const [f, setF] = useState({ name: "", price: "", cardPrice: "", minQuantity: "", quantity: "", expiresOn: "", lotCode: "" });
@@ -361,19 +361,19 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
     <div className={CARD}>
       <p className="text-[14px] font-medium">Nuevo producto</p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 sm:col-span-2">
+        <label className="flex flex-col gap-1.5 sm:col-span-2">
           <Label>Nombre</Label>
           <input autoFocus value={f.name} onChange={set("name")} placeholder="Ej. Crema hidratante facial" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Precio efectivo / transferencia ($)</Label>
           <input value={f.price} onChange={set("price")} inputMode="numeric" placeholder="18500" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Precio con tarjeta ($)</Label>
           <input value={f.cardPrice} onChange={set("cardPrice")} inputMode="numeric" placeholder="Vacío = el mismo" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Avisar si quedan menos de</Label>
           <input value={f.minQuantity} onChange={set("minQuantity")} inputMode="numeric" placeholder="Ej. 3 (opcional)" className={FIELD} disabled={infiniteStock || giftCard} />
         </label>
@@ -381,7 +381,7 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
           <label className="flex items-center gap-2"><input type="checkbox" checked={infiniteStock} onChange={(e) => setInfiniteStock(e.target.checked)} />Stock infinito</label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={giftCard} onChange={(e) => { setGiftCard(e.target.checked); if (e.target.checked) setInfiniteStock(true); }} />Es gift card</label>
         </div>
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Cantidad que entra ahora</Label>
           <input value={f.quantity} onChange={set("quantity")} inputMode="numeric" placeholder="Ej. 12 (opcional)" className={FIELD} disabled={infiniteStock || giftCard} />
         </label>
@@ -389,7 +389,7 @@ function NewProductForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit
           <Label>Vencimiento</Label>
           <ExpiryPicker value={f.expiresOn} onChange={(expiresOn) => setF({ ...f, expiresOn })} />
         </div>}
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Lote (opcional)</Label>
           <input value={f.lotCode} onChange={set("lotCode")} placeholder="Como figura en la caja" className={FIELD} disabled={infiniteStock || giftCard} />
         </label>
@@ -436,7 +436,7 @@ function LotForm({ unit, onCancel, onSubmit }: { unit: string; onCancel: () => v
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-neutral-800 p-3.5">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Cantidad ({unit})</Label>
           <input autoFocus value={f.quantity} onChange={set("quantity")} inputMode="numeric" className={FIELD} />
         </label>
@@ -444,7 +444,7 @@ function LotForm({ unit, onCancel, onSubmit }: { unit: string; onCancel: () => v
           <Label>Vencimiento</Label>
           <ExpiryPicker value={f.expiresOn} onChange={(expiresOn) => setF({ ...f, expiresOn })} />
         </div>
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Lote (opcional)</Label>
           <input value={f.lotCode} onChange={set("lotCode")} className={FIELD} />
         </label>
@@ -498,19 +498,19 @@ function EditForm({ p, onCancel, onSubmit }: { p: CatalogProduct; onCancel: () =
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-neutral-800 p-3.5">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Nombre</Label>
           <input value={f.name} onChange={set("name")} className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Precio efectivo / transf. ($)</Label>
           <input value={f.price} onChange={set("price")} inputMode="numeric" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Precio con tarjeta ($)</Label>
           <input value={f.cardPrice} onChange={set("cardPrice")} inputMode="numeric" placeholder="Vacío = el mismo" className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1.5">
           <Label>Mínimo</Label>
           <input value={f.minQuantity} onChange={set("minQuantity")} inputMode="numeric" className={FIELD} disabled={infiniteStock || giftCard} />
         </label>

@@ -170,7 +170,7 @@ export function CuentasProfesionales({
                 </span>
                 {!b.owner && (
                   <span
-                    className={`tabular-nums ${saldo ? "font-medium" : "text-neutral-400"}`}
+                    className={`tabular-nums ${saldo ? "font-medium text-owe" : "text-neutral-400"}`}
                   >
                     {saldo > 0 ? (
                       `Le debemos ${money(saldo)}`

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { PlusIcon } from "@phosphor-icons/react";
 import { ExpenseForm, type Expense, type ExpensesResponse } from "./egresos";
 import type { DebtCollectionRow, DebtRow } from "./deudas";
 import { remindLabel } from "./debt-reminder";
@@ -9,7 +8,7 @@ import { AbonoForm, AbonosCard } from "./abonos";
 import { PayablesCard } from "./deudas-consultorio";
 import { SenaForm, SenasCard } from "./senas";
 import { fmtSigned, type Row } from "./planilla-view";
-import { call, fmtTime, methodTotals, money, outsideOf, usdFmt, usePoll, type PaymentsMap, type SaleRow } from "./shared";
+import { call, fmtTime, methodTotals, money, outsideOf, usdFmt, usePoll, type PaymentsMap, type SaleRow, AddButton, ToneTitle, type Tone } from "./shared";
 
 /**
  * Planilla → Día, debajo de los pacientes: todo lo demás que pasó con la plata ese día, como en la hoja de papel.
@@ -187,22 +186,23 @@ export function PlanillaMovimientos({
       )}
       <Block
         title="Otros ingresos"
+        tone="in"
         total={extras + cobrosDeuda}
         empty="No hubo ingresos extras ni cobros de deudas."
         lines={inLines}
         loading={loading}
         action={
           canEdit && (
-            <span className="flex gap-3">
-              <button onClick={() => setSenaForm(true)} className={ADD}>
-                <PlusIcon size={12} weight="bold" /> Seña
-              </button>
-              <button onClick={() => setAbonoForm(true)} className={ADD}>
-                <PlusIcon size={12} weight="bold" /> Abono
-              </button>
-              <button onClick={() => setForm({ direction: "ingreso" })} className={ADD}>
-                <PlusIcon size={12} weight="bold" /> Ingreso extra
-              </button>
+            <span className="flex flex-wrap gap-2">
+              <AddButton tone="in" onClick={() => setSenaForm(true)}>
+                Seña
+              </AddButton>
+              <AddButton tone="in" onClick={() => setAbonoForm(true)}>
+                Abono
+              </AddButton>
+              <AddButton tone="in" onClick={() => setForm({ direction: "ingreso" })}>
+                Otro ingreso
+              </AddButton>
             </span>
           )
         }
@@ -216,15 +216,14 @@ export function PlanillaMovimientos({
         loading={loading}
         action={
           canEdit && (
-            <button onClick={() => setForm({ direction: "egreso" })} className={ADD}>
-              <PlusIcon size={12} weight="bold" /> Egreso
-            </button>
+            <AddButton onClick={() => setForm({ direction: "egreso" })}>Egreso</AddButton>
           )
         }
       />
       {created.length > 0 && (
         <Block
           title="Quedaron debiendo"
+          tone="owe"
           total={created.reduce((n, d) => n + d.amount, 0)}
           note="No entra a la caja hasta que lo paguen. Se cobra en Anotar o en Cierre → Deudas."
           empty=""
@@ -302,7 +301,6 @@ export function PlanillaMovimientos({
   );
 }
 
-const ADD = "cl-no-print inline-flex items-center gap-1 text-[13px] text-neutral-400 hover:text-fg";
 
 function Block({
   title,
@@ -313,8 +311,10 @@ function Block({
   note,
   loading,
   action,
+  tone = "neutral",
 }: {
   title: string;
+  tone?: Tone;
   total: number;
   sign?: string;
   lines: { key: string; time: string; who: string; what: string; amount: number; onClick?: () => void; undo?: () => void }[];
@@ -325,8 +325,10 @@ function Block({
 }) {
   return (
     <section className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-[14px] font-medium uppercase tracking-[.06em]">{title}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <ToneTitle tone={tone} className="uppercase tracking-[.06em]">
+          {title}
+        </ToneTitle>
         {action}
       </div>
       {note && <p className="-mt-1 text-[12.5px] text-neutral-500">{note}</p>}

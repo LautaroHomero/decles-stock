@@ -82,12 +82,12 @@ export function ExpenseForm({
           <h2 className="font-display text-[18px] font-medium tracking-[-.01em]">{expense ? `Corregir ${what.toLowerCase()}` : ingreso ? "Anotar un ingreso extra" : "Anotar un egreso"}</h2>
           <p className="text-[13px] text-neutral-400">{ingreso ? "Plata que entra a la caja y no es de un paciente: cambio, varios…" : "Plata que sale de la caja: luz, insumos, un retiro…"}</p>
         </div>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">¿En qué?</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">¿En qué?</span>
           <input autoFocus={!concept} value={concept} onChange={(e) => setConcept(e.target.value)} placeholder={ingreso ? "Ej. Cambio" : "Ej. Luz"} className={FIELD} />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">Importe</span>
+        <label className="flex flex-col gap-1.5">
+          <span className="cl-label">Importe</span>
           <input
             autoFocus={!!concept && !n}
             value={amount}
@@ -98,7 +98,9 @@ export function ExpenseForm({
           />
         </label>
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] text-neutral-400">{ingreso ? "¿Cómo entró?" : "¿Cómo se pagó?"} · solo el efectivo cuenta en la caja</span>
+          <span className="cl-label">
+            {ingreso ? "¿Cómo entró?" : "¿Cómo se pagó?"} <span className="cl-hint">· solo el efectivo cuenta en la caja</span>
+          </span>
           <div className="flex flex-wrap gap-2">
             {(["efectivo", "transferencia", "tarjeta"] as const).map((m) => (
               <button
