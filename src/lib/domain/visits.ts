@@ -20,7 +20,7 @@ import { createDebt, relinkDebts } from "@/lib/domain/debts";
 import { isOwnerProvider } from "@/lib/domain/owners";
 import { depositForVisit, relinkDeposit, releaseDeposit, applyDeposit, type Deposit } from "@/lib/domain/deposits";
 import { commissionFor } from "@/lib/domain/billing";
-import { dropInsurerVisit, insurerForVisit, recordInsurerVisit, relinkInsurerVisit, type Insurer } from "@/lib/domain/insurers";
+import { dropInsurerVisit, feeFor, insurerForVisit, recordInsurerVisit, relinkInsurerVisit, type Insurer } from "@/lib/domain/insurers";
 import { dropPrepaidUses, prepaidItemId, prepaidForVisit, recordPrepaidUse, relinkPrepaidUses, type Prepaid } from "@/lib/domain/prepaids";
 import { dropGiftCardUses, issueGiftCard, relinkGiftCardUses, useGiftCard as redeemGiftCard } from "@/lib/domain/gift-cards";
 
@@ -208,19 +208,20 @@ export async function recordVisit(
     }
   }
   let insurer: Insurer | null = null;
+  let insurerFee = 0;
   if (v.insurerId) {
     if (prepaid) return { ok: false, error: "Es por abono o por obra social, no las dos cosas.", status: 400 };
     const ir = await insurerForVisit(orgId, v.insurerId);
     if (!ir.ok) return ir;
     insurer = ir.insurer;
-    // Las prácticas no pasan por caja; la profesional se lleva el monto de la obra social (una vez por atención).
-    let first = true;
+    // Las prácticas no pasan por caja; la profesional se lleva el valor de cada práctica en esa obra social.
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
       const practice = l.generic || !l.itemId || (await getPriceItem(orgId, l.itemId))?.kind !== "producto";
       if (!practice) continue;
-      lines[i] = { ...l, amount: 0, commission: owner ? null : first ? insurer.fee : 0 };
-      first = false;
+      const fee = feeFor(insurer, l.generic ? null : l.itemId);
+      lines[i] = { ...l, amount: 0, commission: owner ? null : fee };
+      insurerFee += fee;
     }
   }
 
@@ -316,7 +317,7 @@ export async function recordVisit(
       return used;
     }
   }
-  if (insurer) await recordInsurerVisit(orgId, visitId, insurer, owner ? 0 : insurer.fee);
+  if (insurer) await recordInsurerVisit(orgId, visitId, insurer, owner ? 0 : insurerFee);
   if (deposit) {
     // La parte de la profesional sobre el total de la práctica (lo de hoy + la seña), salvo que se haya escrito a mano.
     const l = lines[depositLine];

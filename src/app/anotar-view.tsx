@@ -142,7 +142,12 @@ interface Draft {
   /** Seña que se descuenta: paga solo el resto. */
   depositId?: string | null;
 }
-type Insurer = { id: string; name: string; fee: number; active: boolean };
+type Insurer = { id: string; name: string; fee: number; fees: Record<string, number>; active: boolean };
+/** Lo que se lleva la profesional: el valor de cada práctica en la obra social (sin práctica: el general). Espejo de `feeFor`. */
+const insurerFee = (i: Insurer, lines: { item: { id: string; kind: string } }[]) => {
+  const ps = lines.filter((l) => l.item.kind !== "producto");
+  return ps.length ? ps.reduce((n, l) => n + (i.fees?.[l.item.id] ?? i.fee), 0) : i.fee;
+};
 /** «por osmecon», «con la prepaga osmecon», «osmecon»: la obra social nombrada y el texto sin esa parte. */
 function insurerIn(text: string, insurers: Insurer[]): { insurer: Insurer; cleaned: string } | null {
   const n = normQ(text);
@@ -1701,7 +1706,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                           {" "}
                           · {sellers.find((x) => x.id === preview.sellerId)?.owner
                             ? "es admin: no se lleva nada"
-                            : `${firstName((sellers.find((x) => x.id === preview.sellerId)?.name ?? "").replace(/^(Dra?\.|Lic\.)\s*/i, ""))} se lleva ${money(preview.insurer.fee)}`}
+                            : `${firstName((sellers.find((x) => x.id === preview.sellerId)?.name ?? "").replace(/^(Dra?\.|Lic\.)\s*/i, ""))} se lleva ${money(insurerFee(preview.insurer, preview.lines))}`}
                         </span>
                       )}
                     </span>

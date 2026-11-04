@@ -17,7 +17,7 @@ interface AbonoData {
   /** visit_id → abono */
   uses: Map<string, { prepaidId: string; itemId: string; itemName: string }>;
   /** Obras sociales / prepagas (OSMECON) y qué atenciones del día fueron por una. */
-  insurers: { id: string; name: string; fee: number; active: boolean }[];
+  insurers: { id: string; name: string; fee: number; fees: Record<string, number>; active: boolean }[];
   byInsurer: Map<string, { insurerId: string; name: string }>;
   /** Señas sin usar y las que se descontaron en atenciones del día (visit_id → seña). */
   deposits: DepositRow[];
@@ -546,6 +546,13 @@ function RowEditor({
   const effMethod = method === "" && abono && ((!row && !paidTouched) || saysPlan) ? "abono" : method;
   const usingAbono = effMethod === "abono" && !!abonoId;
   const insurerId = effMethod.startsWith("ins:") ? effMethod.slice(4) : null;
+  // Lo que se lleva la profesional: el valor de cada práctica en la obra social (sin práctica: el general).
+  const insFee = (() => {
+    const ins = insurerId ? abonos.insurers.find((i) => i.id === insurerId) : undefined;
+    if (!ins) return 0;
+    const ps = picked.filter((p) => !p.product);
+    return ps.length ? ps.reduce((n, p) => n + ((p.item && ins.fees?.[p.item.id]) ?? ins.fee), 0) : ins.fee;
+  })();
   // Seña: si la paciente dejó una (para esta práctica o sin definir), se descuenta de lo que paga hoy.
   const rowDep = row ? (abonos.depositUsed.get(row.key) ?? null) : null;
   const hasPracticeNow = !picked.length || picked.some((x) => !x.product);
@@ -690,7 +697,7 @@ function RowEditor({
         )}
         {insurerId && (
           <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-400">
-            Por {abonos.insurers.find((i) => i.id === insurerId)?.name}: no entra plata · la profesional se lleva {money(abonos.insurers.find((i) => i.id === insurerId)?.fee ?? 0)}
+            Por {abonos.insurers.find((i) => i.id === insurerId)?.name}: no entra plata · la profesional se lleva {money(insFee)}
           </span>
         )}
         {(abono || rowUse) && (

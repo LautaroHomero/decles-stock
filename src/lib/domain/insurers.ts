@@ -5,7 +5,7 @@ import type { Actor } from "@/lib/domain/types";
 
 /**
  * Obras sociales y prepagas (Decles), ej. OSMECON: la paciente se atiende por la prepaga, a la caja no entra nada y la
- * profesional que la atendió se lleva un monto fijo por atención (`fee`, lo paga el consultorio como el resto de su parte).
+ * profesional que la atendió se lleva el valor de cada práctica (`fees`, o el general `fee`; lo paga el consultorio como el resto de su parte).
  * Las prácticas de esa atención van a $0; los productos se cobran igual. El monto queda congelado en la atención.
  */
 
@@ -16,12 +16,29 @@ type Row = Record<string, unknown>;
 export interface Insurer {
   id: string;
   name: string;
-  /** Lo que se lleva la profesional por atención. */
+  /** Lo que se lleva la profesional por cada práctica que no tenga valor propio (y por una «Atención» sin práctica). */
   fee: number;
+  /** Valor por práctica: item_id → monto. */
+  fees: Record<string, number>;
   active: boolean;
 }
 
-const toInsurer = (r: Row): Insurer => ({ id: r.id as string, name: r.name as string, fee: Number(r.provider_fee), active: !!r.active });
+const toInsurer = (r: Row, fees: Record<string, number> = {}): Insurer => ({ id: r.id as string, name: r.name as string, fee: Number(r.provider_fee), fees, active: !!r.active });
+
+/** Lo que se lleva la profesional por esa práctica (sin práctica / no cargada: el valor general). */
+export const feeFor = (i: Insurer, itemId?: string | null) => (itemId && i.fees[itemId] !== undefined ? i.fees[itemId] : i.fee);
+
+async function feesOf(orgId: string, ids: string[]): Promise<Map<string, Record<string, number>>> {
+  const out = new Map<string, Record<string, number>>();
+  if (!ids.length) return out;
+  const rows = (await getSql()`SELECT insurer_id, item_id, fee FROM insurer_practice_fees WHERE organization_id = ${orgId} AND insurer_id = ANY(${ids})`) as unknown as Row[];
+  for (const r of rows) {
+    const m = out.get(r.insurer_id as string) ?? {};
+    m[r.item_id as string] = Number(r.fee);
+    out.set(r.insurer_id as string, m);
+  }
+  return out;
+}
 const clean = (s: unknown) => (typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "");
 
 function ctx(actor: Actor) {
@@ -34,7 +51,8 @@ export async function listInsurers(actor: Actor): Promise<Result<{ insurers: Ins
   const c = ctx(actor);
   if (!c) return { ok: true, insurers: [] };
   const rows = (await getSql()`SELECT * FROM insurers WHERE organization_id = ${c.orgId} ORDER BY active DESC, name`) as unknown as Row[];
-  return { ok: true, insurers: rows.map(toInsurer) };
+  const fees = await feesOf(c.orgId, rows.map((r) => r.id as string));
+  return { ok: true, insurers: rows.map((r) => toInsurer(r, fees.get(r.id as string))) };
 }
 
 function feeOf(v: unknown): number | string {
@@ -58,10 +76,33 @@ export async function createInsurer(actor: Actor, v: { name?: unknown; fee?: unk
   return { ok: true, insurer: toInsurer(rows[0]) };
 }
 
-/** Cambiar el monto, el nombre o darla de baja. Lo ya anotado no cambia (el monto quedó congelado). */
-export async function updateInsurer(actor: Actor, id: string, v: { name?: unknown; fee?: unknown; active?: unknown }): Promise<Result<{ insurer: Insurer }>> {
+/**
+ * Cambiar el monto general, el nombre, darla de baja o el valor de una práctica (`practice: { itemId, fee }`, fee null
+ * = vuelve al general). Lo ya anotado no cambia (el monto quedó congelado).
+ */
+export async function updateInsurer(
+  actor: Actor,
+  id: string,
+  v: { name?: unknown; fee?: unknown; active?: unknown; practice?: { itemId?: unknown; fee?: unknown } },
+): Promise<Result<{ insurer: Insurer }>> {
   const c = ctx(actor);
   if (!c?.isAdmin) return fail("Las obras sociales las carga el admin.", 403);
+  if (v.practice) {
+    const itemId = typeof v.practice.itemId === "string" ? v.practice.itemId : "";
+    const [own] = (await getSql()`SELECT 1 FROM insurers WHERE id = ${id} AND organization_id = ${c.orgId}`) as unknown as Row[];
+    if (!own) return fail("No existe.", 404);
+    const [item] = (await getSql()`SELECT kind FROM price_list_items WHERE id = ${itemId} AND organization_id = ${c.orgId}`) as unknown as Row[];
+    if (!item || item.kind === "producto") return fail("Esa práctica no está en la lista de precios.");
+    if (v.practice.fee === null || v.practice.fee === undefined) {
+      await getSql()`DELETE FROM insurer_practice_fees WHERE insurer_id = ${id} AND item_id = ${itemId}`;
+    } else {
+      const pf = feeOf(v.practice.fee);
+      if (typeof pf === "string") return fail(pf);
+      await getSql()`
+        INSERT INTO insurer_practice_fees (organization_id, insurer_id, item_id, fee) VALUES (${c.orgId}, ${id}, ${itemId}, ${pf})
+        ON CONFLICT (insurer_id, item_id) DO UPDATE SET fee = EXCLUDED.fee`;
+    }
+  }
   const name = v.name === undefined ? null : clean(v.name).slice(0, 60);
   if (name === "") return fail("Falta el nombre.");
   const fee = v.fee === undefined ? null : feeOf(v.fee);
@@ -71,14 +112,14 @@ export async function updateInsurer(actor: Actor, id: string, v: { name?: unknow
     UPDATE insurers SET name = COALESCE(${name}, name), provider_fee = COALESCE(${fee}::int, provider_fee), active = COALESCE(${active}::boolean, active)
     WHERE id = ${id} AND organization_id = ${c.orgId} RETURNING *`) as unknown as Row[];
   if (!rows.length) return fail("No existe.", 404);
-  return { ok: true, insurer: toInsurer(rows[0]) };
+  return { ok: true, insurer: toInsurer(rows[0], (await feesOf(c.orgId, [id])).get(id)) };
 }
 
 /** Para `recordVisit`. */
 export async function insurerForVisit(orgId: string, id: string): Promise<Result<{ insurer: Insurer }>> {
   const [r] = (await getSql()`SELECT * FROM insurers WHERE id = ${id} AND organization_id = ${orgId}`) as unknown as Row[];
   if (!r || !r.active) return fail("Esa obra social ya no está disponible.", 404);
-  return { ok: true, insurer: toInsurer(r) };
+  return { ok: true, insurer: toInsurer(r, (await feesOf(orgId, [id])).get(id)) };
 }
 
 export async function recordInsurerVisit(orgId: string, visitId: string, insurer: Insurer, fee: number): Promise<void> {

@@ -88,8 +88,9 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
   «le pagamos a la distribuidora» (`payable-note.ts`). Cierre y Planilla: «Lo que debemos» (`deudas-consultorio.tsx`).
 - Obras sociales / prepagas (`domain/insurers.ts`, tablas `insurers` + `insurer_visits`, migración 0025 con OSMECON a $8.000):
   «limpieza a carla por osmecon, gabi» → `VisitInput.insurerId`: prácticas a $0 (productos se cobran), la profesional se lleva
-  `provider_fee` una vez por atención (congelado en la venta y en `insurer_visits.fee`; dueña = 0). Sin práctica = «Atención».
+  el valor de cada práctica (congelado en la venta y en `insurer_visits.fee`; dueña = 0). Sin práctica = «Atención».
   Planilla: Medio «OSMECON». Montos en Equipo → Obras sociales (`obras-sociales.tsx`, solo admin).
+  Valor por práctica (0035, `insurer_practice_fees`): cada práctica suma su valor (`feeFor`); sin valor propio, el general `provider_fee`.
 - Señas (`domain/deposits.ts`, tabla `deposits`, migración 0026): «carla dejó 20000 de seña para botox, viene el 28/10»
   (`deposit-note.ts`) o «+ Seña» (Planilla/Cierre, `senas.tsx`). Entra a la caja ese día (ingreso «Seña · …», `income_id`).
   La atención de esa paciente la descuenta sola (`VisitInput.depositId`): paga el resto, sin deuda; la profesional cobra sobre

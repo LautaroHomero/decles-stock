@@ -11,7 +11,7 @@ export async function GET(req: Request) {
   return respond({ ...r, visits: await insurerVisitsOn(actor, date) });
 }
 
-/** `{ name, fee }` (lo que se lleva la profesional por atención). Solo admin. */
+/** `{ name, fee }` (lo que se lleva la profesional por práctica sin valor propio). Solo admin. */
 export async function POST(req: Request) {
   const actor = await actorOr401(req);
   if (actor instanceof Response) return actor;
