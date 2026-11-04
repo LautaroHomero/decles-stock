@@ -503,12 +503,39 @@ export interface QuickNote<P extends QuickProduct = QuickProduct, S extends Quic
   payment: QuickPayment | null;
 }
 
+type Ranked<P> = { p: P; s: number }[];
+
+/**
+ * «consulta de ornella»: el nombre de la médica se va como médica y queda «consulta de», que empata con todas
+ * las «Consulta de …». Si es ambiguo, quedan solo las que hace esa médica.
+ */
+function narrowToSeller<P extends QuickProduct>(ranked: Ranked<P>, sid: string): Ranked<P> {
+  if (ranked.length <= 1) return ranked;
+  const hers = ranked.filter((x) => !x.p.providerIds?.length || x.p.providerIds.includes(sid));
+  const own = hers.filter((x) => x.p.providerIds?.includes(sid));
+  const pick = own.length === 1 ? own : hers;
+  return pick.length && pick.length < ranked.length ? pick : ranked;
+}
+
+/** Match claro: hay uno solo, o el primero le saca ventaja al segundo. */
+function clearMatch<P extends QuickProduct>(ranked: Ranked<P>, words: string[]): P | null {
+  const [best, second] = ranked;
+  if (!best) return null;
+  const clear =
+    !second ||
+    best.s - second.s >= 0.15 ||
+    (best.s - second.s >= 0 && ranked.slice(1).filter((x) => best.s - x.s < 0.15).every((x) => plainerThan(words, best.p.name, x.p.name)));
+  return clear ? best.p : null;
+}
+
 export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickSeller>(
   text: string,
   products: P[],
   sellers: S[] = [],
 ): QuickNote<P, S> {
   const lines: QuickLine<P, S>[] = [];
+  // Por renglón: las opciones y las palabras, para volver a elegir si la médica se nombra después.
+  const pending: { ranked: Ranked<P>; words: string[] }[] = [];
   const nameNumbers = new Set(products.flatMap((p) => normalize(p.name).split(" ").filter((w) => /^\d+$/.test(w))));
   const productVocab = new Set(products.flatMap((p) => productWords(p.name)));
   let current: S | null = null;
@@ -538,20 +565,12 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
     if (!words.length) continue; // "vendí", "Laura:" o un número suelto
     const restToks = toks.filter((t) => !FILLER.has(t.n) && !(t.n in NUMBER_WORDS) && !/^x?\d{1,3}x?$/.test(t.n));
     const rest = restToks.map((t) => t.raw).join(" ");
-    const ranked = products
+    const all0: Ranked<P> = products
       .map((p) => ({ p, s: score(words, p.name) }))
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s);
-    // «consulta de ornella»: el nombre de la médica se va como médica y queda «consulta de», que empata con todas
-    // las «Consulta de …». Si es ambiguo, quedan solo las que hace esa médica.
-    if (current && ranked.length > 1) {
-      const sid = current.id;
-      const hers = ranked.filter((x) => !x.p.providerIds?.length || x.p.providerIds.includes(sid));
-      const own = hers.filter((x) => x.p.providerIds?.includes(sid));
-      const pick = own.length === 1 ? own : hers;
-      if (pick.length && pick.length < ranked.length) ranked.splice(0, ranked.length, ...pick);
-    }
-    const [best, second] = ranked;
+    const ranked = current ? narrowToSeller(all0, current.id) : all0;
+    const [best] = ranked;
 
     if (!best) {
       // Nada del catálogo: si parece un nombre ("María López"), es el paciente.
@@ -615,27 +634,29 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
         if (nm && extra.every((t) => NAME_TOKEN.test(t.n)) && extra.length === nm.split(" ").filter((w) => !PARTICLES.has(w)).length && extra.length >= 2) patient = nm;
       }
     }
-    // Match claro: hay uno solo, o el primero le saca ventaja al segundo.
-    const clear =
-      best &&
-      (!second ||
-        best.s - second.s >= 0.15 ||
-        (best.s - second.s >= 0 && ranked.slice(1).filter((x) => best.s - x.s < 0.15).every((x) => plainerThan(words, best.p.name, x.p.name))));
+    const match = clearMatch(ranked, words);
+    pending.push({ ranked: all0, words });
     lines.push({
       text: raw,
       quantity,
-      match: clear ? best.p : null,
-      candidates: clear ? [] : ranked.slice(0, 4).map((x) => x.p),
+      match,
+      candidates: match ? [] : ranked.slice(0, 4).map((x) => x.p),
       seller: current,
       payment: pay,
       rest,
     });
   }
   // "2 cremas pindonga, laura": lo anterior a la primera médica nombrada también es suyo. Igual el pago.
-  for (const l of lines) {
+  // «carla gomez consulta, atendió laura»: la médica nombrada después también elige entre las «Consulta de …».
+  lines.forEach((l, i) => {
+    if (!l.seller && first && !l.match && l.candidates.length > 1) {
+      const ranked = narrowToSeller(pending[i].ranked, first.id);
+      l.match = clearMatch(ranked, pending[i].words);
+      l.candidates = l.match ? [] : ranked.slice(0, 4).map((x) => x.p);
+    }
     if (!l.seller) l.seller = first;
     if (!l.payment) l.payment = firstPay;
-  }
+  });
   // Si no se anotó nada más, el «nombre» puede ser justo lo que no está cargado («hilos tensores»).
   return { lines, patient, patientSure: patientSure && lines.length > 0, seller: first, payment: firstPay };
 }
