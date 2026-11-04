@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CaretDownIcon, CheckIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, CheckIcon, FilePdfIcon } from "@phosphor-icons/react";
 import { call, money, usdFmt } from "./shared";
 
 /** Espejo de `ProviderBalance` / `BalanceLine` de src/lib/domain/payouts.ts. */
@@ -72,6 +72,9 @@ export function CuentasProfesionales({
       return n;
     });
   const owedTotal = balances.reduce((n, b) => n + b.owed, 0);
+  // Resumen para mandarle a cada profesional (paciente por paciente y la cuenta): se abre y se guarda como PDF.
+  const resumenUrl = (providerId?: string) => `/resumen?date=${date}${providerId ? `&provider=${encodeURIComponent(providerId)}` : ""}`;
+  const exportable = balances.filter((b) => !b.owner && b.lines.length + b.debtShare > 0);
   const owesUsTotal = balances.reduce((n, b) => n + b.owesUs, 0);
 
   async function act(
@@ -113,7 +116,12 @@ export function CuentasProfesionales({
     <section className="flex flex-col rounded-xl border border-neutral-800">
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-2 pt-3">
         <h2 className="text-[14px] font-medium">Cuentas con profesionales</h2>
-        <span className="text-[13px] text-neutral-400">
+        {exportable.length > 1 && (
+          <a href={resumenUrl()} target="_blank" rel="noopener" className={`cl-no-print ${LINK} inline-flex items-center gap-1`}>
+            <FilePdfIcon size={13} /> PDF de todas
+          </a>
+        )}
+        <span className="ml-auto text-[13px] text-neutral-400">
           {owedTotal > 0 || owesUsTotal > 0
             ? [
                 owedTotal > 0 ? `Les debemos ${money(owedTotal)}` : "",
@@ -191,6 +199,16 @@ export function CuentasProfesionales({
 
               {open.has(b.providerId) && (
                 <div className="flex flex-col px-4 pb-3">
+                  {!b.owner && b.lines.length + b.debtShare > 0 && (
+                    <a
+                      href={resumenUrl(b.providerId)}
+                      target="_blank"
+                      rel="noopener"
+                      className={`cl-no-print ${BTN} mt-1 inline-flex items-center gap-1.5 self-end`}
+                    >
+                      <FilePdfIcon size={14} /> Resumen en PDF para {short(b.name)}
+                    </a>
+                  )}
                   {/* Sus atenciones del día */}
                   {b.lines.length > 0 && (
                     <div className="mt-2 overflow-x-auto">

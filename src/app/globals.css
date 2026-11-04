@@ -395,3 +395,27 @@
 :root[data-theme="light"] .cl-hint {
   color: var(--cl-n500);
 }
+
+/* Resumen diario por profesional (/resumen): una profesional por hoja, siempre en blanco. */
+html:has(.cl-resumen),
+body:has(.cl-resumen) {
+  background: #fff !important;
+  color: #000 !important;
+  color-scheme: light;
+}
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+  .cl-resumen .cl-hoja {
+    max-width: none;
+    padding: 12mm 14mm;
+  }
+  .cl-resumen .cl-hoja + .cl-hoja {
+    break-before: page;
+  }
+  .cl-resumen tr {
+    break-inside: avoid;
+  }
+}
