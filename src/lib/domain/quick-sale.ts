@@ -33,6 +33,8 @@
 export interface QuickProduct {
   id: string;
   name: string;
+  /** Profesionales que lo hacen (vacío = cualquiera). */
+  providerIds?: string[];
 }
 
 export interface QuickSeller {
@@ -540,6 +542,15 @@ export function parseNote<P extends QuickProduct, S extends QuickSeller = QuickS
       .map((p) => ({ p, s: score(words, p.name) }))
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s);
+    // «consulta de ornella»: el nombre de la médica se va como médica y queda «consulta de», que empata con todas
+    // las «Consulta de …». Si es ambiguo, quedan solo las que hace esa médica.
+    if (current && ranked.length > 1) {
+      const sid = current.id;
+      const hers = ranked.filter((x) => !x.p.providerIds?.length || x.p.providerIds.includes(sid));
+      const own = hers.filter((x) => x.p.providerIds?.includes(sid));
+      const pick = own.length === 1 ? own : hers;
+      if (pick.length && pick.length < ranked.length) ranked.splice(0, ranked.length, ...pick);
+    }
     const [best, second] = ranked;
 
     if (!best) {
