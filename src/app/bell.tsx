@@ -6,7 +6,7 @@ import { call, usePoll } from "./shared";
 
 interface Notif {
   id: string;
-  kind: "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente" | "deuda" | "deuda_cobrar" | "pagar";
+  kind: "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente" | "deuda" | "deuda_cobrar" | "pagar" | "nota";
   title: string;
   body: string;
   readAt: string | null;
@@ -22,6 +22,7 @@ const KIND_LABEL: Record<Notif["kind"], string> = {
   deuda: "Deuda",
   deuda_cobrar: "Para cobrar",
   pagar: "Para pagar",
+  nota: "Recordatorio",
 };
 
 const ago = (iso: string) => {
@@ -33,7 +34,7 @@ const ago = (iso: string) => {
 };
 
 /** Campanita: vencimientos y stock bajo (médicas y admins); para los admins, también pendientes y deudas. Se refresca cada 30 s. */
-export function Bell({ onOpenStock, onOpenClose }: { onOpenStock: () => void; onOpenClose?: () => void }) {
+export function Bell({ onOpenStock, onOpenClose, onOpenNotes }: { onOpenStock: () => void; onOpenClose?: () => void; onOpenNotes?: () => void }) {
   const [data, refresh] = usePoll<{ ok: boolean; items: Notif[]; unread: number }>("/api/notifications", 30_000);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -90,7 +91,8 @@ export function Bell({ onOpenStock, onOpenClose }: { onOpenStock: () => void; on
                   onClick={() => {
                     if (!n.readAt) read(n.id);
                     setOpen(false);
-                    if ((n.kind === "deuda" || n.kind === "deuda_cobrar" || n.kind === "pagar") && onOpenClose) onOpenClose();
+                    if (n.kind === "nota" && onOpenNotes) onOpenNotes();
+                    else if ((n.kind === "deuda" || n.kind === "deuda_cobrar" || n.kind === "pagar") && onOpenClose) onOpenClose();
                     else onOpenStock();
                   }}
                   className={`flex w-full gap-3 border-b border-neutral-900 px-4 py-3 text-left transition-colors last:border-0 hover:bg-accent-900 ${n.readAt ? "opacity-55" : ""}`}

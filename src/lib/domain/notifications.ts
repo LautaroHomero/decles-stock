@@ -14,6 +14,7 @@ import {
 } from "@/lib/db/notifications-repo";
 import type { Actor } from "@/lib/domain/types";
 import { openDebtsForAlerts } from "@/lib/domain/debts";
+import { dueNoteReminders } from "@/lib/domain/notes";
 
 /**
  * Avisos de stock para la campanita de las médicas y los admins del consultorio:
@@ -149,6 +150,18 @@ export async function refreshStockAlerts(orgId: string): Promise<number> {
     }),
   );
   await clearStale(orgId, "pagar", toPay.map((p) => p.dedupeKey));
+  // Notas con recordatorio: el día elegido (y después, hasta que se toca «Hecho»).
+  const dueNotes = await dueNoteReminders(orgId, today);
+  const noteAlerts = dueNotes.map(
+    (n): NewNotification => ({
+      kind: "nota",
+      title: `${n.remindOn === today ? "Hoy" : `Desde el ${fmt(n.remindOn!)}`}: ${n.patient}`,
+      body: (n.text.length > 160 ? `${n.text.slice(0, 157)}…` : n.text) + " · En Notas se marca «Hecho».",
+      refId: n.id,
+      dedupeKey: `nota:${n.id}:${n.remindOn}`,
+    }),
+  );
+  await clearStale(orgId, "nota", noteAlerts.map((n) => n.dedupeKey));
   // Deudas (de pacientes y del consultorio): los admins reciben todas; quien la anotó, siempre la suya.
   const toAdminsAnd = async (items: NewNotification[], creators: string[]) =>
     (await Promise.all(items.map((n, i) => insertNotifications(orgId, [...new Set([...admins, creators[i]].filter(Boolean))], [n])))).reduce((a, b) => a + b, 0);
@@ -159,7 +172,8 @@ export async function refreshStockAlerts(orgId: string): Promise<number> {
     (await insertNotifications(orgId, admins, pending)) +
     (await toAdminsAnd(debts, debts.map((d) => creatorOf(d.refId!)))) +
     (await toAdminsAnd(reminders, reminders.map((d) => creatorOf(d.refId!)))) +
-    (await toAdminsAnd(toPay, due.map((p) => p.createdBy)))
+    (await toAdminsAnd(toPay, due.map((p) => p.createdBy))) +
+    (await toAdminsAnd(noteAlerts, dueNotes.map((n) => n.createdBy)))
   );
 }
 

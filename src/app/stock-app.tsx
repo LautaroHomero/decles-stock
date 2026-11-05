@@ -70,7 +70,8 @@ export function StockApp({ actor }: { actor: Actor }) {
         <span className="flex-1" />
         <span className="hidden truncate text-[13px] text-neutral-400 md:block">{actor.activeOrg?.name}</span>
         {!isMedico && <DolarChip canEdit />}
-        {(isMedico || isAdmin) && <Bell onOpenStock={() => go("inventario")} onOpenClose={() => go("cierre")} />}
+        {/* Todo el equipo: a la secretaría le llegan sus recordatorios (notas, deudas que anotó). */}
+        <Bell onOpenStock={() => go("inventario")} onOpenClose={() => go("cierre")} onOpenNotes={() => go("notas")} />
         <AvatarMenu actor={actor} onOnboarding={() => setOnbKey((k) => k + 1)} />
       </header>
 

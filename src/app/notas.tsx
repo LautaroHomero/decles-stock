@@ -1,9 +1,10 @@
 "use client";
 
 import { useDeferredValue, useMemo, useState } from "react";
-import { MagnifyingGlassIcon, NotePencilIcon, PlusIcon } from "@phosphor-icons/react";
+import { BellIcon, CheckIcon, MagnifyingGlassIcon, NotePencilIcon, PlusIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { Toast, call, fmtTime, usePoll, useToast } from "./shared";
+import { ReminderPicker, onDay, remindLabel, todayYmd } from "./debt-reminder";
 
 /** Espejo de `Note` de src/lib/domain/notes.ts. */
 export interface Note {
@@ -18,7 +19,12 @@ export interface Note {
   createdByName: string;
   createdAt: string;
   updatedByName: string | null;
+  remindOn: string | null;
+  remindDone: boolean;
 }
+
+const CHIP = "min-h-[40px] rounded-pill border-2 border-neutral-800 px-3.5 py-1.5 text-[14px] font-medium transition-colors hover:border-neutral-600";
+const CHIP_ON = "min-h-[40px] rounded-pill border-2 border-accent bg-accent px-3.5 py-1.5 text-[14px] font-medium text-on-accent";
 
 const short = (name: string) => name.replace(/^(Dra?\.|Lic\.)\s*/i, "");
 const longDate = (ymd: string) => {
@@ -47,6 +53,8 @@ export function NoteDialog({
 }) {
   const [patient, setPatient] = useState(note?.patient ?? visit?.patient ?? "");
   const [text, setText] = useState(note?.text ?? "");
+  // Un recordatorio ya hecho no se muestra como pendiente: si se elige otra fecha, vuelve a avisar.
+  const [remindOn, setRemindOn] = useState<string | null>(note && !note.remindDone ? note.remindOn : null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const linked = !!(visit || note?.visitId);
@@ -57,11 +65,12 @@ export function NoteDialog({
     setBusy(true);
     setErr("");
     const r = note
-      ? await call(`/api/notes/${note.id}`, "PATCH", { text, patient })
-      : await call("/api/notes", "POST", { text, patient, visitId: visit?.visitId });
+      ? await call(`/api/notes/${note.id}`, "PATCH", { text, patient, remindOn })
+      : await call("/api/notes", "POST", { text, patient, visitId: visit?.visitId, remindOn });
     setBusy(false);
     if (!r.ok) return setErr(r.error ?? "No se pudo guardar.");
-    onSaved(note ? "Nota corregida" : "Nota guardada");
+    const when = remindOn ? ` · te aviso ${onDay(remindOn)}` : "";
+    onSaved((note ? "Nota corregida" : "Nota guardada") + when);
   }
   async function remove() {
     if (!note || busy) return;
@@ -111,10 +120,11 @@ export function NoteDialog({
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save();
             }}
             rows={4}
-            placeholder="Ej. Le dio alergia la crema de vitamina C"
+            placeholder="Ej. Dejó una seña de $20.000 el martes: cargarla cuando venga"
             className={`${FIELD} resize-y`}
           />
         </label>
+        <ReminderPicker value={remindOn} onChange={setRemindOn} chip={CHIP} chipOn={CHIP_ON} label="¿Te lo recuerdo?" />
         {err && <p className="text-[13px] text-neutral-200">{err}</p>}
         <div className="flex flex-wrap gap-2">
           <button
@@ -182,6 +192,17 @@ export function NotasView({ actor }: { actor: Actor }) {
     return [...m.entries()];
   }, [notes]);
   const isAdmin = !!actor.activeOrg?.canAdmin;
+  // Recordatorios pendientes (con o sin búsqueda): arriba, de la más próxima a la más lejana.
+  const [rem, refreshRem] = usePoll<{ ok: boolean; notes: Note[] }>("/api/notes?reminders=1", 60_000);
+  const reminders = rem?.ok ? rem.notes : [];
+  const today = todayYmd();
+  async function done(n: Note) {
+    const r = await call(`/api/notes/${n.id}`, "PATCH", { remindDone: true });
+    if (!r.ok) return showToast(r.error ?? "No se pudo marcar.");
+    showToast(`Listo: ${n.patient}.`);
+    refreshRem();
+    refresh();
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-5 pb-20 pt-8 text-[14px] sm:px-6 sm:pt-12">
@@ -195,6 +216,7 @@ export function NotasView({ actor }: { actor: Actor }) {
             setForm(null);
             showToast(msg + ".");
             refresh();
+            refreshRem();
           }}
         />
       )}
@@ -210,6 +232,35 @@ export function NotasView({ actor }: { actor: Actor }) {
           <PlusIcon size={14} weight="bold" /> Nota
         </button>
       </header>
+
+      {reminders.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="flex items-center gap-1.5 text-[13px] font-medium text-neutral-300">
+            <BellIcon size={14} /> Para recordar
+          </h2>
+          <ul className="flex flex-col rounded-xl border border-neutral-800">
+            {reminders.map((n) => {
+              const due = n.remindOn! <= today;
+              return (
+                <li key={n.id} className="flex items-start gap-3 border-t border-neutral-900 px-4 py-3 first:border-t-0">
+                  <button onClick={() => setForm({ note: n })} className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
+                    <span className="flex flex-wrap items-baseline gap-x-2">
+                      <b className="font-medium">{n.patient}</b>
+                      <span className={`text-[12.5px] ${due ? "font-medium text-owe" : "text-neutral-500"}`}>
+                        {n.remindOn === today ? "hoy" : due ? `desde el ${remindLabel(n.remindOn!)}` : remindLabel(n.remindOn!)}
+                      </span>
+                    </span>
+                    <span className="whitespace-pre-line text-[14px] text-neutral-200">{n.text}</span>
+                  </button>
+                  <button onClick={() => done(n)} className="inline-flex h-9 shrink-0 items-center gap-1 rounded-md border border-neutral-800 px-3 text-[13px] text-neutral-200 hover:bg-accent-900">
+                    <CheckIcon size={13} weight="bold" /> Hecho
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <label className="flex items-center gap-2 rounded-lg border border-neutral-800 px-3 focus-within:border-accent-700">
         <MagnifyingGlassIcon size={16} className="shrink-0 text-neutral-500" />
@@ -253,6 +304,11 @@ export function NotasView({ actor }: { actor: Actor }) {
                         </span>
                       )}
                       <span className="whitespace-pre-line text-[14.5px] text-neutral-200">{n.text}</span>
+                      {n.remindOn && (
+                        <span className="inline-flex items-center gap-1 text-[12.5px] text-neutral-500">
+                          <BellIcon size={12} /> {n.remindDone ? `Recordatorio del ${remindLabel(n.remindOn)} · hecho` : `Te aviso ${onDay(n.remindOn)}`}
+                        </span>
+                      )}
                     </button>
                   </li>
                 ))}

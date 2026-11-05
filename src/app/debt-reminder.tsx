@@ -27,6 +27,12 @@ export function remindLabel(ymd: string): string {
   return s.replace(",", "");
 }
 
+/** «el viernes 23 de octubre», o «hoy» / «mañana» sin «el». */
+export const onDay = (ymd: string) => {
+  const l = remindLabel(ymd);
+  return l === "hoy" || l === "mañana" ? l : `el ${l}`;
+};
+
 export function ReminderPicker({
   value,
   onChange,
@@ -54,7 +60,7 @@ export function ReminderPicker({
       <span className="text-[16px] font-semibold">
         {label}{" "}
         <span className="text-[14px] font-normal text-neutral-500">
-          {value ? `· te aviso el ${remindLabel(value)}` : "· si no sabés, dejalo"}
+          {value ? `· te aviso ${onDay(value)}` : "· si no sabés, dejalo"}
         </span>
       </span>
       <div className="flex flex-wrap items-center gap-2.5">

@@ -6,7 +6,7 @@ import { getSql } from "./connection";
 
 type Row = Record<string, unknown>;
 
-export type NotificationKind = "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente" | "deuda" | "deuda_cobrar" | "pagar";
+export type NotificationKind = "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente" | "deuda" | "deuda_cobrar" | "pagar" | "nota";
 
 export interface AppNotification {
   id: string;
