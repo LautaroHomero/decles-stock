@@ -10,6 +10,7 @@ import { NoteDialog, VisitNotes, type Note } from "./notas";
 import type { PrepaidRow } from "./abonos";
 import type { DepositRow } from "./senas";
 import { samePatient } from "@/lib/domain/prepaid-note";
+import { PlanillaFiltros, Resaltar, SIN_FILTROS, filtrando, filtrar, type Filtros } from "./planilla-filtros";
 
 /** Abonos abiertos y qué atenciones del día son sesiones de un abono. */
 interface AbonoData {
@@ -229,7 +230,16 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
   }, [notesData]);
   const [noteForm, setNoteForm] = useState<{ note?: Note; visit?: { visitId: string; patient: string; what: string } } | null>(null);
   const areaOf = (providerId: string | null): Area => sellers.find((s) => s.id === providerId)?.area ?? "medicos";
-  const sections = AREAS.filter((a) => a.id === "medicos" || sellers.some((s) => s.area === a.id) || rows.some((r) => areaOf(r.providerId) === a.id));
+  // Buscador y filtros: solo cambian lo que se ve en las áreas (el resumen de abajo es siempre del día entero).
+  const [filtros, setFiltros] = useState<Filtros>(SIN_FILTROS);
+  const busca = filtrando(filtros);
+  const providerName = (r: Row) => r.sales[0].providerName ?? "";
+  const shown = useMemo(() => filtrar(rows, filtros, sellers, providerName), [rows, filtros, sellers]);
+  const sections = AREAS.filter((a) =>
+    busca
+      ? shown.some((r) => areaOf(r.providerId) === a.id)
+      : a.id === "medicos" || sellers.some((s) => s.area === a.id) || rows.some((r) => areaOf(r.providerId) === a.id),
+  );
 
   return (
     <div className="cl-print-area flex w-full flex-col gap-6 text-[13.5px]">
@@ -252,16 +262,29 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
         <p className="text-neutral-500">Cargando…</p>
       ) : (
         <>
+        <PlanillaFiltros value={filtros} onChange={setFiltros} rows={rows} sellers={sellers} fallbackName={providerName} shown={shown.length} />
+        {busca && !shown.length && (
+          <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-neutral-800 px-6 py-12 text-center">
+            <span className="text-[16px] font-medium">No hay atenciones que coincidan</span>
+            <span className="text-neutral-400">Probá con otro nombre o sacá algún filtro.</span>
+            <button onClick={() => setFiltros(SIN_FILTROS)} className="mt-1 min-h-11 rounded-xl bg-accent px-5 text-[14.5px] font-medium text-on-accent">
+              Ver todo
+            </button>
+          </div>
+        )}
         {sections.map((a) => (
           <AreaSection
             key={a.id}
             area={a}
-            rows={rows.filter((r) => areaOf(r.providerId) === a.id)}
+            q={filtros.scope === "todo" || filtros.scope === "paciente" ? filtros.q : ""}
+            filtering={busca}
+            rows={shown.filter((r) => areaOf(r.providerId) === a.id)}
             sellers={sellers.filter((s) => s.area === a.id)}
             allSellers={sellers}
             practices={practices}
             products={products}
             canEdit={canEdit}
+            admin={admin}
             abonos={abonos}
             notes={notesByVisit}
             onNote={(r, note) => setNoteForm(note ? { note } : { visit: { visitId: r.key, patient: r.patient, what: r.itemsText } })}
@@ -299,12 +322,15 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
 
 function AreaSection({
   area,
+  q,
+  filtering,
   rows,
   sellers,
   allSellers,
   practices,
   products,
   canEdit,
+  admin,
   abonos,
   notes,
   onNote,
@@ -312,12 +338,18 @@ function AreaSection({
   onError,
 }: {
   area: (typeof AREAS)[number];
+  /** Lo buscado, para resaltarlo en el nombre del paciente. */
+  q: string;
+  /** Hay búsqueda o filtros: no se muestra la fila para anotar. */
+  filtering: boolean;
   rows: Row[];
   sellers: Seller[];
   allSellers: Seller[];
   practices: Item[];
   products: Item[];
   canEdit: boolean;
+  /** El admin puede borrar (anular) una atención. */
+  admin: boolean;
   abonos: AbonoData;
   /** visit_id → sus notas. */
   notes: Map<string, Note[]>;
@@ -368,6 +400,7 @@ function AreaSection({
                 <RowEditor
                   key={r.key}
                   row={r}
+                  admin={admin}
                   showK={showK}
                   sellers={pickable}
                   practices={areaPractices}
@@ -387,7 +420,7 @@ function AreaSection({
                   className={`border-b border-neutral-900 align-top ${canEdit ? "cursor-pointer hover:bg-neutral-900" : ""}`}
                 >
                   <td className="px-3 py-2 tabular-nums text-neutral-500">{r.time}</td>
-                  <td className="px-3 py-2">{r.patient || <span className="text-neutral-600">—</span>}</td>
+                  <td className="px-3 py-2">{r.patient ? <Resaltar text={r.patient} q={q} /> : <span className="text-neutral-600">—</span>}</td>
                   <td className="px-3 py-2">
                     <ul className="flex flex-col gap-0.5">
                       {r.items.map((it, i) => (
@@ -435,7 +468,7 @@ function AreaSection({
                 </tr>
               ),
             )}
-            {canEdit && editing === null && (
+            {canEdit && editing === null && !filtering && (
               <RowEditor
                 key={`new${newKey}`}
                 showK={showK}
@@ -499,6 +532,7 @@ export const fmtSigned = (n: number) => (n < 0 ? `− ${money(-n)}` : money(n));
  */
 function RowEditor({
   row,
+  admin,
   showK,
   sellers,
   practices,
@@ -509,6 +543,7 @@ function RowEditor({
   onError,
 }: {
   row?: Row;
+  admin?: boolean;
   showK: boolean;
   sellers: Seller[];
   practices: Item[];
@@ -532,7 +567,18 @@ function RowEditor({
   const keepParts = !!row && (method === "mixto" || method === "dolares") && row.parts.length > 0;
   const [k, setK] = useState(row?.kManual ? String(row.k) : "");
   const [busy, setBusy] = useState(false);
+  // Borrar (solo admin): pide el motivo en la misma fila y recién ahí anula.
+  const [voiding, setVoiding] = useState(false);
+  const [reason, setReason] = useState("");
   const first = useRef<HTMLInputElement>(null);
+  async function remove() {
+    if (!row || busy || !reason.trim()) return;
+    setBusy(true);
+    const r = await call(`/api/visits/${row.key}`, "DELETE", { reason });
+    setBusy(false);
+    if (!r.ok) return onError(r.error ?? "No se pudo borrar.");
+    onSaved();
+  }
 
   // «plan» / «abonado» en Qué pagó: es una sesión del plan de la paciente (la práctica sale del plan).
   const saysPlan = /^(?:plan|abono|abonad[oa]s?|con abono|del plan|sesion del plan)$/.test(normalize(what.trim()));
@@ -776,18 +822,51 @@ function RowEditor({
         </td>
       )}
       <td className="whitespace-nowrap px-2 py-1.5 text-right">
-        {row && (
-          <button onClick={onCancel} className="rounded-md px-1.5 py-0.5 text-[12px] text-neutral-400 hover:text-fg">
-            Cancelar
-          </button>
+        {voiding ? (
+          <span className="inline-flex items-center gap-1">
+            <input
+              autoFocus
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") remove();
+                if (e.key === "Escape") setVoiding(false);
+              }}
+              placeholder="Motivo"
+              className={`${CELL} !w-[140px] border-neutral-800`}
+            />
+            <button onClick={() => setVoiding(false)} className="rounded-md px-1.5 py-0.5 text-[12px] text-neutral-400 hover:text-fg">
+              No
+            </button>
+            <button
+              onClick={remove}
+              disabled={busy || !reason.trim()}
+              className="rounded-md border border-neutral-600 px-2 py-0.5 text-[12px] font-medium text-fg disabled:border-neutral-800 disabled:text-neutral-600"
+            >
+              {busy ? "…" : "Borrar"}
+            </button>
+          </span>
+        ) : (
+          <>
+            {row && admin && (
+              <button onClick={() => setVoiding(true)} className="rounded-md px-1.5 py-0.5 text-[12px] text-neutral-400 hover:text-fg">
+                Borrar
+              </button>
+            )}
+            {row && (
+              <button onClick={onCancel} className="rounded-md px-1.5 py-0.5 text-[12px] text-neutral-400 hover:text-fg">
+                Cancelar
+              </button>
+            )}
+            <button
+              onClick={save}
+              disabled={busy || !dirty}
+              className="rounded-md border border-accent bg-accent px-2 py-0.5 text-[12px] font-medium text-on-accent disabled:border-neutral-800 disabled:bg-transparent disabled:text-neutral-600"
+            >
+              {busy ? "…" : "Guardar"}
+            </button>
+          </>
         )}
-        <button
-          onClick={save}
-          disabled={busy || !dirty}
-          className="rounded-md border border-accent bg-accent px-2 py-0.5 text-[12px] font-medium text-on-accent disabled:border-neutral-800 disabled:bg-transparent disabled:text-neutral-600"
-        >
-          {busy ? "…" : "Guardar"}
-        </button>
       </td>
     </tr>
   );

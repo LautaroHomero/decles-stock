@@ -11,6 +11,7 @@ import {
   type PaymentMethod,
 } from "@/lib/db/billing-repo";
 import { realNowIso } from "@/lib/domain/clock";
+import { getSql } from "@/lib/db/connection";
 import { getStockItem, restoreStockForSale } from "@/lib/db/stock-repo";
 import { getProvider } from "@/lib/db/repo";
 import { recordSale } from "@/lib/domain/billing";
@@ -427,4 +428,49 @@ async function setVisitShareTotal(orgId: string, visitId: string, share: number)
   const k = sales.find((s) => s.kind !== "producto") ?? sales[0];
   const others = sales.filter((s) => s.id !== k.id).reduce((n, s) => n + s.commissionAmount, 0);
   await applyManualAmounts(orgId, k.id, { commission: Math.max(0, share - others) });
+}
+
+/**
+ * Borrar (anular) una atención entera: solo el admin, de cualquier día, con motivo. Anula todas sus líneas (con eso
+ * sale de la caja, del Cierre y de la división con la profesional), devuelve el stock y suelta lo que colgaba de
+ * ella: la deuda del paciente, la sesión del abono, la obra social, la seña (vuelve a quedar disponible) y la
+ * gift card usada o vendida. Queda tachada en Ventas con el motivo y quién la borró.
+ */
+export async function voidVisit(actor: Actor, key: string, reason: unknown): Promise<Result<{ restoredUnits: number }>> {
+  const orgId = actor.activeOrg?.id;
+  if (!orgId || !actor.activeOrg?.canAdmin) return { ok: false, error: "Solo el admin puede borrar atenciones.", status: 403 };
+  const why = String(reason ?? "").trim().replace(/\s+/g, " ").slice(0, 200);
+  if (!why) return { ok: false, error: "Escribí el motivo (ej. se anotó dos veces).", status: 400 };
+  const sales = await listVisitSales(orgId, key);
+  if (!sales.length) return { ok: false, error: "Esa atención ya no existe o ya fue borrada.", status: 404 };
+  const visitId = sales[0].visitId;
+  const saleIds = sales.map((s) => s.id);
+  const sql = getSql();
+
+  if (visitId) {
+    const [d] = (await sql`
+      SELECT count(*)::int AS n FROM debt_payments p JOIN debts d ON d.id = p.debt_id
+      WHERE d.organization_id = ${orgId} AND d.visit_id = ${visitId} AND d.status <> 'voided' AND p.status = 'active'`) as unknown as { n: number }[];
+    if (Number(d.n) > 0) return { ok: false, error: "La deuda de esta atención ya tiene cobros: anulá esos cobros primero.", status: 409 };
+  }
+  const [g] = (await sql`
+    SELECT count(*)::int AS n FROM gift_cards g JOIN gift_card_uses u ON u.gift_card_id = g.id AND u.organization_id = g.organization_id
+    WHERE g.organization_id = ${orgId} AND g.sale_id = ANY(${saleIds}) AND g.status = 'open'`) as unknown as { n: number }[];
+  if (Number(g.n) > 0) return { ok: false, error: "La gift card vendida en esta atención ya se usó: no se puede borrar.", status: 409 };
+
+  const who = { id: actor.userId, name: actor.name, source: "manual" as const };
+  let restoredUnits = 0;
+  for (const s of sales) {
+    if (await markSaleVoided(orgId, s.id, why, who)) restoredUnits += await restoreStockForSale(orgId, s.id, who);
+  }
+  if (visitId) {
+    await sql`UPDATE debts SET status = 'voided', voided_at = ${realNowIso()}, voided_by = ${actor.userId}
+      WHERE organization_id = ${orgId} AND visit_id = ${visitId} AND status <> 'voided'`;
+    await dropPrepaidUses(orgId, visitId);
+    await dropInsurerVisit(orgId, visitId);
+    await releaseDeposit(orgId, visitId);
+    await dropGiftCardUses(orgId, visitId);
+  }
+  await sql`UPDATE gift_cards SET status = 'voided' WHERE organization_id = ${orgId} AND sale_id = ANY(${saleIds}) AND status = 'open'`;
+  return { ok: true, restoredUnits };
 }

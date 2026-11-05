@@ -1,4 +1,4 @@
-import { editVisit, type VisitInput } from "@/lib/domain/visits";
+import { editVisit, voidVisit, type VisitInput } from "@/lib/domain/visits";
 import { refreshAfterChange } from "@/lib/domain/notifications";
 import { actorOr401, bodyOf, respond } from "../../_http";
 
@@ -19,6 +19,16 @@ export async function PUT(req: Request, ctx: { params: Promise<{ visitId: string
     ...("depositId" in b ? { depositId: b.depositId ?? null } : {}),
     lines: b.lines ?? [],
   });
+  if (r.ok) await refreshAfterChange(actor);
+  return respond(r);
+}
+
+/** Borrar (anular) una atención entera: solo el admin, `{ reason }`. Queda tachada en Ventas con el motivo. */
+export async function DELETE(req: Request, ctx: { params: Promise<{ visitId: string }> }) {
+  const actor = await actorOr401(req);
+  if (actor instanceof Response) return actor;
+  const b = await bodyOf<{ reason: string }>(req);
+  const r = await voidVisit(actor, (await ctx.params).visitId, b.reason);
   if (r.ok) await refreshAfterChange(actor);
   return respond(r);
 }

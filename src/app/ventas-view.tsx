@@ -214,16 +214,14 @@ export function VentasView({ actor }: { actor: Actor }) {
     refresh();
   }
 
-  async function voidVisit(ids: string[], reason: string) {
-    let units = 0;
-    for (const id of ids) {
-      const r = await call(`/api/sales/${id}/void`, "POST", { reason });
-      if (!r.ok) {
-        refresh();
-        return showToast(r.error ?? "No se pudo anular.");
-      }
-      units += Number(r.restoredUnits ?? 0);
+  // La atención entera (con su deuda, abono, seña, obra social y gift card): ver `voidVisit` en visits.ts.
+  async function voidVisit(key: string, reason: string) {
+    const r = await call(`/api/visits/${key}`, "DELETE", { reason });
+    if (!r.ok) {
+      refresh();
+      return showToast(r.error ?? "No se pudo anular.");
     }
+    const units = Number(r.restoredUnits ?? 0);
     showToast(units ? `Anulado. Volvieron ${units} unidades al stock.` : "Anulado.");
     refresh();
     refreshComm();
@@ -575,7 +573,7 @@ function VisitCard({
   canEdit: boolean;
   onEdit: () => void;
   onMethod: (ids: string[], m: Payment) => void;
-  onVoid: (ids: string[], reason: string) => void;
+  onVoid: (key: string, reason: string) => void;
 }) {
   const [voiding, setVoiding] = useState(false);
   const [reason, setReason] = useState("");
@@ -640,7 +638,7 @@ function VisitCard({
       {voiding && (
         <div className="flex flex-wrap gap-2 sm:pl-[52px]">
           <input autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motivo (ej. se anotó dos veces)" className={`${FIELD} !w-auto min-w-[200px] flex-1`} />
-          <button className={BTN_DARK} disabled={!reason.trim()} onClick={() => onVoid(paid.map((s) => s.id), reason)}>
+          <button className={BTN_DARK} disabled={!reason.trim()} onClick={() => onVoid(v.key, reason)}>
             Anular
           </button>
           <button className={BTN} onClick={() => setVoiding(false)}>
