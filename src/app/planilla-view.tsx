@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { NotePencilIcon, PlusIcon } from "@phosphor-icons/react";
 import type { Actor } from "@/lib/domain/types";
 import { normalize, parseNote, suggest } from "@/lib/domain/quick-sale";
-import { Toast, call, fmtTime, money, usePoll, useToast, useToday, type CatalogResponse, type PayPart, type PaymentsMap, type SaleMethod, type SaleRow, dollarsOf, moneyUsd } from "./shared";
+import { Toast, call, fmtTime, money, usePoll, useToast, useToday, useDolar, type CatalogResponse, type PayPart, type PaymentsMap, type SaleMethod, type SaleRow, dollarsOf, moneyUsd } from "./shared";
 import { PlanillaMovimientos } from "./planilla-movimientos";
 import { NoteDialog, VisitNotes, type Note } from "./notas";
 import type { PrepaidRow } from "./abonos";
@@ -91,6 +91,11 @@ const METHOD_SHORT: Record<SaleMethod, string> = {
 };
 const GENERIC = "Atención";
 const num = (s: string) => Number(s.replace(/\D/g, "") || 0);
+/** «100», «100,5», «1.250», «99.90» → dólares (con hasta 2 decimales). */
+const usdNum = (s: string) => {
+  const t = s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : /^\d+\.\d{1,2}$/.test(s) ? s : s.replace(/\./g, "");
+  return Math.round((Number(t) || 0) * 100) / 100;
+};
 
 
 export function toRows(sales: SaleRow[], payments?: PaymentsMap, debts?: Record<string, { amount: number; remaining: number }>): Row[] {
@@ -184,6 +189,7 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
   const [catalog, refreshCatalog] = usePoll<CatalogResponse>("/api/catalog", 60_000);
   const [sellersData] = usePoll<{ ok: boolean; sellers: { providerId: string; name: string; area: Area }[] }>("/api/sellers", 60_000);
   const [toast, showToast] = useToast();
+  const [dolar] = useDolar();
   const [abonosData, refreshAbonos] = usePoll<{ ok: boolean; prepaids: PrepaidRow[]; uses?: { visitId: string; prepaidId: string; itemId: string; itemName: string }[] }>(
     `/api/prepaids?date=${date}`,
     60_000,
@@ -286,6 +292,7 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
             canEdit={canEdit}
             admin={admin}
             abonos={abonos}
+            rate={dolar?.rate ?? null}
             notes={notesByVisit}
             onNote={(r, note) => setNoteForm(note ? { note } : { visit: { visitId: r.key, patient: r.patient, what: r.itemsText } })}
             onSaved={() => {
@@ -332,6 +339,7 @@ function AreaSection({
   canEdit,
   admin,
   abonos,
+  rate,
   notes,
   onNote,
   onSaved,
@@ -351,6 +359,8 @@ function AreaSection({
   /** El admin puede borrar (anular) una atención. */
   admin: boolean;
   abonos: AbonoData;
+  /** Cotización del dólar de hoy (para anotar en US$). */
+  rate: number | null;
   /** visit_id → sus notas. */
   notes: Map<string, Note[]>;
   /** Abrir una nota (o escribir una nueva para esa atención). */
@@ -406,6 +416,7 @@ function AreaSection({
                   practices={areaPractices}
                   products={products}
                   abonos={abonos}
+                rate={rate}
                   onCancel={() => setEditing(null)}
                   onSaved={() => {
                     setEditing(null);
@@ -476,6 +487,7 @@ function AreaSection({
                 practices={areaPractices}
                 products={products}
                 abonos={abonos}
+                rate={rate}
                 onSaved={() => {
                   setNewKey((n) => n + 1);
                   onSaved();
@@ -538,6 +550,7 @@ function RowEditor({
   practices,
   products,
   abonos,
+  rate,
   onCancel,
   onSaved,
   onError,
@@ -549,6 +562,7 @@ function RowEditor({
   practices: Item[];
   products: Item[];
   abonos: AbonoData;
+  rate: number | null;
   onCancel?: () => void;
   onSaved: () => void;
   onError: (m: string) => void;
@@ -563,8 +577,12 @@ function RowEditor({
   // Obra social (OSMECON): el medio «ins:<id>»; las prácticas no pasan por caja.
   const rowIns = row ? (abonos.byInsurer.get(row.key) ?? null) : null;
   const [method, setMethod] = useState<SaleMethod | "" | "abono" | `ins:${string}`>(rowUse ? "abono" : rowIns ? `ins:${rowIns.insurerId}` : (row?.method ?? ""));
-  // Varios medios / dólares (anotado en Anotar): se conservan las partes y lo pagado es su suma.
-  const keepParts = !!row && (method === "mixto" || method === "dolares") && row.parts.length > 0;
+  // Varios medios (anotado en Anotar): se conservan las partes y lo pagado es su suma.
+  const keepParts = !!row && method === "mixto" && row.parts.length > 0;
+  // En dólares: se escribe en US$; los pesos (a la cotización) son solo para la parte de la profesional.
+  const rowUsd = row?.method === "dolares" && row.parts.length === 1 ? row.parts[0] : null;
+  const [usdText, setUsdText] = useState(rowUsd?.usd ? String(rowUsd.usd).replace(".", ",") : "");
+  const [usdTouched, setUsdTouched] = useState(!!rowUsd);
   const [k, setK] = useState(row?.kManual ? String(row.k) : "");
   const [busy, setBusy] = useState(false);
   // Borrar (solo admin): pide el motivo en la misma fila y recién ahí anula.
@@ -622,13 +640,13 @@ function RowEditor({
       ? 0
       : (p.amount ?? (p.item ? (method === "tarjeta" ? (p.item.cardPrice ?? p.item.price) : p.item.price) * p.qty : 0));
   const listTotal = picked.reduce((n, p) => n + priceOf(p), 0);
-  const paidValue = keepParts
-    ? row!.parts.reduce((n, p) => n + p.amount, 0)
-    : paidTouched && !usingAbono && !insurerId
-      ? num(paid)
-      : depActive && !rowDep
-        ? Math.max(0, listTotal - depAmount)
-        : listTotal;
+  const basePesos =
+    paidTouched && !usingAbono && !insurerId ? num(paid) : depActive && !rowDep ? Math.max(0, listTotal - depAmount) : listTotal;
+  const inUsd = effMethod === "dolares";
+  // Una fila ya anotada en dólares conserva su cotización; una nueva usa la de hoy.
+  const fx = rowUsd?.rate || rate;
+  const usdValue = !inUsd ? 0 : usdTouched ? usdNum(usdText) : fx ? Math.round((basePesos / fx) * 100) / 100 : 0;
+  const paidValue = keepParts ? row!.parts.reduce((n, p) => n + p.amount, 0) : inUsd && fx ? Math.round(usdValue * fx) : basePesos;
   const kValue = k.trim() === "" ? null : num(k);
   const dirty = !row ? !!(patient.trim() || what.trim() || paid || k) : true;
 
@@ -665,6 +683,8 @@ function RowEditor({
       return { pendingName: p.name, pendingPrice: amounts[i] ? Math.round(amounts[i] / p.qty) : null, quantity: p.qty, amount: amounts[i], commission };
     });
     if (effMethod === "abono" && !abonoId) return onError("No encontré un abono de esa paciente para eso.");
+    if (inUsd && !fx) return onError("Falta la cotización del dólar (arriba a la derecha).");
+    if (inUsd && !(usdValue > 0)) return onError("¿Cuántos dólares pagó?");
     // Abono: con id, la sesión es de ese abono; si la fila era del abono y ya no, se suelta (null).
     const prepaid = {
       ...(usingAbono ? { prepaidId: abonoId } : rowUse ? { prepaidId: null } : {}),
@@ -673,10 +693,12 @@ function RowEditor({
     };
     const body = keepParts
       ? { patientName: patient, providerId, payments: row!.parts, lines, ...prepaid }
-      : {
+      : inUsd
+        ? { patientName: patient, providerId, payments: [{ method: "dolares", usd: usdValue, rate: fx }], lines, ...prepaid }
+        : {
           patientName: patient,
           providerId,
-          paymentMethod: effMethod === "mixto" || effMethod === "dolares" || effMethod === "abono" || insurerId ? null : effMethod || null,
+          paymentMethod: effMethod === "mixto" || effMethod === "abono" || insurerId ? null : effMethod || null,
           lines,
           ...prepaid,
         };
@@ -772,17 +794,27 @@ function RowEditor({
       </td>
       <td className="px-1.5 py-1">
         <input
-          value={paidValue ? paidValue.toLocaleString("es-AR") : ""}
+          value={inUsd ? (usdTouched ? usdText : usdValue ? usdValue.toLocaleString("es-AR") : "") : paidValue ? paidValue.toLocaleString("es-AR") : ""}
           disabled={keepParts || (usingAbono && picked.every((x) => x.item?.id === abonoItem)) || (!!insurerId && picked.every((x) => !x.product))}
           title={keepParts ? "Pagó en varios medios: se corrige desde Anotar" : undefined}
           onChange={(e) => {
+            if (inUsd) {
+              setUsdTouched(true);
+              setUsdText(e.target.value.replace(/[^\d.,]/g, ""));
+              return;
+            }
             setPaidTouched(true);
             setPaid(e.target.value.replace(/\D/g, ""));
           }}
-          inputMode="numeric"
-          placeholder="$"
+          inputMode={inUsd ? "decimal" : "numeric"}
+          placeholder={inUsd ? "US$" : "$"}
           className={`${CELL} text-right tabular-nums`}
         />
+        {inUsd && (
+          <span className="block px-1.5 pt-0.5 text-right text-[11.5px] text-neutral-400">
+            {fx ? `US$ · ≈ ${money(paidValue)} (a ${money(fx)})` : "Falta la cotización"}
+          </span>
+        )}
       </td>
       <td className="px-1.5 py-1">
         <select value={effMethod} onChange={(e) => setMethod(e.target.value as SaleMethod | "" | "abono" | `ins:${string}`)} className={`${CELL} pr-1`}>
@@ -805,7 +837,9 @@ function RowEditor({
           <option value="profesional" title="Le pagaron directo a la profesional: no entra a la caja; lo nuestro nos lo debe ella">
             A la prof.
           </option>
-          {row && row.parts.length > 0 && row.method === "dolares" && <option value="dolares">US$</option>}
+          <option value="dolares" title="Pagó en dólares: se anota en US$ (a la cotización del día)">
+            US$
+          </option>
           {row && row.parts.length > 0 && row.method === "mixto" && <option value="mixto">Varios</option>}
         </select>
       </td>
