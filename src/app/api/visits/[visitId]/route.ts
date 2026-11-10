@@ -17,6 +17,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ visitId: string
     ...("prepaidId" in b ? { prepaidId: b.prepaidId ?? null } : {}),
     ...("insurerId" in b ? { insurerId: b.insurerId ?? null } : {}),
     ...("depositId" in b ? { depositId: b.depositId ?? null } : {}),
+    ...("combos" in b ? { combos: b.combos ?? [] } : {}),
     lines: b.lines ?? [],
   });
   if (r.ok) await refreshAfterChange(actor);

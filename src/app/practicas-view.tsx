@@ -3,12 +3,13 @@
 import { useState } from "react";
 import { PlusIcon } from "@phosphor-icons/react";
 import { InventarioView } from "./inventario-view";
+import { CombosView } from "./combos-view";
 import { Pendientes } from "./pendientes";
 import { BTN, BTN_DARK, CARD, CommissionField, FIELD, ProviderPicker, Toast, call, cutDraftOf, cutsFromDraft, money, parsePct, providerNames, usePoll, useSellers, useToast, type Cut, type CutDraft } from "./shared";
 
-/** Stock: productos (con lotes y vencimientos) o prácticas (solo precio). */
+/** Stock: productos (con lotes y vencimientos), prácticas (solo precio) o combos (varias cosas a precio especial). */
 export function StockSection({ canAdmin }: { canAdmin: boolean }) {
-  const [tab, setTab] = useState<"productos" | "practicas">("productos");
+  const [tab, setTab] = useState<"productos" | "practicas" | "combos">("productos");
   const [reload, setReload] = useState(0);
   return (
     <>
@@ -19,6 +20,7 @@ export function StockSection({ canAdmin }: { canAdmin: boolean }) {
             [
               ["productos", "Productos"],
               ["practicas", "Prácticas"],
+              ["combos", "Combos"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -35,7 +37,13 @@ export function StockSection({ canAdmin }: { canAdmin: boolean }) {
           ))}
         </div>
       </div>
-      {tab === "productos" ? <InventarioView key={reload} /> : <PracticasView key={reload} canAdmin={canAdmin} />}
+      {tab === "productos" ? (
+        <InventarioView key={reload} />
+      ) : tab === "practicas" ? (
+        <PracticasView key={reload} canAdmin={canAdmin} />
+      ) : (
+        <CombosView key={reload} canAdmin={canAdmin} />
+      )}
     </>
   );
 }

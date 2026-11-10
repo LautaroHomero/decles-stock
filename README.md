@@ -167,6 +167,8 @@ Diferencias concretas contra Clavdia; todo lo demás es igual:
 6. Cookie `decles_stock_session` (en Clavdia `clinic_session`).
 7. Recuperar contraseña usa la tabla de Clavdia `pin_reset_codes` (`channel = 'email'`) y `users.email`; mails con
    nodemailer/SMTP (`src/lib/mail.ts`). En Clavdia se puede cambiar por su envío de mails.
+8. **Combos / promos** (0036): tablas nuevas `combos`, `combo_items` y `visit_combos`. No tocan `sales`: cada renglón se
+   guarda con su importe (precio del combo repartido, `price_manual`). El reparto es `domain/combo-calc.ts` (puro).
 
 Pasar los datos: dump de `organizations`, `users`, `memberships`, `providers`, `stock_*`, `price_*`, `sales` y
 `notifications` e import en la base de Clavdia (los IDs son TEXT con prefijo y no colisionan).

@@ -21,6 +21,7 @@ import { createDebt, relinkDebts } from "@/lib/domain/debts";
 import { isOwnerProvider } from "@/lib/domain/owners";
 import { depositForVisit, relinkDeposit, releaseDeposit, applyDeposit, type Deposit } from "@/lib/domain/deposits";
 import { commissionFor } from "@/lib/domain/billing";
+import { dropVisitCombos, recordVisitCombos, relinkVisitCombos } from "@/lib/domain/combos";
 import { dropInsurerVisit, feeFor, insurerForVisit, recordInsurerVisit, relinkInsurerVisit, type Insurer } from "@/lib/domain/insurers";
 import { dropPrepaidUses, prepaidItemId, prepaidForVisit, recordPrepaidUse, relinkPrepaidUses, type Prepaid } from "@/lib/domain/prepaids";
 import { dropGiftCardUses, issueGiftCard, relinkGiftCardUses, useGiftCard as redeemGiftCard } from "@/lib/domain/gift-cards";
@@ -78,6 +79,11 @@ export interface VisitInput {
    * («nos debe 36000»): su parte del total queda en lo que cobró directo − `owesUs`.
    */
   owesUs?: number | null;
+  /**
+   * Combos / promos que se aplicaron (`domain/combos.ts`): los renglones ya vienen con el precio repartido; esto solo
+   * guarda cuál fue, para mostrarlo. Al editar: sin la clave siguen los de antes; con lista (vacía o no), esos.
+   */
+  combos?: { id: string; times?: number }[] | null;
   /**
    * `pendingPrice`: lo que se cobró por unidad de algo no cargado (opcional).
    * Planilla: `generic` = renglón sin práctica elegida («Atención»); `amount` = lo que abonó por el renglón
@@ -319,6 +325,7 @@ export async function recordVisit(
     }
   }
   if (insurer) await recordInsurerVisit(orgId, visitId, insurer, owner ? 0 : insurerFee);
+  await recordVisitCombos(orgId, visitId, v.combos);
   if (deposit) {
     // La parte de la profesional sobre el total de la práctica (lo de hoy + la seña), salvo que se haya escrito a mano.
     const l = lines[depositLine];
@@ -412,6 +419,8 @@ export async function editVisit(
     // Seña: sin la clave sigue en la atención nueva; con id ya quedó en la nueva; con null se suelta.
     if (v.depositId === undefined) await relinkDeposit(orgId, old[0].visitId, r.visitId);
     else if (v.depositId === null) await releaseDeposit(orgId, old[0].visitId);
+    if (v.combos === undefined) await relinkVisitCombos(orgId, old[0].visitId, r.visitId);
+    else await dropVisitCombos(orgId, old[0].visitId);
     if (v.giftCardCode === undefined) await relinkGiftCardUses(orgId, old[0].visitId, r.visitId);
     else if (v.giftCardCode === null) await dropGiftCardUses(orgId, old[0].visitId);
   }

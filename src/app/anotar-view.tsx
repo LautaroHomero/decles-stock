@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDownIcon,
   ArrowRightIcon,
@@ -26,6 +26,7 @@ import {
 import type { Actor } from "@/lib/domain/types";
 import { parseNote, searchScore, suggest } from "@/lib/domain/quick-sale";
 import { parseExpense } from "@/lib/domain/expense-note";
+import { applyCombos, comboLabel, type ComboApplied, type ComboDef } from "@/lib/domain/combo-calc";
 import { parsePrepaidNote, prepaidPatient, samePatient, SAYS_PREPAID, USES_PREPAID } from "@/lib/domain/prepaid-note";
 import { parsePayable, parsePayablePayment } from "@/lib/domain/payable-note";
 import { depositPatient, parseDepositNote, USES_DEPOSIT } from "@/lib/domain/deposit-note";
@@ -98,6 +99,9 @@ interface Seller {
 interface Line {
   item: Item;
   qty: number;
+  /** Combo aplicado: lo que vale el renglón entero en efectivo / con tarjeta (pisa precio × cantidad). */
+  listCash?: number;
+  listCard?: number;
   /** Médica escrita en ese renglón (si hay más de una en el texto). */
   sellerId: string | null;
 }
@@ -131,6 +135,9 @@ interface Draft {
   fractions: MoneyNote["fractions"];
   /** «pagó en dólares» sin cantidad: los dólares salen de lo que salía y la cotización del día. */
   usdAll: boolean;
+  /** Combos que se aplicaron (los renglones ya tienen su precio) y los que entran pero se sacaron con «sin promo». */
+  combos: ComboApplied[];
+  comboOffer: ComboApplied[];
   /** «deja 10000 y paga el resto el viernes»: debe lo que falta hasta el precio. */
   debtRest?: boolean;
   /** «20000 en efectivo y el resto con tarjeta»: el medio de lo que falta hasta el precio. */
@@ -185,6 +192,8 @@ const emptyDraft = (from: Draft["from"], sellerId: string | null): Draft => ({
   remindOn: null,
   fractions: null,
   usdAll: false,
+  combos: [],
+  comboOffer: [],
 });
 
 /** Lo escrito → borrador. Lo que no se encuentra en la lista queda como pendiente (lo resuelve el admin). */
@@ -227,8 +236,24 @@ function buildDraft(text: string, items: Item[], sellers: Seller[], fixedSeller:
 /** Toda práctica es de un paciente: con una práctica anotada, el nombre es obligatorio. */
 const hasPractice = (lines: Line[]) => lines.some((l) => l.item.kind === "practica");
 
-const lineCash = (l: Line) => l.item.price * l.qty;
-const lineCard = (l: Line) => cardOf(l.item) * l.qty;
+const lineCash = (l: Line) => l.listCash ?? l.item.price * l.qty;
+const lineCard = (l: Line) => l.listCard ?? cardOf(l.item) * l.qty;
+/** Combos: si lo anotado arma uno (con la misma profesional), cada renglón pasa a valer su parte del precio del combo. */
+function withCombos(lines: Line[], combos: ComboDef[], visitSeller: string | null): { lines: Line[]; applied: ComboApplied[] } {
+  const base = lines.map((l) => ({ ...l, listCash: undefined, listCard: undefined }));
+  const r = applyCombos(
+    base.map((l) => ({
+      itemId: l.item.kind === "pendiente" ? null : l.item.id,
+      qty: l.qty,
+      cash: lineCash(l),
+      card: lineCard(l),
+      group: l.item.kind === "producto" ? (visitSeller ?? "") : (l.sellerId ?? visitSeller ?? ""),
+    })),
+    combos,
+  );
+  if (!r.applied.length) return { lines: base, applied: [] };
+  return { lines: base.map((l, i) => ({ ...l, listCash: r.cash[i], listCard: r.card[i] })), applied: r.applied };
+}
 /** Precio de lista de un renglón según el medio de pago. */
 const lineList = (l: Line, payment: Payment | null) => (payment === "tarjeta" ? lineCard(l) : lineCash(l));
 /** Lo que ingresó por cada renglón: lo escrito repartido (productos a lista, el resto a la práctica). */
@@ -296,7 +321,7 @@ function visitLines(d: Draft) {
   const kAt = Math.max(0, d.lines.findIndex((l) => l.item.kind !== "producto"));
   return d.lines.map((l, i) => {
     const money = {
-      ...(d.paid !== null ? { amount: amounts[i] } : {}),
+      ...(d.paid !== null || d.combos.length ? { amount: amounts[i] } : {}),
       ...(d.share !== null ? { commission: i === kAt ? d.share : 0 } : {}),
     };
     return l.item.kind === "pendiente"
@@ -399,6 +424,19 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const [depositsData, refreshDeposits] = usePoll<{ ok: boolean; deposits: DepositRow[] }>("/api/deposits", 60_000);
   const openDeposits = useMemo(() => (depositsData?.ok ? depositsData.deposits : []), [depositsData]);
   const [pickDeposit, setPickDeposit] = useState<boolean | null>(null);
+  // Combos / promos: se aplican solos; «sin promo» los saca para esta anotación.
+  const [combosData] = usePoll<{ ok: boolean; combos: (ComboDef & { active: boolean })[] }>("/api/combos", 120_000);
+  const combos = useMemo(() => (combosData?.ok ? combosData.combos.filter((c) => c.active) : []), [combosData]);
+  const [noPromo, setNoPromo] = useState(false);
+  // El borrador con los combos al día (vista manual y confirmar: si cambian los renglones, se recalcula).
+  const priced = useCallback(
+    (d: Draft): Draft => {
+      if (d.prepaidId || d.insurerId || (!combos.length && !d.combos.length)) return d;
+      const c = withCombos(d.lines, combos, d.sellerId);
+      return noPromo ? { ...d, lines: c.lines, combos: [], comboOffer: c.applied } : { ...d, lines: c.lines, combos: c.applied, comboOffer: [] };
+    },
+    [combos, noPromo],
+  );
 
   // Vista previa en vivo de lo escrito.
   const preview = useMemo(() => {
@@ -449,6 +487,15 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     if (abonoChoices.length) d.patientUnsure = false;
     // Tocar «Abono» en ¿Cómo pagó? con un plan cargado = usa el plan.
     const useAbono = abono ? (pickAbono ?? (saysAbono || pickPay === "abonado" ? true : d.paid !== null && !d.direct ? false : null)) : false;
+    // Combos: lo que arma uno se cobra al precio del combo (no con abono ni obra social). «Sin promo» = a lista.
+    if (!(abono && useAbono) && !insurer && combos.length) {
+      const c = withCombos(d.lines, combos, d.sellerId);
+      if (noPromo) d.comboOffer = c.applied;
+      else {
+        d.lines = c.lines;
+        d.combos = c.applied;
+      }
+    }
     if (abono && useAbono) {
       d.direct = false;
       d.prepaidId = abono.id;
@@ -561,7 +608,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       deposit,
       useDeposit,
     };
-  }, [insurers, pickInsurer, openDeposits, pickDeposit, pickAbonoId, typed, items, sellers, fixedSeller, pickSeller, pickPay, pickSplit, rate, chosen, unsureIs, pickPatient, pickPaid, pickShare, pickDebt, pickRemind, openPrepaids, pickAbono]);
+  }, [insurers, pickInsurer, openDeposits, pickDeposit, pickAbonoId, typed, items, sellers, fixedSeller, pickSeller, pickPay, pickSplit, rate, chosen, unsureIs, pickPatient, pickPaid, pickShare, pickDebt, pickRemind, openPrepaids, pickAbono, combos, noPromo]);
   // Modo del pago para los botones: un medio, «dolares» (todo en dólares) o «varios».
   const payMode = preview
     ? preview.split
@@ -757,7 +804,8 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setGiftCardError("");
   }
 
-  async function save(d: Draft) {
+  async function save(d0: Draft) {
+    let d = priced(d0);
     if (d.debt && d.paid === null && !d.split) d = { ...d, paid: shownPaid(d) };
     if (d.debt && !d.patient.trim()) return showToast("¿Quién quedó debiendo? Escribí el nombre del paciente.");
     if ((d.split && splitParts(d.split, rate).some((p) => p.method === "dolares" && !p.rate)) || (d.usdAll && !rate))
@@ -771,6 +819,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       ...(d.prepaidId ? { prepaidId: d.prepaidId } : {}),
       ...(d.insurerId ? { insurerId: d.insurerId } : {}),
       ...(d.depositId ? { depositId: d.depositId } : {}),
+      ...(d.combos.length ? { combos: d.combos.map((c) => ({ id: c.id, times: c.times })) } : {}),
       ...(d.split?.giftcard ? { giftCardCode: giftCardFound?.code } : {}),
       ...(giftCardLine ? { giftCardIssue: { kind: giftCardKind, treatmentItemId: giftCardKind === "treatment" ? giftCardTreatmentId : null, buyer: giftCardBuyer } } : {}),
       lines: visitLines(d),
@@ -795,6 +844,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setPickAbonoId(null);
     setPickInsurer(undefined);
     setPickDeposit(null);
+    setNoPromo(false);
     setChosen({});
     setUnsureIs(null);
     setPickPatient("");
@@ -946,6 +996,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setPickAbonoId(null);
     setPickInsurer(undefined);
     setPickDeposit(null);
+    setNoPromo(false);
     setPickDebtId(null);
     setDebtPayAmount(null);
     setDebtPayMethod(null);
@@ -1134,6 +1185,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setPickAbonoId(null);
     setPickInsurer(undefined);
     setPickDeposit(null);
+    setNoPromo(false);
                   setPickDebtId(null);
                   setDebtPayAmount(null);
                   setDebtPayMethod(null);
@@ -1621,6 +1673,18 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                         </span>
                       </li>
                     ))}
+                    {(preview.combos.length > 0 || preview.comboOffer.length > 0) && (
+                      <li className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-[14px] text-neutral-400">
+                        <span>
+                          {preview.combos.length
+                            ? `Combo: ${preview.combos.map(comboLabel).join(", ")} · ahorra ${money(preview.combos.reduce((n, c) => n + c.saving, 0))}`
+                            : `Sin promo: va a precio de lista`}
+                        </span>
+                        <button onClick={() => setNoPromo(!noPromo)} className="underline underline-offset-2 hover:text-fg">
+                          {preview.combos.length ? "sin promo" : `aplicar ${preview.comboOffer.map((c) => c.name).join(", ")}`}
+                        </button>
+                      </li>
+                    )}
                     {preview.unresolved.map((u, k) => (
                       <li key={`u${k}`} className="flex flex-col gap-2 py-1">
                         <Missing>«{u.text}»: ¿cuál es?</Missing>
@@ -2032,16 +2096,27 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
           sellers={sellers}
           isMedico={isMedico}
           fixedSeller={fixedSeller}
-          draft={draft}
+          draft={priced(draft)}
           setDraft={setDraft}
           busy={busy}
+          onPromo={() => setNoPromo(!noPromo)}
           onBack={() => setMode("idle")}
           onSave={() => save(draft)}
         />
       )}
 
       {mode === "confirm" && (
-        <Confirm items={items} draft={draft} setDraft={setDraft} sellers={sellers} isMedico={isMedico} busy={busy} onSave={() => save(draft)} onEdit={() => setMode("idle")} />
+        <Confirm
+          items={items}
+          draft={priced(draft)}
+          setDraft={setDraft}
+          sellers={sellers}
+          isMedico={isMedico}
+          busy={busy}
+          onPromo={() => setNoPromo(!noPromo)}
+          onSave={() => save(draft)}
+          onEdit={() => setMode("idle")}
+        />
       )}
 
       {mode === "idle" && (
@@ -2217,6 +2292,7 @@ function ManualView({
   draft,
   setDraft,
   busy,
+  onPromo,
   onBack,
   onSave,
 }: {
@@ -2227,6 +2303,7 @@ function ManualView({
   draft: Draft;
   setDraft: (d: Draft) => void;
   busy: boolean;
+  onPromo: () => void;
   onBack: () => void;
   onSave: () => void;
 }) {
@@ -2369,6 +2446,7 @@ function ManualView({
                 onChange={(sp) => setDraft({ ...draft, split: sp, paid: splitPesos(sp, rate) })}
               />
             )}
+            <ComboNote draft={draft} onToggle={onPromo} />
             <div className="flex flex-col gap-2 text-[14px]">
               <label className="flex flex-wrap items-center gap-2">
                 <span className="w-[140px] text-neutral-400">Ingresó</span>
@@ -2490,6 +2568,7 @@ function Confirm({
   sellers,
   isMedico,
   busy,
+  onPromo,
   onSave,
   onEdit,
   editing,
@@ -2500,6 +2579,8 @@ function Confirm({
   sellers: Seller[];
   isMedico: boolean;
   busy: boolean;
+  /** «sin promo» / aplicar el combo (no al editar algo guardado). */
+  onPromo?: () => void;
   onSave: () => void;
   onEdit: () => void;
   /** Editando algo ya guardado: cambian los textos de los botones. */
@@ -2523,8 +2604,8 @@ function Confirm({
   const whoNames = draft.lines.length
     ? [...new Set(draft.lines.map((l) => sellerName(l.sellerId ?? draft.sellerId)).filter(Boolean))]
     : [sellerName(draft.sellerId)].filter(Boolean);
-  const cash = draft.lines.reduce((n, l) => n + l.item.price * l.qty, 0);
-  const card = draft.lines.reduce((n, l) => n + cardOf(l.item) * l.qty, 0);
+  const cash = draft.lines.reduce((n, l) => n + lineCash(l), 0);
+  const card = draft.lines.reduce((n, l) => n + lineCard(l), 0);
   const pendingCount = draft.lines.filter((l) => l.item.kind === "pendiente" && !l.item.price).length;
   const setPrice = (i: number, price: number) =>
     setDraft({ ...draft, lines: draft.lines.map((l, j) => (j === i ? { ...l, item: { ...l.item, price } } : l)) });
@@ -2756,6 +2837,7 @@ function Confirm({
         )}
       </div>
 
+      {onPromo && <ComboNote draft={draft} onToggle={onPromo} />}
       {/* Plata: cuánto ingresó y el reparto (la profesional según su %, salvo que se aclare) */}
       <div className="flex flex-col gap-2 text-[14px]">
         <label className="flex flex-wrap items-center gap-2">
@@ -3103,3 +3185,20 @@ const ROUND =
   "flex h-9 w-9 items-center justify-center rounded-md border border-neutral-800 text-fg transition-colors hover:bg-accent-900 disabled:opacity-30";
 const CHIP = "min-h-[44px] rounded-pill border-2 border-neutral-800 px-4 py-2 text-[15px] font-medium transition-colors hover:border-neutral-600";
 const CHIP_ON = "min-h-[44px] rounded-pill border-2 border-accent bg-accent px-4 py-2 text-[15px] font-medium text-on-accent";
+
+/** «Combo: Promo A + B · ahorra $1.000 · sin promo» (o «Sin promo… · aplicar»). */
+function ComboNote({ draft, onToggle }: { draft: Draft; onToggle: () => void }) {
+  if (!draft.combos.length && !draft.comboOffer.length) return null;
+  return (
+    <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[14px] text-neutral-400">
+      <span>
+        {draft.combos.length
+          ? `Combo: ${draft.combos.map(comboLabel).join(", ")} · ahorra ${money(draft.combos.reduce((n, c) => n + c.saving, 0))}`
+          : "Sin promo: va a precio de lista"}
+      </span>
+      <button type="button" onClick={onToggle} className="underline underline-offset-2 hover:text-fg">
+        {draft.combos.length ? "sin promo" : `aplicar ${draft.comboOffer.map((c) => c.name).join(", ")}`}
+      </button>
+    </p>
+  );
+}

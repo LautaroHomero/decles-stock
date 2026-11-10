@@ -10,6 +10,7 @@ import { NoteDialog, VisitNotes, type Note } from "./notas";
 import type { PrepaidRow } from "./abonos";
 import type { DepositRow } from "./senas";
 import { samePatient } from "@/lib/domain/prepaid-note";
+import { applyCombos, comboLabel, type ComboDef } from "@/lib/domain/combo-calc";
 import { PlanillaFiltros, Resaltar, SIN_FILTROS, filtrando, filtrar, type Filtros } from "./planilla-filtros";
 
 /** Abonos abiertos y qué atenciones del día son sesiones de un abono. */
@@ -23,6 +24,9 @@ interface AbonoData {
   /** Señas sin usar y las que se descontaron en atenciones del día (visit_id → seña). */
   deposits: DepositRow[];
   depositUsed: Map<string, { depositId: string; amount: number; createdAt: string }>;
+  /** Combos activos (se aplican solos) y cuáles se aplicaron en atenciones del día (visit_id → combos). */
+  combos: ComboDef[];
+  byCombo: Map<string, { name: string; times: number }[]>;
 }
 const prepaidLeft = (p: PrepaidRow) => (p.sessions !== null ? `quedan ${p.sessionsLeft} de ${p.sessions}` : `le quedan ${money(p.balance)}`);
 
@@ -202,8 +206,14 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
     `/api/deposits?date=${date}`,
     60_000,
   );
+  const [combosData, refreshCombos] = usePoll<{ ok: boolean; combos: (ComboDef & { active: boolean })[]; visits?: { visitId: string; name: string; times: number }[] }>(
+    `/api/combos?date=${date}`,
+    60_000,
+  );
   const abonos: AbonoData = useMemo(
     () => ({
+      combos: combosData?.ok ? combosData.combos.filter((c) => c.active) : [],
+      byCombo: (combosData?.visits ?? []).reduce((m, v) => m.set(v.visitId, [...(m.get(v.visitId) ?? []), v]), new Map<string, { name: string; times: number }[]>()),
       deposits: depData?.ok ? depData.deposits : [],
       depositUsed: new Map((depData?.used ?? []).map((u) => [u.visitId, u])),
       open: abonosData?.ok ? abonosData.prepaids : [],
@@ -211,7 +221,7 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
       insurers: insData?.ok ? insData.insurers.filter((i) => i.active) : [],
       byInsurer: new Map((insData?.visits ?? []).map((v) => [v.visitId, v])),
     }),
-    [abonosData, insData, depData],
+    [abonosData, insData, depData, combosData],
   );
 
   const sellers: Seller[] = useMemo(() => (sellersData?.sellers ?? []).map((s) => ({ id: s.providerId, name: s.name, area: s.area ?? "medicos" })), [sellersData]);
@@ -301,6 +311,7 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
               refreshAbonos();
               refreshIns();
               refreshDep();
+              refreshCombos();
             }}
             onError={showToast}
           />
@@ -446,6 +457,11 @@ function AreaSection({
                         </li>
                       ))}
                     </ul>
+                    {abonos.byCombo.get(r.key)?.map((c) => (
+                      <span key={c.name} className="mt-0.5 block text-[12px] text-neutral-400">
+                        Combo: {comboLabel(c)}
+                      </span>
+                    ))}
                     <VisitNotes notes={notes.get(r.key) ?? []} onOpen={(n) => onNote(r, n)} />
                   </td>
                   <td className="px-3 py-2 text-neutral-300">{allSellers.find((s) => s.id === r.providerId)?.name ?? r.sales[0].providerName ?? "—"}</td>
@@ -635,10 +651,30 @@ function RowEditor({
     setWhat(t.replace(/[\s,]+$/, ""));
     requestAnimationFrame(() => whatRef.current?.focus());
   };
+  // Combos: si lo anotado arma uno, se aplica solo (con «sin promo» se cobra a lista). No con abono ni obra social.
+  // Una fila ya anotada sin combo queda como estaba (se puede aplicar a mano).
+  const [noPromo, setNoPromo] = useState(!!row && !abonos.byCombo.has(row.key));
+  const combo = useMemo(
+    () =>
+      applyCombos(
+        picked.map((p) => ({
+          itemId: p.amount === null ? (p.item?.id ?? null) : null,
+          qty: p.qty,
+          cash: p.item ? p.item.price * p.qty : 0,
+          card: p.item ? (p.item.cardPrice ?? p.item.price) * p.qty : 0,
+        })),
+        usingAbono || insurerId ? [] : abonos.combos,
+      ),
+    [picked, abonos.combos, usingAbono, insurerId],
+  );
+  const promo = noPromo ? [] : combo.applied;
+  const comboPrice = new Map<Picked, number>();
+  if (promo.length) picked.forEach((p, i) => comboPrice.set(p, method === "tarjeta" ? combo.card[i] : combo.cash[i]));
   const priceOf = (p: Picked) =>
     (usingAbono && p.item?.id === abonoItem) || (insurerId && !p.product)
       ? 0
-      : (p.amount ?? (p.item ? (method === "tarjeta" ? (p.item.cardPrice ?? p.item.price) : p.item.price) * p.qty : 0));
+      : (comboPrice.get(p) ?? p.amount ?? (p.item ? (method === "tarjeta" ? (p.item.cardPrice ?? p.item.price) : p.item.price) * p.qty : 0));
+  const combosBody = { combos: promo.map((a) => ({ id: a.id, times: a.times })) };
   const listTotal = picked.reduce((n, p) => n + priceOf(p), 0);
   const basePesos =
     paidTouched && !usingAbono && !insurerId ? num(paid) : depActive && !rowDep ? Math.max(0, listTotal - depAmount) : listTotal;
@@ -692,10 +728,11 @@ function RowEditor({
       ...(depActive ? { depositId: rowDep?.depositId ?? depMatch!.id } : rowDep ? { depositId: null } : {}),
     };
     const body = keepParts
-      ? { patientName: patient, providerId, payments: row!.parts, lines, ...prepaid }
+      ? { patientName: patient, providerId, payments: row!.parts, lines, ...prepaid, ...combosBody }
       : inUsd
-        ? { patientName: patient, providerId, payments: [{ method: "dolares", usd: usdValue, rate: fx }], lines, ...prepaid }
+        ? { patientName: patient, providerId, payments: [{ method: "dolares", usd: usdValue, rate: fx }], lines, ...prepaid, ...combosBody }
         : {
+          ...combosBody,
           patientName: patient,
           providerId,
           paymentMethod: effMethod === "mixto" || effMethod === "abono" || insurerId ? null : effMethod || null,
@@ -772,6 +809,14 @@ function RowEditor({
           <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-400">
             {abono ? `Plan de ${abono.itemName}: ${prepaidLeft(abono)}` : `Sesión del plan de ${rowUse!.itemName}`}
             {usingAbono ? " · no entra plata" : " · en Medio elegí «Plan» para descontarla"}
+          </span>
+        )}
+        {combo.applied.length > 0 && (
+          <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-400">
+            {noPromo ? "Sin promo (a precio de lista) · " : `Combo: ${combo.applied.map(comboLabel).join(", ")} · ahorra ${money(combo.applied.reduce((n, a) => n + a.saving, 0))} · `}
+            <button type="button" onClick={() => setNoPromo(!noPromo)} className="underline underline-offset-2 hover:text-fg">
+              {noPromo ? `aplicar ${combo.applied.map((a) => a.name).join(", ")}` : "sin promo"}
+            </button>
           </span>
         )}
         {picked.length > 0 && (

@@ -95,6 +95,12 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
   (`deposit-note.ts`) o «+ Seña» (Planilla/Cierre, `senas.tsx`). Entra a la caja ese día (ingreso «Seña · …», `income_id`).
   La atención de esa paciente la descuenta sola (`VisitInput.depositId`): paga el resto, sin deuda; la profesional cobra sobre
   el total (resto + seña). «Hoy vienen con seña» arriba de Anotar (`due_on`). Usada = su `visit_id` con ventas vigentes.
+- Combos / promos (`domain/combos.ts`, tablas `combos` + `combo_items` + `visit_combos`, migración 0036): varias prácticas y/o
+  productos a precio especial (efectivo y tarjeta). Los arma el admin en Stock → Combos; las prácticas tienen que poder hacerlas
+  una misma profesional (`price_item_providers`). Se aplican solos al anotar (Anotar, Confirmar, vista manual y Planilla) con
+  `applyCombos` (`combo-calc.ts`): solo junta renglones de la misma profesional, primero los combos más grandes, y reparte el
+  precio en proporción a la lista; cada renglón va con `amount` (stock y parte de la profesional como siempre). «sin promo» lo saca.
+  No con abono ni obra social. `VisitInput.combos` guarda cuál se aplicó (Planilla: «Combo: …»); al editar sin la clave, sigue.
 - Egresos de plata: tabla `expenses` (`domain/expenses.ts`), los anota secretaría/admin; texto «pagué 5000 de luz» → `expense-note.ts`.
 - Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada. `migrate` activa RLS en todas
   las tablas de `public` (bloquea la API REST de Supabase); la app entra como dueña y no le afecta.
