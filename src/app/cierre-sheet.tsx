@@ -303,6 +303,7 @@ export function CierreSheet({ actor }: { actor: Actor }) {
             error={pay && !pay.ok ? (pay.error ?? "No se pudieron cargar las cuentas con profesionales.") : null}
             date={date}
             canEdit={canEdit}
+            isAdmin={!!actor.activeOrg?.canAdmin}
             showToast={showToast}
             onChange={() => {
               refreshPay();

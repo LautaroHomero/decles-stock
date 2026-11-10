@@ -831,6 +831,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     }
     // ¡Registrado! → animación y de vuelta al inicio, listo para la próxima.
     setFlash(r.giftCardCode ? `${summaryOf(d)} · Código gift card: ${r.giftCardCode}` : summaryOf(d));
+    if (typeof r.shareRequested === "number") showToast(`La parte de la profesional (${money(r.shareRequested)}) queda para que la apruebe el admin.`);
     setLastVisit(String(r.visitId ?? ""));
     setText("");
     setPickSeller(null);

@@ -744,6 +744,8 @@ function RowEditor({
     setBusy(false);
     if (!r.ok) return onError(r.error ?? "No se pudo guardar.");
     onSaved();
+    // La parte de la profesional escrita por alguien que no es admin queda pedida.
+    if (typeof r.shareRequested === "number") onError(`Guardado. La parte de la profesional (${money(r.shareRequested)}) queda para que la apruebe el admin.`);
     if (!row) requestAnimationFrame(() => first.current?.focus());
   }
 

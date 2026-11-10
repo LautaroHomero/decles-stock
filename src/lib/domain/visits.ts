@@ -21,6 +21,7 @@ import { createDebt, relinkDebts } from "@/lib/domain/debts";
 import { isOwnerProvider } from "@/lib/domain/owners";
 import { depositForVisit, relinkDeposit, releaseDeposit, applyDeposit, type Deposit } from "@/lib/domain/deposits";
 import { commissionFor } from "@/lib/domain/billing";
+import { relinkShareRequests, requestShare, setVisitShareTotal } from "@/lib/domain/share-requests";
 import { applyComboCuts, dropVisitCombos, recordVisitCombos, relinkVisitCombos } from "@/lib/domain/combos";
 import { dropInsurerVisit, feeFor, insurerForVisit, recordInsurerVisit, relinkInsurerVisit, type Insurer } from "@/lib/domain/insurers";
 import { dropPrepaidUses, prepaidItemId, prepaidForVisit, recordPrepaidUse, relinkPrepaidUses, type Prepaid } from "@/lib/domain/prepaids";
@@ -111,7 +112,9 @@ export async function recordVisit(
   v: VisitInput,
   /** Al editar: la atención que esta reemplaza (su sesión de abono no cuenta para validar). */
   replacingVisitId?: string,
-): Promise<Result<{ visitId: string; saleIds: string[]; total: number; cashTotal: number; cardTotal: number; pending: number; giftCardCode?: string }>> {
+): Promise<
+  Result<{ visitId: string; saleIds: string[]; total: number; cashTotal: number; cardTotal: number; pending: number; giftCardCode?: string; shareRequested?: number }>
+> {
   let lines = Array.isArray(v.lines) ? v.lines.filter((l) => l && (typeof l.itemId === "string" || clean(l.pendingName) || l.generic)) : [];
   // Por obra social sin decir qué se hizo: es una atención.
   if (v.insurerId && !lines.length) lines = [{ generic: true, amount: 0 }];
@@ -126,6 +129,18 @@ export async function recordVisit(
   if (!orgId || actor.role === "paciente") return { ok: false, error: "No autorizado.", status: 403 };
   if (lines.some((l) => !pesos(l.amount) || !pesos(l.commission)))
     return { ok: false, error: "Los importes tienen que ser números enteros de pesos.", status: 400 };
+  // La parte de la profesional escrita a mano la decide el admin: si la escribe otra persona, la atención se anota con
+  // la de siempre y lo escrito queda pedido (`share-requests.ts`). Al editar, si deja la misma que ya tenía, sigue.
+  const askedShares = lines.map((l) => (l.commission === undefined ? null : l.commission));
+  let askShare = false;
+  if (!actor.activeOrg?.canAdmin && askedShares.some((x) => x !== null)) {
+    const old = replacingVisitId ? await listVisitSales(orgId, replacingVisitId) : [];
+    const same = old.some((x) => x.commissionManual) && askedShares.reduce((n: number, x) => n + (x ?? 0), 0) === old.reduce((n, x) => n + x.commissionAmount, 0);
+    if (!same) {
+      askShare = true;
+      lines = lines.map((l) => ({ ...l, commission: null }));
+    }
+  }
 
   // Para los pendientes la médica se valida acá (los demás renglones los valida recordSale).
   const providerId = actor.role === "medico" ? (actor.activeOrg?.providerId ?? null) : (v.providerId ?? null);
@@ -379,7 +394,16 @@ export async function recordVisit(
     if (!issued.ok) return issued;
     giftCardCode = issued.code;
   }
-  return { ok: true, visitId, saleIds, total, cashTotal, cardTotal, pending, ...(giftCardCode ? { giftCardCode } : {}) };
+  let shareRequested: number | undefined;
+  if (askShare && !owner) {
+    const now = await listVisitSales(orgId, visitId);
+    const wanted = saleIds.reduce((n, id, i) => n + (askedShares[i] ?? now.find((x) => x.id === id)?.commissionAmount ?? 0), 0);
+    if (wanted !== now.reduce((n, x) => n + x.commissionAmount, 0)) {
+      await requestShare(actor, visitId, wanted);
+      shareRequested = wanted;
+    }
+  }
+  return { ok: true, visitId, saleIds, total, cashTotal, cardTotal, pending, ...(giftCardCode ? { giftCardCode } : {}), ...(shareRequested !== undefined ? { shareRequested } : {}) };
 }
 
 /**
@@ -391,7 +415,7 @@ export async function editVisit(
   actor: Actor,
   key: string,
   v: VisitInput,
-): Promise<Result<{ visitId: string }>> {
+): Promise<Result<{ visitId: string; shareRequested?: number }>> {
   const orgId = actor.activeOrg?.id;
   if (!orgId || actor.role === "paciente") return { ok: false, error: "No autorizado.", status: 403 };
   const old = await listVisitSales(orgId, key);
@@ -412,6 +436,7 @@ export async function editVisit(
   await stampVisit(orgId, r.visitId, old[0].createdAt, `Editado por ${actor.name}`);
   if (old[0].visitId) {
     await relinkDebts(orgId, old[0].visitId, r.visitId);
+    await relinkShareRequests(orgId, old[0].visitId, r.visitId);
     // Abono: sin decir nada, la sesión pasa a la versión nueva; con `prepaidId` ya se anotó de nuevo; con null, se suelta.
     if (v.prepaidId === undefined) await relinkPrepaidUses(orgId, old[0].visitId, r.visitId);
     else await dropPrepaidUses(orgId, old[0].visitId);
@@ -426,20 +451,9 @@ export async function editVisit(
     if (v.giftCardCode === undefined) await relinkGiftCardUses(orgId, old[0].visitId, r.visitId);
     else if (v.giftCardCode === null) await dropGiftCardUses(orgId, old[0].visitId);
   }
-  return { ok: true, visitId: r.visitId };
+  return { ok: true, visitId: r.visitId, ...(r.shareRequested !== undefined ? { shareRequested: r.shareRequested } : {}) };
 }
 
-/**
- * Deja la parte de la profesional en toda la anotación en `share`: la primera práctica se lleva lo que falta después
- * de los demás renglones (que conservan la suya). Se marca a mano (no la pisa un recálculo).
- */
-async function setVisitShareTotal(orgId: string, visitId: string, share: number): Promise<void> {
-  const sales = await listVisitSales(orgId, visitId);
-  if (!sales.length) return;
-  const k = sales.find((s) => s.kind !== "producto") ?? sales[0];
-  const others = sales.filter((s) => s.id !== k.id).reduce((n, s) => n + s.commissionAmount, 0);
-  await applyManualAmounts(orgId, k.id, { commission: Math.max(0, share - others) });
-}
 
 /**
  * Borrar (anular) una atención entera: solo el admin, de cualquier día, con motivo. Anula todas sus líneas (con eso

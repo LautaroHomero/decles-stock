@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { CaretDownIcon, CheckIcon, FilePdfIcon } from "@phosphor-icons/react";
-import { call, money, usdFmt } from "./shared";
+import { call, money, usdFmt, usePoll } from "./shared";
 
 /** Espejo de `ProviderBalance` / `BalanceLine` de src/lib/domain/payouts.ts. */
 export interface BalanceLine {
@@ -16,6 +16,20 @@ export interface BalanceLine {
   prepaid?: "abonado" | "giftcard" | null;
   /** Lo que se pagó en dólares (US$). */
   usd?: number;
+}
+/** Espejo de `ShareRequest` (src/lib/domain/share-requests.ts). */
+interface ShareRequest {
+  id: string;
+  visitId: string;
+  providerName: string;
+  patient: string;
+  what: string;
+  date: string;
+  share: number;
+  previous: number;
+  current: number;
+  reason: string;
+  requestedBy: string;
 }
 export interface Balance {
   providerId: string;
@@ -50,6 +64,7 @@ export function CuentasProfesionales({
   error,
   date,
   canEdit,
+  isAdmin,
   showToast,
   onChange,
 }: {
@@ -58,10 +73,38 @@ export function CuentasProfesionales({
   error?: string | null;
   date: string;
   canEdit: boolean;
+  /** El admin cambia la parte de una profesional directo y aprueba lo que piden los demás. */
+  isAdmin: boolean;
   showToast: (m: string) => void;
   onChange: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
+  // Cambios pedidos en la parte de una profesional (todos los abiertos; los de este día van en su renglón).
+  const [reqData, refreshReqs] = usePoll<{ ok: boolean; requests: ShareRequest[] }>("/api/share-requests", 60_000);
+  const requests = reqData?.ok ? reqData.requests : [];
+  const reqOf = (key: string) => requests.find((r) => r.visitId === key.split(":")[0]);
+  const [editShare, setEditShare] = useState<{ key: string; value: string } | null>(null);
+  async function saveShare(key: string, value: string) {
+    const share = Number(value.replace(/\D/g, ""));
+    if (value.trim() === "" || !Number.isInteger(share)) return showToast("Escribí cuánto se lleva.");
+    setBusy(key);
+    const r = await call(`/api/visits/${encodeURIComponent(key.split(":")[0])}/share`, "PATCH", { share });
+    setBusy(null);
+    if (!r.ok) return showToast(r.error ?? "No se pudo cambiar.");
+    setEditShare(null);
+    showToast(r.requested ? `Pedido: ${money(share)}. Queda para que lo apruebe el admin.` : `Su parte quedó en ${money(share)}.`);
+    refreshReqs();
+    onChange();
+  }
+  async function resolve(id: string, approve: boolean) {
+    setBusy(id);
+    const r = await call(`/api/share-requests/${id}`, "POST", { approve });
+    setBusy(null);
+    if (!r.ok) return showToast(r.error ?? "No se pudo.");
+    showToast(approve ? "Aprobado." : "Rechazado: queda la parte que tenía.");
+    refreshReqs();
+    onChange();
+  }
   // Cada profesional es un desplegable: se toca su nombre y aparece su resumen.
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
@@ -134,6 +177,29 @@ export function CuentasProfesionales({
               : ""}
         </span>
       </div>
+      {isAdmin && requests.length > 0 && (
+        <div className="mx-4 mb-3 flex flex-col gap-2 rounded-lg border border-neutral-800 px-3 py-2.5">
+          <span className="text-[12.5px] font-medium text-neutral-300">Para aprobar · cambios en la parte de una profesional</span>
+          {requests.map((r) => (
+            <div key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px]">
+              <span className="min-w-0 flex-1">
+                {r.date !== date && <span className="text-neutral-500">{r.date.slice(8, 10)}/{r.date.slice(5, 7)} · </span>}
+                {short(r.providerName)} · {r.patient || "Sin paciente"} <span className="text-neutral-500">· {r.what}</span>
+                <span className="block text-neutral-400">
+                  {money(r.current)} → <b className="font-semibold text-fg">{money(r.share)}</b> · pidió {r.requestedBy}
+                  {r.reason ? ` · «${r.reason}»` : ""}
+                </span>
+              </span>
+              <button className={BTN} disabled={busy === r.id} onClick={() => resolve(r.id, true)}>
+                Aprobar
+              </button>
+              <button className={LINK} disabled={busy === r.id} onClick={() => resolve(r.id, false)}>
+                Rechazar
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {error ? (
         <p className="px-4 pb-3 text-owe">
           {error} Si recién actualizaste, corré «npm run db:migrate».
@@ -269,7 +335,39 @@ export function CuentasProfesionales({
                                   {l.usd ? usdFmt(l.usd) : money(l.total)}
                                 </td>
                                 <td className="py-1.5 text-right">
-                                  {b.owner ? "—" : money(l.share)}
+                                  {b.owner ? (
+                                    "—"
+                                  ) : editShare?.key === l.key ? (
+                                    <span className="inline-flex items-center gap-1">
+                                      <input
+                                        autoFocus
+                                        value={editShare.value}
+                                        onChange={(e) => setEditShare({ key: l.key, value: e.target.value.replace(/\D/g, "") })}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") saveShare(l.key, editShare.value);
+                                          if (e.key === "Escape") setEditShare(null);
+                                        }}
+                                        inputMode="numeric"
+                                        aria-label="Lo que se lleva"
+                                        className="w-[88px] rounded-md border border-neutral-700 bg-transparent px-1.5 py-0.5 text-right outline-none focus:border-accent-600"
+                                      />
+                                      <button className={BTN} disabled={busy === l.key} onClick={() => saveShare(l.key, editShare.value)} title={isAdmin ? "Guardar" : "Pedir al admin"}>
+                                        <CheckIcon size={12} />
+                                      </button>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      disabled={!canEdit}
+                                      onClick={() => setEditShare({ key: l.key, value: String(l.share) })}
+                                      title={isAdmin ? "Cambiar lo que se lleva" : "Pedir un cambio (lo aprueba el admin)"}
+                                      className="tabular-nums underline-offset-2 enabled:hover:underline"
+                                    >
+                                      {money(l.share)}
+                                    </button>
+                                  )}
+                                  {reqOf(l.key) && (
+                                    <span className="block text-[11.5px] text-warn">pedido {money(reqOf(l.key)!.share)} · espera al admin</span>
+                                  )}
                                 </td>
                                 <td className="whitespace-nowrap py-1.5 pl-3 text-right text-neutral-400">
                                   {b.owner

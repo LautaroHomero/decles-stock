@@ -104,6 +104,10 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
   Parte propia de la profesional por combo (0037, `combos.commission_pct` / `commission_fixed`): `applyComboCuts` (al final de
   `recordVisit`) pisa la parte de las unidades que entraron en el combo, repartida en proporción a lo cobrado; las que sobran
   conservan la suya. No toca renglones con la parte escrita a mano ni a la dueña. Sin nada = lo de cada práctica.
+- Parte de la profesional a mano (`domain/share-requests.ts`, tabla `share_requests`, migración 0038): el admin la cambia directo
+  (Cierre → Cuentas con profesionales, tocando «Su parte»; o $K / «le corresponden»). Si la cambia otra persona, `recordVisit`
+  anota con la de siempre y deja el pedido (`shareRequested` en la respuesta); al editar dejando la misma que ya tenía, sigue.
+  Aviso `parte` a los admins; «Para aprobar» arriba de Cuentas con profesionales (Aprobar = `setVisitShareTotal`, Rechazar = queda la que había).
 - Egresos de plata: tabla `expenses` (`domain/expenses.ts`), los anota secretaría/admin; texto «pagué 5000 de luz» → `expense-note.ts`.
 - Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada. `migrate` activa RLS en todas
   las tablas de `public` (bloquea la API REST de Supabase); la app entra como dueña y no le afecta.

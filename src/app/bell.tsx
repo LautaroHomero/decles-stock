@@ -6,7 +6,7 @@ import { call, usePoll } from "./shared";
 
 interface Notif {
   id: string;
-  kind: "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente" | "deuda" | "deuda_cobrar" | "pagar" | "nota";
+  kind: "vence_pronto" | "vencido" | "stock_bajo" | "sin_stock" | "pendiente" | "deuda" | "deuda_cobrar" | "pagar" | "nota" | "parte";
   title: string;
   body: string;
   readAt: string | null;
@@ -23,6 +23,7 @@ const KIND_LABEL: Record<Notif["kind"], string> = {
   deuda_cobrar: "Para cobrar",
   pagar: "Para pagar",
   nota: "Recordatorio",
+  parte: "Para aprobar",
 };
 
 const ago = (iso: string) => {
@@ -92,7 +93,7 @@ export function Bell({ onOpenStock, onOpenClose, onOpenNotes }: { onOpenStock: (
                     if (!n.readAt) read(n.id);
                     setOpen(false);
                     if (n.kind === "nota" && onOpenNotes) onOpenNotes();
-                    else if ((n.kind === "deuda" || n.kind === "deuda_cobrar" || n.kind === "pagar") && onOpenClose) onOpenClose();
+                    else if ((n.kind === "deuda" || n.kind === "deuda_cobrar" || n.kind === "pagar" || n.kind === "parte") && onOpenClose) onOpenClose();
                     else onOpenStock();
                   }}
                   className={`flex w-full gap-3 border-b border-neutral-900 px-4 py-3 text-left transition-colors last:border-0 hover:bg-accent-900 ${n.readAt ? "opacity-55" : ""}`}

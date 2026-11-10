@@ -1,3 +1,4 @@
+import { openShareRequests } from "@/lib/domain/share-requests";
 import { listOrgMembers, listOrganizations } from "@/lib/db/repo";
 import { duePayables } from "@/lib/domain/payables";
 import { getStockSettings, listStockItems, todayYmd } from "@/lib/db/stock-repo";
@@ -162,6 +163,17 @@ export async function refreshStockAlerts(orgId: string): Promise<number> {
     }),
   );
   await clearStale(orgId, "nota", noteAlerts.map((n) => n.dedupeKey));
+  // Cambios pedidos en la parte de una profesional: los decide el admin.
+  const shareAsks = (await openShareRequests(orgId)).map(
+    (r): NewNotification => ({
+      kind: "parte",
+      title: `${r.requestedBy} pide cambiar la parte de ${r.providerName || "una profesional"}: ${money(r.previous)} → ${money(r.share)}`,
+      body: `Atención del ${fmt(r.createdAt.slice(0, 10))}. Se aprueba o rechaza en Cierre → Cuentas con profesionales.`,
+      refId: r.id,
+      dedupeKey: `parte:${r.id}:${r.share}`,
+    }),
+  );
+  await clearStale(orgId, "parte", shareAsks.map((n) => n.dedupeKey));
   // Deudas (de pacientes y del consultorio): los admins reciben todas; quien la anotó, siempre la suya.
   const toAdminsAnd = async (items: NewNotification[], creators: string[]) =>
     (await Promise.all(items.map((n, i) => insertNotifications(orgId, [...new Set([...admins, creators[i]].filter(Boolean))], [n])))).reduce((a, b) => a + b, 0);
@@ -170,6 +182,7 @@ export async function refreshStockAlerts(orgId: string): Promise<number> {
   return (
     (await insertNotifications(orgId, recipients, alerts)) +
     (await insertNotifications(orgId, admins, pending)) +
+    (await insertNotifications(orgId, admins, shareAsks)) +
     (await toAdminsAnd(debts, debts.map((d) => creatorOf(d.refId!)))) +
     (await toAdminsAnd(reminders, reminders.map((d) => creatorOf(d.refId!)))) +
     (await toAdminsAnd(toPay, due.map((p) => p.createdBy))) +
