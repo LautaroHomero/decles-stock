@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { getSql } from "@/lib/db/connection";
 import { realNowIso } from "@/lib/domain/clock";
 import type { Actor } from "@/lib/domain/types";
+import { applyManualAmounts } from "@/lib/db/billing-repo";
+import { applyCombos, share } from "@/lib/domain/combo-calc";
 
 /**
  * Combos / promos (Decles, migración 0036): varias prácticas y/o productos a un precio especial. Los arma el admin en
@@ -20,6 +22,23 @@ export interface Combo {
   cardPrice: number | null;
   active: boolean;
   items: { itemId: string; qty: number; name: string; kind: string }[];
+  /** Lo que se lleva la profesional por el combo (% de lo cobrado o monto fijo); null = lo de cada práctica. */
+  cut: { pct: number | null; fixed: number | null } | null;
+}
+
+/** `{ pct }` o `{ fixed }` (null = lo de cada práctica). */
+function cutOf(v: unknown): { pct: number | null; fixed: number | null } | null | string {
+  if (v === null || v === undefined) return null;
+  const c = v as { pct?: unknown; fixed?: unknown };
+  if (c.fixed !== undefined && c.fixed !== null) {
+    const n = Number(c.fixed);
+    return Number.isInteger(n) && n >= 0 && n <= 100_000_000 ? { pct: null, fixed: n } : "El monto de la profesional tiene que ser un número entero de pesos.";
+  }
+  if (c.pct !== undefined && c.pct !== null) {
+    const n = Number(c.pct);
+    return n >= 0 && n <= 100 ? { pct: Math.round(n * 100) / 100, fixed: null } : "El % de la profesional va de 0 a 100.";
+  }
+  return null;
 }
 
 const clean = (s: unknown) => (typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "");
@@ -47,6 +66,12 @@ export async function listCombos(actor: Actor): Promise<Result<{ combos: Combo[]
       price: Number(r.amount),
       cardPrice: r.card_amount === null ? null : Number(r.card_amount),
       active: !!r.active,
+      cut:
+        r.commission_fixed !== null && r.commission_fixed !== undefined
+          ? { pct: null, fixed: Number(r.commission_fixed) }
+          : r.commission_pct !== null && r.commission_pct !== undefined
+            ? { pct: Number(r.commission_pct), fixed: null }
+            : null,
       items: items
         .filter((i) => i.combo_id === r.id)
         .map((i) => ({ itemId: i.item_id as string, qty: Number(i.quantity), name: i.name as string, kind: i.kind as string })),
@@ -91,7 +116,7 @@ async function saveItems(comboId: string, items: { itemId: string; qty: number }
 
 export async function createCombo(
   actor: Actor,
-  v: { name?: unknown; price?: unknown; cardPrice?: unknown; items?: unknown },
+  v: { name?: unknown; price?: unknown; cardPrice?: unknown; items?: unknown; cut?: unknown },
 ): Promise<Result<{ id: string }>> {
   const c = ctx(actor);
   if (!c?.isAdmin) return fail("Los combos los arma el admin.", 403);
@@ -101,13 +126,16 @@ export async function createCombo(
   if (v.cardPrice !== undefined && v.cardPrice !== null && !pesos(v.cardPrice)) return fail("El precio con tarjeta tiene que ser un número entero de pesos.");
   const items = await checkItems(c.orgId, v.items);
   if (typeof items === "string") return fail(items);
+  const cut = cutOf(v.cut);
+  if (typeof cut === "string") return fail(cut);
   const sql = getSql();
   const dup = (await sql`SELECT 1 FROM combos WHERE organization_id = ${c.orgId} AND active AND lower(name) = lower(${name})`) as unknown as Row[];
   if (dup.length) return fail(`Ya hay un combo «${name}».`, 409);
   const id = `cmb_${randomUUID().slice(0, 8)}`;
   await sql`
-    INSERT INTO combos (id, organization_id, name, amount, card_amount, created_at)
-    VALUES (${id}, ${c.orgId}, ${name}, ${v.price as number}, ${(v.cardPrice as number | null | undefined) ?? null}, ${realNowIso()})`;
+    INSERT INTO combos (id, organization_id, name, amount, card_amount, commission_pct, commission_fixed, created_at)
+    VALUES (${id}, ${c.orgId}, ${name}, ${v.price as number}, ${(v.cardPrice as number | null | undefined) ?? null},
+      ${cut?.pct ?? null}, ${cut?.fixed ?? null}, ${realNowIso()})`;
   await saveItems(id, items);
   return { ok: true, id };
 }
@@ -115,7 +143,7 @@ export async function createCombo(
 export async function updateCombo(
   actor: Actor,
   id: string,
-  v: { name?: unknown; price?: unknown; cardPrice?: unknown; items?: unknown; active?: unknown },
+  v: { name?: unknown; price?: unknown; cardPrice?: unknown; items?: unknown; active?: unknown; cut?: unknown },
 ): Promise<Result<{ id: string }>> {
   const c = ctx(actor);
   if (!c?.isAdmin) return fail("Los combos los arma el admin.", 403);
@@ -131,6 +159,9 @@ export async function updateCombo(
     const dup = (await sql`SELECT 1 FROM combos WHERE organization_id = ${c.orgId} AND active AND id <> ${id} AND lower(name) = lower(${name})`) as unknown as Row[];
     if (dup.length) return fail(`Ya hay un combo «${name}».`, 409);
   }
+  const cut = v.cut === undefined ? undefined : cutOf(v.cut);
+  if (typeof cut === "string") return fail(cut);
+  if (cut !== undefined) await sql`UPDATE combos SET commission_pct = ${cut?.pct ?? null}, commission_fixed = ${cut?.fixed ?? null} WHERE id = ${id} AND organization_id = ${c.orgId}`;
   if (v.items !== undefined) {
     const items = await checkItems(c.orgId, v.items);
     if (typeof items === "string") return fail(items);
@@ -176,4 +207,59 @@ export async function comboVisitsOn(actor: Actor, date: string): Promise<{ visit
     WHERE v.organization_id = ${c.orgId} AND EXISTS (
       SELECT 1 FROM sales s WHERE s.organization_id = v.organization_id AND s.visit_id = v.visit_id AND s.status = 'paid' AND substr(s.created_at, 1, 10) = ${date})`) as unknown as Row[];
   return rows.map((r) => ({ visitId: r.visit_id as string, comboId: r.combo_id as string, name: r.name as string, times: Number(r.times) }));
+}
+
+/**
+ * Lo que se lleva la profesional en los combos con parte propia: reemplaza la de las unidades que entraron en el combo
+ * (las que sobran conservan la suya). No toca renglones con la parte escrita a mano ni a la dueña.
+ * `saleIds[i]` es la venta de `lines[i]`.
+ */
+export async function applyComboCuts(
+  orgId: string,
+  raw: unknown,
+  lines: { itemId?: string; quantity?: number; commission?: number | null }[],
+  saleIds: string[],
+  owner: boolean,
+): Promise<void> {
+  if (owner || !Array.isArray(raw) || !raw.length) return;
+  const ids = (raw as { id?: unknown }[]).map((x) => x?.id).filter((x): x is string => typeof x === "string");
+  if (!ids.length) return;
+  const sql = getSql();
+  const rows = (await sql`SELECT id, name, amount, card_amount, commission_pct, commission_fixed FROM combos WHERE organization_id = ${orgId} AND id = ANY(${ids})`) as unknown as Row[];
+  if (!rows.some((r) => r.commission_pct !== null || r.commission_fixed !== null)) return;
+  const its = (await sql`SELECT combo_id, item_id, quantity FROM combo_items WHERE combo_id = ANY(${ids})`) as unknown as Row[];
+  const sales = (await sql`SELECT id, quantity, total, commission_amount FROM sales WHERE organization_id = ${orgId} AND id = ANY(${saleIds})`) as unknown as Row[];
+  const sale = saleIds.map((id) => sales.find((s) => s.id === id));
+  if (sale.some((s) => !s)) return;
+  const r = applyCombos(
+    lines.map((l, i) => ({ itemId: l.itemId ?? null, qty: Number(sale[i]!.quantity), cash: Number(sale[i]!.total), card: Number(sale[i]!.total) })),
+    rows.map((c) => ({
+      id: c.id as string,
+      name: c.name as string,
+      price: Number(c.amount),
+      cardPrice: c.card_amount === null ? null : Number(c.card_amount),
+      items: its.filter((x) => x.combo_id === c.id).map((x) => ({ itemId: x.item_id as string, qty: Number(x.quantity) })),
+    })),
+  );
+  const extra = new Map<number, number>();
+  const used = new Map<number, number>();
+  for (const u of r.uses) {
+    const c = rows.find((x) => x.id === u.id)!;
+    if (c.commission_pct === null && c.commission_fixed === null) continue;
+    // Lo cobrado por esas unidades (el renglón ya viene con el precio del combo repartido).
+    const part = u.take.map((t) => (Number(sale[t.i]!.total) * t.n) / Number(sale[t.i]!.quantity));
+    const base = Math.round(part.reduce((a, b) => a + b, 0));
+    const total = c.commission_fixed !== null ? Number(c.commission_fixed) : Math.round((base * Number(c.commission_pct)) / 100);
+    share(total, part).forEach((x, k) => {
+      const i = u.take[k].i;
+      extra.set(i, (extra.get(i) ?? 0) + x);
+      used.set(i, (used.get(i) ?? 0) + u.take[k].n);
+    });
+  }
+  for (const [i, x] of extra) {
+    if (lines[i].commission !== undefined && lines[i].commission !== null) continue;
+    const qty = Number(sale[i]!.quantity);
+    const rest = Math.round((Number(sale[i]!.commission_amount) * (qty - (used.get(i) ?? 0))) / qty);
+    await applyManualAmounts(orgId, saleIds[i], { commission: x + rest });
+  }
 }

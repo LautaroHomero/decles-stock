@@ -21,7 +21,7 @@ import { createDebt, relinkDebts } from "@/lib/domain/debts";
 import { isOwnerProvider } from "@/lib/domain/owners";
 import { depositForVisit, relinkDeposit, releaseDeposit, applyDeposit, type Deposit } from "@/lib/domain/deposits";
 import { commissionFor } from "@/lib/domain/billing";
-import { dropVisitCombos, recordVisitCombos, relinkVisitCombos } from "@/lib/domain/combos";
+import { applyComboCuts, dropVisitCombos, recordVisitCombos, relinkVisitCombos } from "@/lib/domain/combos";
 import { dropInsurerVisit, feeFor, insurerForVisit, recordInsurerVisit, relinkInsurerVisit, type Insurer } from "@/lib/domain/insurers";
 import { dropPrepaidUses, prepaidItemId, prepaidForVisit, recordPrepaidUse, relinkPrepaidUses, type Prepaid } from "@/lib/domain/prepaids";
 import { dropGiftCardUses, issueGiftCard, relinkGiftCardUses, useGiftCard as redeemGiftCard } from "@/lib/domain/gift-cards";
@@ -338,6 +338,8 @@ export async function recordVisit(
     }
     await applyDeposit(orgId, deposit.id, visitId);
   }
+  // Combo con parte propia de la profesional: pisa la de lo que entró en el combo.
+  await applyComboCuts(orgId, v.combos, lines, saleIds, owner);
   const obs = clean(v.observations).slice(0, 300);
   if (obs) await setVisitObservations(orgId, visitId, obs);
   if (parts.length) await insertVisitPayments(orgId, visitId, parts);

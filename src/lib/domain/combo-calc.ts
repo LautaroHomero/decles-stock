@@ -37,10 +37,12 @@ export interface ComboResult {
   cash: number[];
   card: number[];
   applied: ComboApplied[];
+  /** Cada vez que entró un combo: qué renglones (índice) y cuántas unidades de cada uno. */
+  uses: { id: string; take: { i: number; n: number }[] }[];
 }
 
 /** Reparte `total` en proporción a `weights` (enteros; lo que sobra del redondeo va al más grande). */
-function share(total: number, weights: number[]): number[] {
+export function share(total: number, weights: number[]): number[] {
   const sum = weights.reduce((a, b) => a + b, 0);
   const out = weights.map((w) => (sum > 0 ? Math.floor((total * w) / sum) : Math.floor(total / weights.length)));
   const rest = total - out.reduce((a, b) => a + b, 0);
@@ -53,7 +55,8 @@ function share(total: number, weights: number[]): number[] {
 export function applyCombos(lines: ComboLine[], combos: ComboDef[]): ComboResult {
   const cash = lines.map((l) => l.cash);
   const card = lines.map((l) => l.card);
-  if (!combos.length || lines.length < 1) return { cash, card, applied: [] };
+  if (!combos.length || lines.length < 1) return { cash, card, applied: [], uses: [] };
+  const uses: ComboResult["uses"] = [];
   const rem = lines.map((l) => l.qty);
   const inCash = lines.map(() => 0);
   const inCard = lines.map(() => 0);
@@ -97,6 +100,7 @@ export function applyCombos(lines: ComboLine[], combos: ComboDef[]): ComboResult
           inCash[t.i] += sCash[k];
           inCard[t.i] += sCard[k];
         });
+        uses.push({ id: c.id, take });
         const a = applied.get(c.id) ?? { id: c.id, name: c.name, times: 0, saving: 0 };
         a.times += 1;
         a.saving += Math.round(wCash.reduce((x, y) => x + y, 0)) - c.price;
@@ -104,11 +108,12 @@ export function applyCombos(lines: ComboLine[], combos: ComboDef[]): ComboResult
       }
     }
   }
-  if (!applied.size) return { cash, card, applied: [] };
+  if (!applied.size) return { cash, card, applied: [], uses: [] };
   return {
     cash: lines.map((l, i) => (rem[i] === l.qty ? l.cash : inCash[i] + Math.round(unitCash[i] * rem[i]))),
     card: lines.map((l, i) => (rem[i] === l.qty ? l.card : inCard[i] + Math.round(unitCard[i] * rem[i]))),
     applied: [...applied.values()],
+    uses,
   };
 }
 
