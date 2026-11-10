@@ -21,11 +21,14 @@ export const viewport: Viewport = {
 };
 
 // Aplica el tema guardado antes del primer pintado (misma clave que Clavdia).
-const THEME_BOOT = `try{var t=localStorage.getItem("clavdia_theme");document.documentElement.dataset.theme=t==="light"?"light":"dark"}catch(e){document.documentElement.dataset.theme="dark"}`;
+// Default: claro (sin elección guardada → light).
+// `data-theme` NO va en el JSX de <html>: si React lo maneja, un re-render del
+// cliente (p. ej. tras un error de hidratación) lo pisa con el default.
+const THEME_BOOT = `try{var t=localStorage.getItem("clavdia_theme");document.documentElement.dataset.theme=t==="dark"?"dark":"light"}catch(e){document.documentElement.dataset.theme="light"}`;
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="es" className={`h-full ${inter.variable} ${unbounded.variable}`} data-theme="dark" suppressHydrationWarning>
+    <html lang="es" className={`h-full ${inter.variable} ${unbounded.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
       </head>

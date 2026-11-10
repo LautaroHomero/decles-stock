@@ -111,9 +111,21 @@ export type Theme = "dark" | "light";
 const THEME_KEY = "clavdia_theme";
 
 export function useTheme(): [Theme, (t: Theme) => void] {
-  const [theme, setThemeState] = useState<Theme>("dark");
+  const [theme, setThemeState] = useState<Theme>("light");
   useEffect(() => {
-    const sync = () => setThemeState(document.documentElement.dataset.theme === "light" ? "light" : "dark");
+    // localStorage es la fuente de verdad: re-aplica por si algo pisó el atributo.
+    const sync = () => {
+      let saved: Theme | null = null;
+      try {
+        const v = localStorage.getItem(THEME_KEY);
+        if (v === "light" || v === "dark") saved = v;
+      } catch {
+        /* ignore */
+      }
+      const t: Theme = saved ?? (document.documentElement.dataset.theme === "dark" ? "dark" : "light");
+      document.documentElement.dataset.theme = t;
+      setThemeState(t);
+    };
     sync();
   }, []);
   function setTheme(t: Theme) {
