@@ -486,7 +486,9 @@ function AreaSection({
                     {r.total ? moneyUsd(r.total - dollarsOf(r).pesos, dollarsOf(r).usd) : <span className="font-normal text-neutral-500">—</span>}
                     {abonos.depositUsed.has(r.key) && (
                       <span className="block text-[12px] font-normal text-neutral-400">
-                        {abonos.noShows.has(r.key) ? "" : "+ "}seña {money(abonos.depositUsed.get(r.key)!.amount)}
+                        {abonos.noShows.has(r.key)
+                          ? `seña del ${abonos.depositUsed.get(r.key)!.createdAt.slice(8, 10)}/${abonos.depositUsed.get(r.key)!.createdAt.slice(5, 7)} (no entra hoy)`
+                          : `+ seña ${money(abonos.depositUsed.get(r.key)!.amount)}`}
                       </span>
                     )}
                     {r.debt && (
@@ -861,7 +863,12 @@ function RowEditor({
               <b className="font-semibold tabular-nums">{money(kValue ?? paidValue + (depActive ? depAmount : 0))}</b>
             </span>
             <span className="text-neutral-400">
-              {[depActive ? `seña ${money(depAmount)}` : "", paidValue ? `pidió ${money(paidValue)}` : ""].filter(Boolean).join(" + ") || "sin seña ni nada pedido"}
+              {[
+                depActive ? `seña ${money(depAmount)} del ${(rowDep?.createdAt ?? depMatch?.createdAt ?? "").slice(8, 10)}/${(rowDep?.createdAt ?? depMatch?.createdAt ?? "").slice(5, 7)} (ya entró ese día)` : "",
+                paidValue ? `pidió ${money(paidValue)} hoy` : "",
+              ]
+                .filter(Boolean)
+                .join(" + ") || "sin seña ni nada pedido"}
               {(rowDep || depMatch) && (
                 <>
                   {" · "}
