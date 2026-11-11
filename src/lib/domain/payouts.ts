@@ -1,3 +1,4 @@
+import { noShowIds } from "@/lib/domain/no-shows";
 import { randomUUID } from "node:crypto";
 import { getSql } from "@/lib/db/connection";
 import { listSales } from "@/lib/db/billing-repo";
@@ -66,6 +67,8 @@ export interface BalanceLine {
   usd?: number;
   /** Abono o gift card: la atención no trajo plata hoy (ya se pagó antes); su parte se le paga igual. */
   prepaid?: "abonado" | "giftcard" | null;
+  /** La paciente no vino: se le paga la hora (`domain/no-shows.ts`). */
+  noShow?: boolean;
 }
 
 /**
@@ -206,6 +209,9 @@ async function balances(orgId: string, date: string, payouts: Payout[]): Promise
     const u = usdOf(s);
     if (u) l.usd = Math.round(((l.usd ?? 0) + u) * 100) / 100;
   }
+  // Ausentes: la línea lo dice.
+  const absent = await noShowIds(orgId, [...new Set(sales.map((s) => s.visitId).filter((x): x is string => !!x))]);
+  for (const l of lines.values()) if (absent.has(l.key.split(":")[0])) l.noShow = true;
   // Lo cobrado de deudas ese día: la profesional cobra su parte de eso ese día.
   for (const [id, d] of await debtSharesOn(orgId, date)) {
     const b = get(id, d.name);

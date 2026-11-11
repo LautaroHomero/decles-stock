@@ -27,6 +27,7 @@ import type { Actor } from "@/lib/domain/types";
 import { parseNote, searchScore, suggest } from "@/lib/domain/quick-sale";
 import { parseExpense } from "@/lib/domain/expense-note";
 import { applyCombos, comboLabel, type ComboApplied, type ComboDef } from "@/lib/domain/combo-calc";
+import { noShowIn } from "@/lib/domain/no-show-note";
 import { parsePrepaidNote, prepaidPatient, samePatient, SAYS_PREPAID, USES_PREPAID } from "@/lib/domain/prepaid-note";
 import { parsePayable, parsePayablePayment } from "@/lib/domain/payable-note";
 import { depositPatient, parseDepositNote, USES_DEPOSIT } from "@/lib/domain/deposit-note";
@@ -146,6 +147,8 @@ interface Draft {
   prepaidId?: string | null;
   /** Atención por obra social / prepaga (OSMECON): las prácticas no pasan por caja. */
   insurerId?: string | null;
+  /** La paciente no vino: lo de hoy es lo que se le pidió por la hora y la profesional cobra eso + la seña. */
+  noShow?: boolean;
   /** Seña que se descuenta: paga solo el resto. */
   depositId?: string | null;
 }
@@ -330,7 +333,7 @@ function visitLines(d: Draft) {
   });
 }
 const summaryOf = (d: Draft) =>
-  [d.patient.trim(), d.lines.map((l) => `${l.qty > 1 ? `${l.qty} ` : ""}${l.item.name}`).join(", "), d.debt ? `debe ${money(d.debt)}` : ""]
+  [d.noShow ? "No vino" : "", d.patient.trim(), d.lines.map((l) => `${l.qty > 1 ? `${l.qty} ` : ""}${l.item.name}`).join(", "), d.debt ? `debe ${money(d.debt)}` : ""]
     .filter(Boolean)
     .join(" · ");
 /** «carla díaz» → «Carla Díaz». */
@@ -424,6 +427,8 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const [depositsData, refreshDeposits] = usePoll<{ ok: boolean; deposits: DepositRow[] }>("/api/deposits", 60_000);
   const openDeposits = useMemo(() => (depositsData?.ok ? depositsData.deposits : []), [depositsData]);
   const [pickDeposit, setPickDeposit] = useState<boolean | null>(null);
+  // Ausente: null = lo que diga el texto («no vino»); true/false = lo tocó a mano.
+  const [pickNoShow, setPickNoShow] = useState<boolean | null>(null);
   // Combos / promos: se aplican solos; «sin promo» los saca para esta anotación.
   const [combosData] = usePoll<{ ok: boolean; combos: (ComboDef & { active: boolean })[] }>("/api/combos", 120_000);
   const combos = useMemo(() => (combosData?.ok ? combosData.combos.filter((c) => c.active) : []), [combosData]);
@@ -431,7 +436,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   // El borrador con los combos al día (vista manual y confirmar: si cambian los renglones, se recalcula).
   const priced = useCallback(
     (d: Draft): Draft => {
-      if (d.prepaidId || d.insurerId || (!combos.length && !d.combos.length)) return d;
+      if (d.prepaidId || d.insurerId || d.noShow || (!combos.length && !d.combos.length)) return d;
       const c = withCombos(d.lines, combos, d.sellerId);
       return noPromo ? { ...d, lines: c.lines, combos: [], comboOffer: c.applied } : { ...d, lines: c.lines, combos: c.applied, comboOffer: [] };
     },
@@ -443,8 +448,12 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     if (!typed.trim() || !items.length) return null;
     const named = insurerIn(typed, insurers);
     const insurer = pickInsurer === undefined ? (named?.insurer ?? null) : (insurers.find((i) => i.id === pickInsurer) ?? null);
-    const text = named && insurer?.id === named.insurer.id ? named.cleaned : typed;
+    // «carla no vino, botox, gabi»: ausente (la frase se saca y el resto se entiende como siempre).
+    const absent = noShowIn(named && insurer?.id === named.insurer.id ? named.cleaned : typed);
+    const text = absent.cleaned;
     const d = buildDraft(text, items, sellers, fixedSeller);
+    const statedPaid = d.paid;
+    d.noShow = pickNoShow ?? absent.found;
     // Lo elegido entre opciones pasa a renglón.
     for (const u of [...d.unresolved]) {
       const it = items.find((i) => i.id === chosen[u.text]);
@@ -588,6 +597,14 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       d.direct = false;
       if (pickPaid === null) d.paid = d.lines.filter((l) => l.item.kind === "producto").reduce((n, l) => n + lineCash(l), 0);
     }
+    // Ausente: no paga «lo que salía»; hoy entra solo lo que se le pidió por la hora (y la seña ya entró antes).
+    if (d.noShow) {
+      d.paid = pickPaid !== null ? toPesos(pickPaid) : (statedPaid ?? 0);
+      if (!d.paid) d.split = null;
+      d.combos = [];
+      d.comboOffer = [];
+      d.lines = d.lines.filter((l) => l.item.kind !== "producto").map((l) => ({ ...l, listCash: undefined, listCard: undefined }));
+    }
     // Le pagaron directo a la profesional y se dijo cuánto nos debe: su parte es lo que cobró menos eso.
     if (d.payment === "profesional" && !d.split && d.owesUs !== null && pickShare === null) {
       const cobro = d.paid ?? d.lines.reduce((n, l) => n + lineList(l, d.payment), 0);
@@ -598,7 +615,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       sellerId: pickSeller ?? d.sellerId,
       askPatient: askPatient2,
       // Con seña, lo que «salía» hoy es el resto (así no pregunta si quedó debiendo).
-      listNow: deposit && useDeposit ? Math.max(0, listNow - deposit.amount) : listNow,
+      listNow: d.noShow ? (d.paid ?? 0) : deposit && useDeposit ? Math.max(0, listNow - deposit.amount) : listNow,
       abono,
       useAbono,
       saysAbono,
@@ -608,7 +625,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       deposit,
       useDeposit,
     };
-  }, [insurers, pickInsurer, openDeposits, pickDeposit, pickAbonoId, typed, items, sellers, fixedSeller, pickSeller, pickPay, pickSplit, rate, chosen, unsureIs, pickPatient, pickPaid, pickShare, pickDebt, pickRemind, openPrepaids, pickAbono, combos, noPromo]);
+  }, [insurers, pickInsurer, openDeposits, pickDeposit, pickAbonoId, typed, items, sellers, fixedSeller, pickSeller, pickPay, pickSplit, rate, chosen, unsureIs, pickPatient, pickPaid, pickShare, pickDebt, pickRemind, openPrepaids, pickAbono, combos, noPromo, pickNoShow]);
   // Modo del pago para los botones: un medio, «dolares» (todo en dólares) o «varios».
   const payMode = preview
     ? preview.split
@@ -819,6 +836,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
       ...(d.prepaidId ? { prepaidId: d.prepaidId } : {}),
       ...(d.insurerId ? { insurerId: d.insurerId } : {}),
       ...(d.depositId ? { depositId: d.depositId } : {}),
+      ...(d.noShow ? { noShow: true } : {}),
       ...(d.combos.length ? { combos: d.combos.map((c) => ({ id: c.id, times: c.times })) } : {}),
       ...(d.split?.giftcard ? { giftCardCode: giftCardFound?.code } : {}),
       ...(giftCardLine ? { giftCardIssue: { kind: giftCardKind, treatmentItemId: giftCardKind === "treatment" ? giftCardTreatmentId : null, buyer: giftCardBuyer } } : {}),
@@ -846,6 +864,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setPickInsurer(undefined);
     setPickDeposit(null);
     setNoPromo(false);
+    setPickNoShow(null);
     setChosen({});
     setUnsureIs(null);
     setPickPatient("");
@@ -998,6 +1017,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setPickInsurer(undefined);
     setPickDeposit(null);
     setNoPromo(false);
+    setPickNoShow(null);
     setPickDebtId(null);
     setDebtPayAmount(null);
     setDebtPayMethod(null);
@@ -1050,7 +1070,12 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
   const card = preview?.lines.reduce((n, l) => n + lineCard(l), 0) ?? 0;
   // Lo que ingresó (lo escrito o la lista) y el reparto: la profesional (su % o lo aclarado) y Decles.
   const ingreso = preview ? (preview.paid ?? (preview.payment === "tarjeta" ? card : cash)) : 0;
-  const auto = preview ? autoShare(preview, sellers, preview.useDeposit ? preview.deposit : null) : 0;
+  // Ausente: la hora es toda para la profesional (lo pedido hoy + la seña).
+  const auto = preview
+    ? preview.noShow
+      ? (preview.paid ?? 0) + (preview.useDeposit && preview.deposit ? preview.deposit.amount : 0)
+      : autoShare(preview, sellers, preview.useDeposit ? preview.deposit : null)
+    : 0;
   const sellerName = sellers.find((s) => s.id === preview?.sellerId)?.name;
   // La dueña (médica admin) no cobra comisión: lo que entra es todo del consultorio.
   const sellerOwner = !!sellers.find((s) => s.id === preview?.sellerId)?.owner;
@@ -1187,6 +1212,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
     setPickInsurer(undefined);
     setPickDeposit(null);
     setNoPromo(false);
+    setPickNoShow(null);
                   setPickDebtId(null);
                   setDebtPayAmount(null);
                   setDebtPayMethod(null);
@@ -1700,6 +1726,29 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                     ))}
                   </ul>
                 )}
+                {preview.noShow && (
+                  <div className="flex flex-col gap-2.5 rounded-xl bg-neutral-900/60 px-4 py-3">
+                    <span className="text-[16px] font-semibold">
+                      No vino{" "}
+                      <span className="font-normal text-neutral-400">
+                        · se le paga la hora{sellerName ? ` a ${sellerName}` : ""}: {money(sellerOwner ? 0 : (preview.share ?? auto))}
+                      </span>
+                    </span>
+                    <span className="text-[14px] text-neutral-500">
+                      {[
+                        preview.useDeposit && preview.deposit ? `seña ${money(preview.deposit.amount)}` : "",
+                        preview.paid ? `pidió ${money(preview.paid)} hoy` : "",
+                        preview.debt ? `debe ${money(preview.debt)} (se le paga al cobrarse)` : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || "Sin seña ni lo pedido por la hora: si le pidieron algo, escribí cuánto («pidió 15000») o si lo debe («debe 15000»)."}
+                      {" "}Si le corresponde menos, cambialo en «Para {sellerName ? firstName(sellerName.replace(/^(Dra?\.|Lic\.)\s*/i, "")) : "la profesional"}».
+                    </span>
+                    <button type="button" onClick={() => setPickNoShow(false)} className={`${CHIP} self-start`}>
+                      Sí vino
+                    </button>
+                  </div>
+                )}
                 {preview.deposit && (
                   <div className="flex flex-col gap-2.5 rounded-xl bg-neutral-900/60 px-4 py-3">
                     <span className="text-[16px] font-semibold">
@@ -1709,7 +1758,9 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                         {preview.deposit.itemName ? ` para ${preview.deposit.itemName}` : ""}
                       </span>
                     </span>
-                    {preview.useDeposit ? (
+                    {preview.useDeposit && preview.noShow ? (
+                      <span className="text-[14px] text-neutral-500">No vino: la seña es para la profesional (se le paga la hora).</span>
+                    ) : preview.useDeposit ? (
                       <span className="text-[14px] text-neutral-500">
                         Se descuenta: hoy paga el resto y no queda deuda. La profesional cobra sobre el total.
                       </span>
@@ -1890,7 +1941,7 @@ export function AnotarView({ actor, onOpenClose }: { actor: Actor; onOpenClose: 
                           className={MONEY_IN}
                         />
                         <span className="text-[14px] text-neutral-500">
-                          {preview.share === null ? "según su comisión" : preview.payment === "profesional" && preview.owesUs !== null && pickShare === null ? "lo que cobró menos lo que nos debe" : "lo que aclaraste"}
+                          {preview.share === null ? (preview.noShow ? "la hora: lo pedido + la seña" : "según su comisión") : preview.payment === "profesional" && preview.owesUs !== null && pickShare === null ? "lo que cobró menos lo que nos debe" : "lo que aclaraste"}
                         </span>
                       </label>
                     )}

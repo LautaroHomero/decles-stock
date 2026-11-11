@@ -108,6 +108,11 @@ nuevo hace falta, agregalo como parámetro opcional o archivo nuevo y anotalo en
   (Cierre → Cuentas con profesionales, tocando «Su parte»; o $K / «le corresponden»). Si la cambia otra persona, `recordVisit`
   anota con la de siempre y deja el pedido (`shareRequested` en la respuesta); al editar dejando la misma que ya tenía, sigue.
   Aviso `parte` a los admins; «Para aprobar» arriba de Cuentas con profesionales (Aprobar = `setVisitShareTotal`, Rechazar = queda la que había).
+- Ausentes (`domain/no-shows.ts`, tabla `no_shows`, migración 0039): la paciente no vino y no avisó. Es una atención con
+  `VisitInput.noShow`: sin productos; lo de hoy es solo lo que se le pidió por la hora (sin decir, $0; lo que no pagó = `debt`);
+  la seña, si había, se usa (`depositId`). La profesional cobra todo: lo de hoy + la seña (`setVisitShareTotal`) y la deuda entera al
+  cobrarse; si le toca menos, se cambia su parte (admin directo; si no, pedido). Texto: «carla no vino, botox, gabi», «faltó…»,
+  «ausente…», «dio faltazo» (`no-show-note.ts`, se saca antes del parser). Planilla: botón «No vino» en la fila; Cuentas: «no vino».
 - Egresos de plata: tabla `expenses` (`domain/expenses.ts`), los anota secretaría/admin; texto «pagué 5000 de luz» → `expense-note.ts`.
 - Nueva migración = `NNNN_descripcion.sql`, nunca editar una ya aplicada. `migrate` activa RLS en todas
   las tablas de `public` (bloquea la API REST de Supabase); la app entra como dueña y no le afecta.

@@ -27,6 +27,8 @@ interface AbonoData {
   /** Combos activos (se aplican solos) y cuáles se aplicaron en atenciones del día (visit_id → combos). */
   combos: ComboDef[];
   byCombo: Map<string, { name: string; times: number }[]>;
+  /** Atenciones del día en que la paciente no vino (`domain/no-shows.ts`). */
+  noShows: Set<string>;
 }
 const prepaidLeft = (p: PrepaidRow) => (p.sessions !== null ? `quedan ${p.sessionsLeft} de ${p.sessions}` : `le quedan ${money(p.balance)}`);
 
@@ -210,8 +212,10 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
     `/api/combos?date=${date}`,
     60_000,
   );
+  const [noShowData, refreshNoShows] = usePoll<{ ok: boolean; visitIds: string[] }>(`/api/no-shows?date=${date}`, 60_000);
   const abonos: AbonoData = useMemo(
     () => ({
+      noShows: new Set(noShowData?.ok ? noShowData.visitIds : []),
       combos: combosData?.ok ? combosData.combos.filter((c) => c.active) : [],
       byCombo: (combosData?.visits ?? []).reduce((m, v) => m.set(v.visitId, [...(m.get(v.visitId) ?? []), v]), new Map<string, { name: string; times: number }[]>()),
       deposits: depData?.ok ? depData.deposits : [],
@@ -221,7 +225,7 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
       insurers: insData?.ok ? insData.insurers.filter((i) => i.active) : [],
       byInsurer: new Map((insData?.visits ?? []).map((v) => [v.visitId, v])),
     }),
-    [abonosData, insData, depData, combosData],
+    [abonosData, insData, depData, combosData, noShowData],
   );
 
   const sellers: Seller[] = useMemo(() => (sellersData?.sellers ?? []).map((s) => ({ id: s.providerId, name: s.name, area: s.area ?? "medicos" })), [sellersData]);
@@ -312,6 +316,7 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
               refreshIns();
               refreshDep();
               refreshCombos();
+              refreshNoShows();
             }}
             onError={showToast}
           />
@@ -442,7 +447,10 @@ function AreaSection({
                   className={`border-b border-neutral-900 align-top ${canEdit ? "cursor-pointer hover:bg-neutral-900" : ""}`}
                 >
                   <td className="px-3 py-2 tabular-nums text-neutral-500">{r.time}</td>
-                  <td className="px-3 py-2">{r.patient ? <Resaltar text={r.patient} q={q} /> : <span className="text-neutral-600">—</span>}</td>
+                  <td className="px-3 py-2">
+                    {r.patient ? <Resaltar text={r.patient} q={q} /> : <span className="text-neutral-600">—</span>}
+                    {abonos.noShows.has(r.key) && <span className="mt-0.5 block text-[11px] uppercase tracking-[.05em] text-warn">No vino</span>}
+                  </td>
                   <td className="px-3 py-2">
                     <ul className="flex flex-col gap-0.5">
                       {r.items.map((it, i) => (
@@ -643,6 +651,8 @@ function RowEditor({
   const [useDep, setUseDep] = useState<boolean | null>(null);
   const depAmount = rowDep?.amount ?? depMatch?.amount ?? 0;
   const depActive = !!(rowDep || depMatch) && useDep !== false && !usingAbono && !insurerId;
+  // No vino: hoy entra solo lo que se le pidió por la hora; la profesional cobra eso + la seña.
+  const [absent, setAbsent] = useState(!!row && abonos.noShows.has(row.key));
   // Ayuda al escribir (sin importar mayúsculas, tildes ni errores): Tab o un toque completa.
   const all = useMemo(() => [...practices, ...products], [practices, products]);
   const hints = useMemo(() => (what.trim() ? suggest(what, all).filter((h) => h.kind !== "payment").slice(0, 4) : []), [what, all]);
@@ -663,9 +673,9 @@ function RowEditor({
           cash: p.item ? p.item.price * p.qty : 0,
           card: p.item ? (p.item.cardPrice ?? p.item.price) * p.qty : 0,
         })),
-        usingAbono || insurerId ? [] : abonos.combos,
+        usingAbono || insurerId || absent ? [] : abonos.combos,
       ),
-    [picked, abonos.combos, usingAbono, insurerId],
+    [picked, abonos.combos, usingAbono, insurerId, absent],
   );
   const promo = noPromo ? [] : combo.applied;
   const comboPrice = new Map<Picked, number>();
@@ -674,10 +684,17 @@ function RowEditor({
     (usingAbono && p.item?.id === abonoItem) || (insurerId && !p.product)
       ? 0
       : (comboPrice.get(p) ?? p.amount ?? (p.item ? (method === "tarjeta" ? (p.item.cardPrice ?? p.item.price) : p.item.price) * p.qty : 0));
-  const combosBody = { combos: promo.map((a) => ({ id: a.id, times: a.times })) };
+  const combosBody = { combos: promo.map((a) => ({ id: a.id, times: a.times })), noShow: absent };
   const listTotal = picked.reduce((n, p) => n + priceOf(p), 0);
-  const basePesos =
-    paidTouched && !usingAbono && !insurerId ? num(paid) : depActive && !rowDep ? Math.max(0, listTotal - depAmount) : listTotal;
+  const basePesos = absent
+    ? paidTouched
+      ? num(paid)
+      : 0
+    : paidTouched && !usingAbono && !insurerId
+      ? num(paid)
+      : depActive && !rowDep
+        ? Math.max(0, listTotal - depAmount)
+        : listTotal;
   const inUsd = effMethod === "dolares";
   // Una fila ya anotada en dólares conserva su cotización; una nueva usa la de hoy.
   const fx = rowUsd?.rate || rate;
@@ -762,6 +779,14 @@ function RowEditor({
       <td className="px-3 py-2 tabular-nums text-neutral-500">{row ? row.time : <PlusIcon size={12} className="mt-1" />}</td>
       <td className="px-1.5 py-1">
         <input ref={first} autoFocus={!!row} value={patient} onChange={(e) => setPatient(e.target.value)} placeholder="Paciente" className={CELL} />
+        <button
+          type="button"
+          onClick={() => setAbsent(!absent)}
+          title="La paciente no vino: se le paga la hora a la profesional (lo que se le pidió + la seña)"
+          className={`mx-1 mt-1 rounded-pill border px-2 py-0.5 text-[11.5px] ${absent ? "border-warn text-warn" : "border-neutral-800 text-neutral-500 hover:text-fg"}`}
+        >
+          {absent ? "No vino ✕" : "No vino"}
+        </button>
       </td>
       <td className="px-1.5 py-1">
         <input
@@ -796,7 +821,7 @@ function RowEditor({
           <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-400">
             Seña de {money(depAmount)}
             {depMatch ? ` (dejó el ${depMatch.createdAt.slice(8, 10)}/${depMatch.createdAt.slice(5, 7)})` : ""} ·{" "}
-            {depActive ? "se descuenta, paga el resto" : "no se descuenta"}{" "}
+            {depActive ? (absent ? "es para la profesional" : "se descuenta, paga el resto") : "no se descuenta"}{" "}
             <button type="button" onClick={() => setUseDep(!depActive)} className="underline underline-offset-2 hover:text-fg">
               {depActive ? "no descontar" : "descontar"}
             </button>
@@ -896,7 +921,7 @@ function RowEditor({
             value={k ? num(k).toLocaleString("es-AR") : ""}
             onChange={(e) => setK(e.target.value.replace(/\D/g, ""))}
             inputMode="numeric"
-            placeholder={row && !row.kManual && row.k ? money(row.k) : "auto"}
+            placeholder={absent ? money(paidValue + (depActive ? depAmount : 0)) : row && !row.kManual && row.k ? money(row.k) : "auto"}
             title="Lo que le corresponde a la profesional. Vacío = según su comisión."
             className={`${CELL} text-right tabular-nums`}
           />

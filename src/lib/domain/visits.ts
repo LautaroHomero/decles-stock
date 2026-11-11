@@ -21,6 +21,7 @@ import { createDebt, relinkDebts } from "@/lib/domain/debts";
 import { isOwnerProvider } from "@/lib/domain/owners";
 import { depositForVisit, relinkDeposit, releaseDeposit, applyDeposit, type Deposit } from "@/lib/domain/deposits";
 import { commissionFor } from "@/lib/domain/billing";
+import { dropNoShow, recordNoShow, relinkNoShow } from "@/lib/domain/no-shows";
 import { relinkShareRequests, requestShare, setVisitShareTotal } from "@/lib/domain/share-requests";
 import { applyComboCuts, dropVisitCombos, recordVisitCombos, relinkVisitCombos } from "@/lib/domain/combos";
 import { dropInsurerVisit, feeFor, insurerForVisit, recordInsurerVisit, relinkInsurerVisit, type Insurer } from "@/lib/domain/insurers";
@@ -85,6 +86,12 @@ export interface VisitInput {
    * guarda cuál fue, para mostrarlo. Al editar: sin la clave siguen los de antes; con lista (vacía o no), esos.
    */
   combos?: { id: string; times?: number }[] | null;
+  /**
+   * Ausente (`domain/no-shows.ts`): la paciente no vino. Lo de hoy es solo lo que se le pidió por la hora (`amount`
+   * de los renglones; sin decir, $0) y, si había, la seña. La profesional cobra todo eso salvo que se escriba su parte.
+   * Lo que no pagó y se le pidió = `debt` (la profesional cobra todo al cobrarse). Al editar: sin la clave, sigue igual.
+   */
+  noShow?: boolean | null;
   /**
    * `pendingPrice`: lo que se cobró por unidad de algo no cargado (opcional).
    * Planilla: `generic` = renglón sin práctica elegida («Atención»); `amount` = lo que abonó por el renglón
@@ -206,6 +213,13 @@ export async function recordVisit(
     if (!pp.ok) return pp;
     prepaid = pp.prepaid;
     lines[pp.lineIndex] = { ...lines[pp.lineIndex], quantity: 1, amount: 0, commission: owner ? null : pp.commission };
+  }
+  // Ausente: no lleva productos y no paga «el resto»: lo de hoy es lo que se le pidió (sin decir, nada).
+  const noShow = v.noShow === true;
+  if (noShow) {
+    for (const l of lines)
+      if (l.itemId && (await getPriceItem(orgId, l.itemId))?.kind === "producto") return { ok: false, error: "Un ausente no lleva productos.", status: 400 };
+    lines = lines.map((l) => ({ ...l, amount: l.amount ?? 0 }));
   }
   let deposit: Deposit | null = null;
   let depositLine = -1;
@@ -354,7 +368,12 @@ export async function recordVisit(
     await applyDeposit(orgId, deposit.id, visitId);
   }
   // Combo con parte propia de la profesional: pisa la de lo que entró en el combo.
-  await applyComboCuts(orgId, v.combos, lines, saleIds, owner);
+  if (!noShow) await applyComboCuts(orgId, v.combos, lines, saleIds, owner);
+  if (noShow) {
+    await recordNoShow(orgId, visitId);
+    // La hora se le paga a la profesional: lo que se cobró hoy + la seña (salvo que se haya escrito su parte).
+    if (!owner && lines.every((l) => l.commission === undefined || l.commission === null)) await setVisitShareTotal(orgId, visitId, total + (deposit?.amount ?? 0));
+  }
   const obs = clean(v.observations).slice(0, 300);
   if (obs) await setVisitObservations(orgId, visitId, obs);
   if (parts.length) await insertVisitPayments(orgId, visitId, parts);
@@ -371,7 +390,13 @@ export async function recordVisit(
     // entera con la anotación: la deuda va toda para el consultorio.
     const sales = await listVisitSales(orgId, visitId);
     const k = sales.find((s) => s.kind !== "producto") ?? sales[0];
-    const share = !k || k.commissionManual || k.commissionFixed !== null ? 0 : Math.round((debt * k.commissionPct) / 100);
+    const share = noShow
+      ? owner
+        ? 0
+        : debt
+      : !k || k.commissionManual || k.commissionFixed !== null
+        ? 0
+        : Math.round((debt * k.commissionPct) / 100);
     const concept = sales.map((s) => (s.quantity > 1 ? `${s.quantity} ${s.itemName}` : s.itemName)).join(", ");
     const d = await createDebt(actor, { debtor: patient, amount: debt, concept, providerId: k?.providerId ?? providerId, share, visitId, remindOn: v.debtRemindOn });
     if (!d.ok) {
@@ -437,6 +462,8 @@ export async function editVisit(
   if (old[0].visitId) {
     await relinkDebts(orgId, old[0].visitId, r.visitId);
     await relinkShareRequests(orgId, old[0].visitId, r.visitId);
+    if (v.noShow === undefined || v.noShow === null) await relinkNoShow(orgId, old[0].visitId, r.visitId);
+    else await dropNoShow(orgId, old[0].visitId);
     // Abono: sin decir nada, la sesión pasa a la versión nueva; con `prepaidId` ya se anotó de nuevo; con null, se suelta.
     if (v.prepaidId === undefined) await relinkPrepaidUses(orgId, old[0].visitId, r.visitId);
     else await dropPrepaidUses(orgId, old[0].visitId);

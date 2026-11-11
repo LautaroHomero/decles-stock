@@ -16,6 +16,8 @@ export interface BalanceLine {
   prepaid?: "abonado" | "giftcard" | null;
   /** Lo que se pagó en dólares (US$). */
   usd?: number;
+  /** La paciente no vino: se le paga la hora. */
+  noShow?: boolean;
 }
 /** Espejo de `ShareRequest` (src/lib/domain/share-requests.ts). */
 interface ShareRequest {
@@ -317,7 +319,8 @@ export function CuentasProfesionales({
                                   </span>
                                   <span className="text-neutral-400">
                                     {" "}
-                                    · {l.what}
+                                    · {l.noShow && <span className="text-warn">no vino · </span>}
+                                    {l.what}
                                   </span>
                                 </td>
                                 <td className="whitespace-nowrap py-1.5 pr-3 text-neutral-400">
