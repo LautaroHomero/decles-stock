@@ -92,6 +92,8 @@ export interface VisitInput {
    * Lo que no pagó y se le pidió = `debt` (la profesional cobra todo al cobrarse). Al editar: sin la clave, sigue igual.
    */
   noShow?: boolean | null;
+  /** Ausente: lo que ya había pagado otro día por esa hora (seña vieja sin cargar). No entra hoy; la profesional lo cobra. */
+  noShowPaidBefore?: number | null;
   /**
    * `pendingPrice`: lo que se cobró por unidad de algo no cargado (opcional).
    * Planilla: `generic` = renglón sin práctica elegida («Atención»); `amount` = lo que abonó por el renglón
@@ -216,6 +218,8 @@ export async function recordVisit(
   }
   // Ausente: no lleva productos y no paga «el resto»: lo de hoy es lo que se le pidió (sin decir, nada).
   const noShow = v.noShow === true;
+  const paidBefore = noShow && typeof v.noShowPaidBefore === "number" ? v.noShowPaidBefore : 0;
+  if (!Number.isInteger(paidBefore) || paidBefore < 0 || paidBefore > 100_000_000) return { ok: false, error: "Lo pagado antes tiene que ser un número entero de pesos.", status: 400 };
   if (noShow) {
     for (const l of lines)
       if (l.itemId && (await getPriceItem(orgId, l.itemId))?.kind === "producto") return { ok: false, error: "Un ausente no lleva productos.", status: 400 };
@@ -370,9 +374,9 @@ export async function recordVisit(
   // Combo con parte propia de la profesional: pisa la de lo que entró en el combo.
   if (!noShow) await applyComboCuts(orgId, v.combos, lines, saleIds, owner);
   if (noShow) {
-    await recordNoShow(orgId, visitId);
+    await recordNoShow(orgId, visitId, paidBefore);
     // La hora se le paga a la profesional: lo que se cobró hoy + la seña (salvo que se haya escrito su parte).
-    if (!owner && lines.every((l) => l.commission === undefined || l.commission === null)) await setVisitShareTotal(orgId, visitId, total + (deposit?.amount ?? 0));
+    if (!owner && lines.every((l) => l.commission === undefined || l.commission === null)) await setVisitShareTotal(orgId, visitId, total + (deposit?.amount ?? 0) + paidBefore);
   }
   const obs = clean(v.observations).slice(0, 300);
   if (obs) await setVisitObservations(orgId, visitId, obs);

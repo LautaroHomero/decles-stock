@@ -10,8 +10,10 @@ import type { Actor } from "@/lib/domain/types";
 
 type Row = Record<string, unknown>;
 
-export async function recordNoShow(orgId: string, visitId: string): Promise<void> {
-  await getSql()`INSERT INTO no_shows (organization_id, visit_id, created_at) VALUES (${orgId}, ${visitId}, ${realNowIso()}) ON CONFLICT DO NOTHING`;
+export async function recordNoShow(orgId: string, visitId: string, paidBefore = 0): Promise<void> {
+  await getSql()`
+    INSERT INTO no_shows (organization_id, visit_id, paid_before, created_at) VALUES (${orgId}, ${visitId}, ${paidBefore}, ${realNowIso()})
+    ON CONFLICT DO NOTHING`;
 }
 
 /** Al editar: sin decir nada sigue siendo ausente; con `noShow` ya se anotó de nuevo (o dejó de serlo). */
@@ -29,12 +31,12 @@ export async function noShowIds(orgId: string, visitIds: string[]): Promise<Set<
   return new Set(rows.map((r) => r.visit_id as string));
 }
 
-/** Ausentes de un día (para la Planilla). */
-export async function noShowsOn(actor: Actor, date: string): Promise<string[]> {
+/** Ausentes de un día (para la Planilla), con lo que ya había pagado otro día. */
+export async function noShowsOn(actor: Actor, date: string): Promise<{ visitId: string; paidBefore: number }[]> {
   const orgId = actor.activeOrg?.id;
   if (!orgId || actor.role === "paciente") return [];
   const rows = (await getSql()`
-    SELECT n.visit_id FROM no_shows n WHERE n.organization_id = ${orgId} AND EXISTS (
+    SELECT n.visit_id, n.paid_before FROM no_shows n WHERE n.organization_id = ${orgId} AND EXISTS (
       SELECT 1 FROM sales s WHERE s.organization_id = n.organization_id AND s.visit_id = n.visit_id AND s.status = 'paid' AND substr(s.created_at, 1, 10) = ${date})`) as unknown as Row[];
-  return rows.map((r) => r.visit_id as string);
+  return rows.map((r) => ({ visitId: r.visit_id as string, paidBefore: Number(r.paid_before) }));
 }

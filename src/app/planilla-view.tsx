@@ -28,7 +28,8 @@ interface AbonoData {
   combos: ComboDef[];
   byCombo: Map<string, { name: string; times: number }[]>;
   /** Atenciones del día en que la paciente no vino (`domain/no-shows.ts`). */
-  noShows: Set<string>;
+  /** visit_id → lo que ya había pagado otro día por esa hora (no entra hoy). */
+  noShows: Map<string, number>;
 }
 const prepaidLeft = (p: PrepaidRow) => (p.sessions !== null ? `quedan ${p.sessionsLeft} de ${p.sessions}` : `le quedan ${money(p.balance)}`);
 
@@ -212,10 +213,10 @@ export function PlanillaView({ actor, date }: { actor: Actor; date: string }) {
     `/api/combos?date=${date}`,
     60_000,
   );
-  const [noShowData, refreshNoShows] = usePoll<{ ok: boolean; visitIds: string[] }>(`/api/no-shows?date=${date}`, 60_000);
+  const [noShowData, refreshNoShows] = usePoll<{ ok: boolean; visits: { visitId: string; paidBefore: number }[] }>(`/api/no-shows?date=${date}`, 60_000);
   const abonos: AbonoData = useMemo(
     () => ({
-      noShows: new Set(noShowData?.ok ? noShowData.visitIds : []),
+      noShows: new Map((noShowData?.ok ? noShowData.visits : []).map((v) => [v.visitId, v.paidBefore])),
       combos: combosData?.ok ? combosData.combos.filter((c) => c.active) : [],
       byCombo: (combosData?.visits ?? []).reduce((m, v) => m.set(v.visitId, [...(m.get(v.visitId) ?? []), v]), new Map<string, { name: string; times: number }[]>()),
       deposits: depData?.ok ? depData.deposits : [],
@@ -484,6 +485,9 @@ function AreaSection({
                   <td className="px-3 py-2 text-neutral-300">{allSellers.find((s) => s.id === r.providerId)?.name ?? r.sales[0].providerName ?? "—"}</td>
                   <td className="px-3 py-2 text-right font-medium tabular-nums">
                     {r.total ? moneyUsd(r.total - dollarsOf(r).pesos, dollarsOf(r).usd) : <span className="font-normal text-neutral-500">—</span>}
+                    {(abonos.noShows.get(r.key) ?? 0) > 0 && (
+                      <span className="block text-[12px] font-normal text-neutral-400">{money(abonos.noShows.get(r.key)!)} de otro día (no entra hoy)</span>
+                    )}
                     {abonos.depositUsed.has(r.key) && (
                       <span className="block text-[12px] font-normal text-neutral-400">
                         {abonos.noShows.has(r.key)
@@ -607,17 +611,18 @@ function RowEditor({
   const [patient, setPatient] = useState(row?.patient ?? "");
   const [what, setWhat] = useState(row?.itemsText ?? "");
   const [providerId, setProviderId] = useState<string>(row?.providerId ?? (sellers.length === 1 ? sellers[0].id : ""));
-  const [paid, setPaid] = useState(row ? String(row.total) : "");
+  // Ausente: lo pagado es la hora entera (lo de hoy + lo que ya había pagado otro día).
+  const [paid, setPaid] = useState(row ? String(row.total + (abonos.noShows.get(row.key) ?? 0)) : "");
   const [paidTouched, setPaidTouched] = useState(!!row);
   // Sesión de un abono: el medio «Abono» (no entra plata; la profesional cobra sobre el precio congelado).
   const rowUse = row ? (abonos.uses.get(row.key) ?? null) : null;
   // Obra social (OSMECON): el medio «ins:<id>»; las prácticas no pasan por caja.
   const rowIns = row ? (abonos.byInsurer.get(row.key) ?? null) : null;
-  // «No vino» va en Medio: la paciente faltó; lo que se le pidió por la hora se cobra en `feeMethod`.
+  // «No vino» va en Medio: la paciente faltó. Lo que pagó por la hora puede ser de otro día (no entra hoy) o de hoy (`when`).
   const rowAbsent = !!row && abonos.noShows.has(row.key);
   const [method, setMethod] = useState<SaleMethod | "" | "abono" | "ausente" | `ins:${string}`>(rowAbsent ? "ausente" : rowUse ? "abono" : rowIns ? `ins:${rowIns.insurerId}` : (row?.method ?? ""));
-  const [feeMethod, setFeeMethod] = useState<"efectivo" | "transferencia" | "tarjeta">(
-    rowAbsent && (row?.method === "transferencia" || row?.method === "tarjeta") ? row.method : "efectivo",
+  const [when, setWhen] = useState<"antes" | "efectivo" | "transferencia" | "tarjeta">(
+    rowAbsent && row && row.total > 0 ? (row.method === "transferencia" || row.method === "tarjeta" ? row.method : "efectivo") : "antes",
   );
   // Varios medios (anotado en Anotar): se conservan las partes y lo pagado es su suma.
   const keepParts = !!row && method === "mixto" && row.parts.length > 0;
@@ -702,7 +707,6 @@ function RowEditor({
     (usingAbono && p.item?.id === abonoItem) || (insurerId && !p.product)
       ? 0
       : (comboPrice.get(p) ?? p.amount ?? (p.item ? (method === "tarjeta" ? (p.item.cardPrice ?? p.item.price) : p.item.price) * p.qty : 0));
-  const combosBody = { combos: promo.map((a) => ({ id: a.id, times: a.times })), noShow: absent };
   const listTotal = picked.reduce((n, p) => n + priceOf(p), 0);
   const basePesos = absent
     ? paidTouched
@@ -717,7 +721,10 @@ function RowEditor({
   // Una fila ya anotada en dólares conserva su cotización; una nueva usa la de hoy.
   const fx = rowUsd?.rate || rate;
   const usdValue = !inUsd ? 0 : usdTouched ? usdNum(usdText) : fx ? Math.round((basePesos / fx) * 100) / 100 : 0;
-  const paidValue = keepParts ? row!.parts.reduce((n, p) => n + p.amount, 0) : inUsd && fx ? Math.round(usdValue * fx) : basePesos;
+  // Ausente con lo pagado de otro día: no entra hoy (va como `noShowPaidBefore`).
+  const before = absent && when === "antes" ? basePesos : 0;
+  const combosBody = { combos: promo.map((a) => ({ id: a.id, times: a.times })), noShow: absent, noShowPaidBefore: before };
+  const paidValue = keepParts ? row!.parts.reduce((n, p) => n + p.amount, 0) : inUsd && fx ? Math.round(usdValue * fx) : basePesos - before;
   const kValue = k.trim() === "" ? null : num(k);
   const dirty = !row ? !!(patient.trim() || what.trim() || paid || k) : true;
 
@@ -770,7 +777,7 @@ function RowEditor({
           ...combosBody,
           patientName: patient,
           providerId,
-          paymentMethod: absent ? (paidValue > 0 ? feeMethod : null) : effMethod === "mixto" || effMethod === "abono" || insurerId ? null : effMethod || null,
+          paymentMethod: absent ? (paidValue > 0 && when !== "antes" ? when : null) : effMethod === "mixto" || effMethod === "abono" || insurerId ? null : effMethod || null,
           lines,
           ...prepaid,
         };
@@ -860,12 +867,13 @@ function RowEditor({
           <span className="mx-1 mt-1.5 flex flex-col gap-0.5 rounded-lg border border-neutral-800 px-2.5 py-1.5 text-[12px] leading-snug">
             <span className="text-fg">
               La hora para {(sellers.find((x) => x.id === providerId)?.name ?? "la profesional").replace(/^(Dra?\.|Lic\.)\s*/i, "")}:{" "}
-              <b className="font-semibold tabular-nums">{money(kValue ?? paidValue + (depActive ? depAmount : 0))}</b>
+              <b className="font-semibold tabular-nums">{money(kValue ?? basePesos + (depActive ? depAmount : 0))}</b>
             </span>
             <span className="text-neutral-400">
               {[
                 depActive ? `seña ${money(depAmount)} del ${(rowDep?.createdAt ?? depMatch?.createdAt ?? "").slice(8, 10)}/${(rowDep?.createdAt ?? depMatch?.createdAt ?? "").slice(5, 7)} (ya entró ese día)` : "",
-                paidValue ? `pidió ${money(paidValue)} hoy` : "",
+                before ? `${money(before)} de otro día (no entra hoy)` : "",
+                paidValue ? `${money(paidValue)} cobrado hoy` : "",
               ]
                 .filter(Boolean)
                 .join(" + ") || "sin seña ni nada pedido"}
@@ -902,9 +910,9 @@ function RowEditor({
       </td>
       <td className="px-1.5 py-1">
         <input
-          value={inUsd ? (usdTouched ? usdText : usdValue ? usdValue.toLocaleString("es-AR") : "") : paidValue ? paidValue.toLocaleString("es-AR") : ""}
+          value={inUsd ? (usdTouched ? usdText : usdValue ? usdValue.toLocaleString("es-AR") : "") : absent ? (basePesos ? basePesos.toLocaleString("es-AR") : "") : paidValue ? paidValue.toLocaleString("es-AR") : ""}
           disabled={keepParts || (usingAbono && picked.every((x) => x.item?.id === abonoItem)) || (!!insurerId && picked.every((x) => !x.product))}
-          title={keepParts ? "Pagó en varios medios: se corrige desde Anotar" : absent ? "Lo que se le pidió a la paciente por la hora (si se le pidió algo)" : undefined}
+          title={keepParts ? "Pagó en varios medios: se corrige desde Anotar" : absent ? "Lo que pagó la paciente por la hora (hoy o en otro día)" : undefined}
           onChange={(e) => {
             if (inUsd) {
               setUsdTouched(true);
@@ -915,10 +923,22 @@ function RowEditor({
             setPaid(e.target.value.replace(/\D/g, ""));
           }}
           inputMode={inUsd ? "decimal" : "numeric"}
-          placeholder={inUsd ? "US$" : absent ? "Pidió $" : "$"}
+          placeholder={inUsd ? "US$" : absent ? "$ la hora" : "$"}
           className={`${CELL} text-right tabular-nums`}
         />
-        {absent && <span className="block px-1.5 pt-0.5 text-right text-[11.5px] text-neutral-500">por la hora</span>}
+        {absent && basePesos > 0 && (
+          <select
+            value={when}
+            onChange={(e) => setWhen(e.target.value as typeof when)}
+            aria-label="Cuándo entró esa plata"
+            className={`${CELL} mt-1 pr-1 text-right text-[12px] ${when === "antes" ? "text-neutral-400" : "text-fg"}`}
+          >
+            <option value="antes">de otro día</option>
+            <option value="efectivo">hoy · efvo.</option>
+            <option value="transferencia">hoy · transf.</option>
+            <option value="tarjeta">hoy · tarj.</option>
+          </select>
+        )}
         {inUsd && (
           <span className="block px-1.5 pt-0.5 text-right text-[11.5px] text-neutral-400">
             {fx ? `US$ · ≈ ${money(paidValue)} (a ${money(fx)})` : "Falta la cotización"}
@@ -954,18 +974,6 @@ function RowEditor({
           </option>
           {row && row.parts.length > 0 && row.method === "mixto" && <option value="mixto">Varios</option>}
         </select>
-        {absent && paidValue > 0 && (
-          <select
-            value={feeMethod}
-            onChange={(e) => setFeeMethod(e.target.value as "efectivo" | "transferencia" | "tarjeta")}
-            aria-label="Cómo pagó lo pedido"
-            className={`${CELL} mt-1 pr-1 text-[12px] text-neutral-400`}
-          >
-            <option value="efectivo">en efvo.</option>
-            <option value="transferencia">por transf.</option>
-            <option value="tarjeta">con tarj.</option>
-          </select>
-        )}
       </td>
       {showK && (
         <td className="px-1.5 py-1">
