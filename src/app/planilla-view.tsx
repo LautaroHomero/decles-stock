@@ -444,18 +444,22 @@ function AreaSection({
                 <tr
                   key={r.key}
                   onClick={() => canEdit && setEditing(r.key)}
-                  className={`border-b border-neutral-900 align-top ${canEdit ? "cursor-pointer hover:bg-neutral-900" : ""}`}
+                  className={`border-b border-neutral-900 align-top ${abonos.noShows.has(r.key) ? "text-neutral-400" : ""} ${canEdit ? "cursor-pointer hover:bg-neutral-900" : ""}`}
                 >
                   <td className="px-3 py-2 tabular-nums text-neutral-500">{r.time}</td>
                   <td className="px-3 py-2">
                     {r.patient ? <Resaltar text={r.patient} q={q} /> : <span className="text-neutral-600">—</span>}
-                    {abonos.noShows.has(r.key) && <span className="mt-0.5 block text-[11px] uppercase tracking-[.05em] text-warn">No vino</span>}
+                    {abonos.noShows.has(r.key) && (
+                      <span className="ml-2 inline-block rounded-pill border border-neutral-700 px-2 py-px align-[1px] text-[11.5px] text-neutral-300">No vino</span>
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     <ul className="flex flex-col gap-0.5">
                       {r.items.map((it, i) => (
                         <li key={i} className="flex items-baseline gap-2">
-                          <span className="w-[62px] shrink-0 text-[11px] uppercase tracking-[.05em] text-neutral-500">{it.product ? "producto" : "práctica"}</span>
+                          <span className="w-[62px] shrink-0 text-[11px] uppercase tracking-[.05em] text-neutral-500">
+                            {it.product ? "producto" : abonos.noShows.has(r.key) ? "turno" : "práctica"}
+                          </span>
                           <span className="min-w-0 flex-1">
                             {it.qty > 1 && <span className="tabular-nums text-neutral-400">{it.qty} × </span>}
                             {it.name}
@@ -465,6 +469,11 @@ function AreaSection({
                         </li>
                       ))}
                     </ul>
+                    {abonos.noShows.has(r.key) && (
+                      <span className="mt-0.5 block text-[12px] text-neutral-300">
+                        La hora para {(allSellers.find((s) => s.id === r.providerId)?.name ?? "la profesional").replace(/^(Dra?\.|Lic\.)\s*/i, "")}: <span className="tabular-nums">{money(r.k)}</span>
+                      </span>
+                    )}
                     {abonos.byCombo.get(r.key)?.map((c) => (
                       <span key={c.name} className="mt-0.5 block text-[12px] text-neutral-400">
                         Combo: {comboLabel(c)}
@@ -476,7 +485,9 @@ function AreaSection({
                   <td className="px-3 py-2 text-right font-medium tabular-nums">
                     {r.total ? moneyUsd(r.total - dollarsOf(r).pesos, dollarsOf(r).usd) : <span className="font-normal text-neutral-500">—</span>}
                     {abonos.depositUsed.has(r.key) && (
-                      <span className="block text-[12px] font-normal text-neutral-400">+ seña {money(abonos.depositUsed.get(r.key)!.amount)}</span>
+                      <span className="block text-[12px] font-normal text-neutral-400">
+                        {abonos.noShows.has(r.key) ? "" : "+ "}seña {money(abonos.depositUsed.get(r.key)!.amount)}
+                      </span>
                     )}
                     {r.debt && (
                       <span className={`block text-[12px] font-normal ${r.debt.remaining ? "text-owe" : "text-neutral-400"}`}>
@@ -484,7 +495,7 @@ function AreaSection({
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-neutral-400">{abonos.uses.has(r.key) ? "Plan" : abonos.byInsurer.has(r.key) ? abonos.byInsurer.get(r.key)!.name : r.method ? METHOD_SHORT[r.method] : ""}</td>
+                  <td className="px-3 py-2 text-neutral-400">{abonos.noShows.has(r.key) ? (r.total && r.method ? METHOD_SHORT[r.method] : "") : abonos.uses.has(r.key) ? "Plan" : abonos.byInsurer.has(r.key) ? abonos.byInsurer.get(r.key)!.name : r.method ? METHOD_SHORT[r.method] : ""}</td>
                   {showK && <td className="px-3 py-2 text-right tabular-nums">{r.k ? money(r.k) : <span className="text-neutral-500">—</span>}</td>}
                   <td className="cl-no-print px-1.5 py-1.5">
                     <button
@@ -600,7 +611,12 @@ function RowEditor({
   const rowUse = row ? (abonos.uses.get(row.key) ?? null) : null;
   // Obra social (OSMECON): el medio «ins:<id>»; las prácticas no pasan por caja.
   const rowIns = row ? (abonos.byInsurer.get(row.key) ?? null) : null;
-  const [method, setMethod] = useState<SaleMethod | "" | "abono" | `ins:${string}`>(rowUse ? "abono" : rowIns ? `ins:${rowIns.insurerId}` : (row?.method ?? ""));
+  // «No vino» va en Medio: la paciente faltó; lo que se le pidió por la hora se cobra en `feeMethod`.
+  const rowAbsent = !!row && abonos.noShows.has(row.key);
+  const [method, setMethod] = useState<SaleMethod | "" | "abono" | "ausente" | `ins:${string}`>(rowAbsent ? "ausente" : rowUse ? "abono" : rowIns ? `ins:${rowIns.insurerId}` : (row?.method ?? ""));
+  const [feeMethod, setFeeMethod] = useState<"efectivo" | "transferencia" | "tarjeta">(
+    rowAbsent && (row?.method === "transferencia" || row?.method === "tarjeta") ? row.method : "efectivo",
+  );
   // Varios medios (anotado en Anotar): se conservan las partes y lo pagado es su suma.
   const keepParts = !!row && method === "mixto" && row.parts.length > 0;
   // En dólares: se escribe en US$; los pesos (a la cotización) son solo para la parte de la profesional.
@@ -652,7 +668,7 @@ function RowEditor({
   const depAmount = rowDep?.amount ?? depMatch?.amount ?? 0;
   const depActive = !!(rowDep || depMatch) && useDep !== false && !usingAbono && !insurerId;
   // No vino: hoy entra solo lo que se le pidió por la hora; la profesional cobra eso + la seña.
-  const [absent, setAbsent] = useState(!!row && abonos.noShows.has(row.key));
+  const absent = method === "ausente";
   // Ayuda al escribir (sin importar mayúsculas, tildes ni errores): Tab o un toque completa.
   const all = useMemo(() => [...practices, ...products], [practices, products]);
   const hints = useMemo(() => (what.trim() ? suggest(what, all).filter((h) => h.kind !== "payment").slice(0, 4) : []), [what, all]);
@@ -752,7 +768,7 @@ function RowEditor({
           ...combosBody,
           patientName: patient,
           providerId,
-          paymentMethod: effMethod === "mixto" || effMethod === "abono" || insurerId ? null : effMethod || null,
+          paymentMethod: absent ? (paidValue > 0 ? feeMethod : null) : effMethod === "mixto" || effMethod === "abono" || insurerId ? null : effMethod || null,
           lines,
           ...prepaid,
         };
@@ -779,14 +795,6 @@ function RowEditor({
       <td className="px-3 py-2 tabular-nums text-neutral-500">{row ? row.time : <PlusIcon size={12} className="mt-1" />}</td>
       <td className="px-1.5 py-1">
         <input ref={first} autoFocus={!!row} value={patient} onChange={(e) => setPatient(e.target.value)} placeholder="Paciente" className={CELL} />
-        <button
-          type="button"
-          onClick={() => setAbsent(!absent)}
-          title="La paciente no vino: se le paga la hora a la profesional (lo que se le pidió + la seña)"
-          className={`mx-1 mt-1 rounded-pill border px-2 py-0.5 text-[11.5px] ${absent ? "border-warn text-warn" : "border-neutral-800 text-neutral-500 hover:text-fg"}`}
-        >
-          {absent ? "No vino ✕" : "No vino"}
-        </button>
       </td>
       <td className="px-1.5 py-1">
         <input
@@ -799,7 +807,7 @@ function RowEditor({
               accept(hints[0].text);
             }
           }}
-          placeholder="Práctica o producto (separá con coma)"
+          placeholder={absent ? "Qué turno tenía" : "Práctica o producto (separá con coma)"}
           className={CELL}
         />
         {hints.length > 0 && (
@@ -817,13 +825,13 @@ function RowEditor({
             ))}
           </span>
         )}
-        {(rowDep || depMatch) && !usingAbono && !insurerId && (
+        {(rowDep || depMatch) && !usingAbono && !insurerId && !absent && (
           <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-400">
             Seña de {money(depAmount)}
             {depMatch ? ` (dejó el ${depMatch.createdAt.slice(8, 10)}/${depMatch.createdAt.slice(5, 7)})` : ""} ·{" "}
-            {depActive ? (absent ? "es para la profesional" : "se descuenta, paga el resto") : "no se descuenta"}{" "}
+            {depActive ? (absent ? "es para la profesional" : "se descuenta, paga el resto") : absent ? "no se usa" : "no se descuenta"}{" "}
             <button type="button" onClick={() => setUseDep(!depActive)} className="underline underline-offset-2 hover:text-fg">
-              {depActive ? "no descontar" : "descontar"}
+              {depActive ? (absent ? "no usarla" : "no descontar") : absent ? "usarla" : "descontar"}
             </button>
           </span>
         )}
@@ -846,7 +854,28 @@ function RowEditor({
             </button>
           </span>
         )}
-        {picked.length > 0 && (
+        {absent && (
+          <span className="mx-1 mt-1.5 flex flex-col gap-0.5 rounded-lg border border-neutral-800 px-2.5 py-1.5 text-[12px] leading-snug">
+            <span className="text-fg">
+              La hora para {(sellers.find((x) => x.id === providerId)?.name ?? "la profesional").replace(/^(Dra?\.|Lic\.)\s*/i, "")}:{" "}
+              <b className="font-semibold tabular-nums">{money(kValue ?? paidValue + (depActive ? depAmount : 0))}</b>
+            </span>
+            <span className="text-neutral-400">
+              {[depActive ? `seña ${money(depAmount)}` : "", paidValue ? `pidió ${money(paidValue)}` : ""].filter(Boolean).join(" + ") || "sin seña ni nada pedido"}
+              {(rowDep || depMatch) && (
+                <>
+                  {" · "}
+                  <button type="button" onClick={() => setUseDep(!depActive)} className="underline underline-offset-2 hover:text-fg">
+                    {depActive ? "no usar la seña" : `usar la seña de ${money(depAmount)}`}
+                  </button>
+                </>
+              )}
+            </span>
+            <span className="text-neutral-500">{showK ? "¿Le toca menos? Cambialo en $K." : "¿Le toca menos? Se cambia en Cierre."}</span>
+            {picked.some((p) => p.product) && <span className="text-warn">Un ausente no lleva productos: sacá {picked.filter((p) => p.product).map((p) => p.name).join(", ")}.</span>}
+          </span>
+        )}
+        {picked.length > 0 && !absent && (
           <span className="block px-1.5 pt-0.5 text-[11.5px] text-neutral-500">
             {picked
               .map((p) => `${p.product ? "producto" : "práctica"}: ${p.qty > 1 ? `${p.qty} × ` : ""}${p.name}${p.item || p.name === GENERIC ? "" : " (sin cargar)"}${priceOf(p) ? ` ${money(priceOf(p))}` : ""}`)
@@ -868,7 +897,7 @@ function RowEditor({
         <input
           value={inUsd ? (usdTouched ? usdText : usdValue ? usdValue.toLocaleString("es-AR") : "") : paidValue ? paidValue.toLocaleString("es-AR") : ""}
           disabled={keepParts || (usingAbono && picked.every((x) => x.item?.id === abonoItem)) || (!!insurerId && picked.every((x) => !x.product))}
-          title={keepParts ? "Pagó en varios medios: se corrige desde Anotar" : undefined}
+          title={keepParts ? "Pagó en varios medios: se corrige desde Anotar" : absent ? "Lo que se le pidió a la paciente por la hora (si se le pidió algo)" : undefined}
           onChange={(e) => {
             if (inUsd) {
               setUsdTouched(true);
@@ -879,9 +908,10 @@ function RowEditor({
             setPaid(e.target.value.replace(/\D/g, ""));
           }}
           inputMode={inUsd ? "decimal" : "numeric"}
-          placeholder={inUsd ? "US$" : "$"}
+          placeholder={inUsd ? "US$" : absent ? "Pidió $" : "$"}
           className={`${CELL} text-right tabular-nums`}
         />
+        {absent && <span className="block px-1.5 pt-0.5 text-right text-[11.5px] text-neutral-500">por la hora</span>}
         {inUsd && (
           <span className="block px-1.5 pt-0.5 text-right text-[11.5px] text-neutral-400">
             {fx ? `US$ · ≈ ${money(paidValue)} (a ${money(fx)})` : "Falta la cotización"}
@@ -889,8 +919,11 @@ function RowEditor({
         )}
       </td>
       <td className="px-1.5 py-1">
-        <select value={effMethod} onChange={(e) => setMethod(e.target.value as SaleMethod | "" | "abono" | `ins:${string}`)} className={`${CELL} pr-1`}>
+        <select value={effMethod} onChange={(e) => setMethod(e.target.value as SaleMethod | "" | "abono" | "ausente" | `ins:${string}`)} className={`${CELL} min-w-[92px] pr-1`}>
           <option value="">—</option>
+          <option value="ausente" title="La paciente no vino: se le paga la hora a la profesional (la seña + lo que se le pidió)">
+            No vino
+          </option>
           {(abono || rowUse) && <option value="abono">Plan</option>}
           {abonos.insurers.map((i) => (
             <option key={i.id} value={`ins:${i.id}`}>
@@ -914,6 +947,18 @@ function RowEditor({
           </option>
           {row && row.parts.length > 0 && row.method === "mixto" && <option value="mixto">Varios</option>}
         </select>
+        {absent && paidValue > 0 && (
+          <select
+            value={feeMethod}
+            onChange={(e) => setFeeMethod(e.target.value as "efectivo" | "transferencia" | "tarjeta")}
+            aria-label="Cómo pagó lo pedido"
+            className={`${CELL} mt-1 pr-1 text-[12px] text-neutral-400`}
+          >
+            <option value="efectivo">en efvo.</option>
+            <option value="transferencia">por transf.</option>
+            <option value="tarjeta">con tarj.</option>
+          </select>
+        )}
       </td>
       {showK && (
         <td className="px-1.5 py-1">
